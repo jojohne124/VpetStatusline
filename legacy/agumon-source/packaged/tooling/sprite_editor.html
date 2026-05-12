@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>Agumon Sprite Editor (Packaged)</title>
+<style>
+/* 直接沿用原本 editor 版面（縮短為必要樣式） */
+:root { --bg:#1e1e1e; --fg:#e0e0e0; --accent:#4da3ff; --panel:#2a2a2a; --border:#444; --danger:#ff5555; }
+*{box-sizing:border-box}
+body{margin:0;padding:20px;background:var(--bg);color:var(--fg);font-family:-apple-system,"Segoe UI",sans-serif;font-size:14px}
+h1{margin:0 0 16px;font-size:18px}
+.layout{display:grid;grid-template-columns:auto 1fr 240px;gap:20px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.panel h3{margin:0 0 10px;font-size:13px;color:var(--accent)}
+.thumbs{display:flex;flex-direction:column;gap:6px}
+.thumb{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;cursor:pointer;border:2px solid transparent}
+.thumb:hover{background:#333}
+.thumb.active{border-color:var(--accent);background:#2d3a4a}
+.thumb canvas{image-rendering:pixelated;width:48px;height:48px;background:#1a1a1a}
+.thumb span{font-size:12px;color:#bbb}
+.editor-wrap{display:flex;flex-direction:column;gap:12px}
+.canvas-row{display:flex;gap:16px}
+#editor{display:grid;grid-template-columns:repeat(16,28px);grid-template-rows:repeat(16,28px);gap:1px;background:#222;padding:1px;border:2px solid var(--border);image-rendering:pixelated;cursor:crosshair}
+#editor .cell{width:28px;height:28px;position:relative}
+#editor .cell.transparent::before{content:"";position:absolute;inset:0;background:linear-gradient(45deg,#333 25%,transparent 25%),linear-gradient(-45deg,#333 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#333 75%),linear-gradient(-45deg,transparent 75%,#333 75%);background-size:14px 14px;background-position:0 0,0 7px,7px -7px,-7px 0}
+#preview{image-rendering:pixelated;width:128px;height:128px;background:#1a1a1a;border:1px solid var(--border);align-self:start}
+.palette{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px}
+.swatch{aspect-ratio:1;border:2px solid var(--border);cursor:pointer;border-radius:4px}
+.swatch.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.swatch.transparent{background:linear-gradient(45deg,#333 25%,transparent 25%),linear-gradient(-45deg,#333 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#333 75%),linear-gradient(-45deg,transparent 75%,#333 75%);background-size:10px 10px;background-position:0 0,0 5px,5px -5px,-5px 0}
+.controls button{width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:8px}
+.controls button.secondary{background:#555}
+.hotkeys{font-size:11px;color:#888;margin-top:8px}
+.hotkeys code{background:#111;padding:1px 5px;border-radius:3px}
+#status{margin-top:10px;padding:8px;border-radius:4px;font-size:12px;display:none}
+#status.ok{background:#1d4d33;color:#aaffcc;display:block}
+#status.err{background:#4d1d1d;color:#ffaaaa;display:block}
+</style>
+</head>
+<body>
+<h1>Agumon Sprite Editor（packaged）</h1>
+<div class="layout">
+  <div class="panel thumbs" id="thumbs"></div>
+  <div class="editor-wrap">
+    <div class="panel">
+      <h3>編輯中：<span id="frame-title">Frame 0</span></h3>
+      <div class="canvas-row">
+        <div id="editor"></div>
+        <div>
+          <div style="font-size:12px;color:#999;margin-bottom:4px;">8× 預覽</div>
+          <canvas id="preview" width="16" height="16"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>調色盤</h3>
+    <div class="palette" id="palette"></div>
+    <h3 style="margin-top:16px;">操作</h3>
+    <div class="controls">
+      <button id="save">儲存 (Ctrl+S)</button>
+      <button class="secondary" id="undo">復原 (Ctrl+Z)</button>
+      <button class="secondary" id="reload">重新載入</button>
+    </div>
+    <div class="hotkeys">
+      <b>快捷鍵：</b><br>
+      <code>左鍵</code> 塗色<br>
+      <code>右鍵</code> 透明<br>
+      <code>Alt+點</code> 取色<br>
+      <code>[ ]</code> 切換幀<br>
+      <code>Ctrl+Z</code> 復原<br>
+      <code>Ctrl+S</code> 儲存
+    </div>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>
+const FRAME_NAMES = ['正常','踏步','驚訝','高興','睡覺1','睡覺2','瞪眼','大高興','大生氣','沮喪1','沮喪2','大吼'];
+const W = 16, H = 16;
+let data = null;
+let currentFrame = 0;
+let currentColor = [0, 0, 0];
+let currentIsTransparent = false;
+let palette = [];
+let history = [];
+let isDragging = false;
+
+const rgbStr = c => c ? `rgb(${c[0]},${c[1]},${c[2]})` : 'transparent';
+const pxEqual = (a, b) => !a && !b || (a && b && a[0]===b[0] && a[1]===b[1] && a[2]===b[2]);
+
+async function load() {
+  const res = await fetch('/data');
+  data = await res.json();
+  buildPalette();
+  renderThumbs();
+  selectFrame(0);
+}
+
+function buildPalette() {
+  const colorSet = new Map();
+  for (const frame of data.frames) for (const px of frame) {
+    if (!px) continue;
+    const key = px.join(',');
+    colorSet.set(key, (colorSet.get(key) || 0) + 1);
+  }
+  palette = [...colorSet.entries()].sort((a,b)=>b[1]-a[1]).map(([k])=>k.split(',').map(Number));
+  renderPalette();
+}
+
+function renderPalette() {
+  const el = document.getElementById('palette');
+  el.innerHTML = '';
+  const transBtn = document.createElement('div');
+  transBtn.className = 'swatch transparent' + (currentIsTransparent ? ' active' : '');
+  transBtn.title = '透明';
+  transBtn.onclick = () => { currentIsTransparent = true; renderPalette(); };
+  el.appendChild(transBtn);
+  for (const c of palette) {
+    const div = document.createElement('div');
+    div.className = 'swatch' + (!currentIsTransparent && pxEqual(c, currentColor) ? ' active' : '');
+    div.style.background = rgbStr(c);
+    div.onclick = () => { currentIsTransparent = false; currentColor = c; renderPalette(); };
+    el.appendChild(div);
+  }
+}
+
+function renderThumbs() {
+  const el = document.getElementById('thumbs');
+  el.innerHTML = '<h3>幀列表</h3>';
+  for (let i = 0; i < data.frames.length; i++) {
+    const div = document.createElement('div');
+    div.className = 'thumb' + (i === currentFrame ? ' active' : '');
+    div.onclick = () => selectFrame(i);
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    for (let j = 0; j < W*H; j++) {
+      const p = data.frames[i][j];
+      img.data[j*4] = p ? p[0] : 0;
+      img.data[j*4+1] = p ? p[1] : 0;
+      img.data[j*4+2] = p ? p[2] : 0;
+      img.data[j*4+3] = p ? 255 : 0;
+    }
+    ctx.putImageData(img, 0, 0);
+    div.appendChild(canvas);
+    const label = document.createElement('span');
+    label.textContent = i + '. ' + FRAME_NAMES[i];
+    div.appendChild(label);
+    el.appendChild(div);
+  }
+}
+
+function selectFrame(i) {
+  currentFrame = i;
+  document.getElementById('frame-title').textContent = `Frame ${i}: ${FRAME_NAMES[i]}`;
+  renderEditor();
+  renderThumbs();
+  renderPreview();
+}
+
+function renderEditor() {
+  const el = document.getElementById('editor');
+  el.innerHTML = '';
+  const frame = data.frames[currentFrame];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const cell = document.createElement('div');
+    const p = frame[y*W+x];
+    cell.className = 'cell' + (p ? '' : ' transparent');
+    if (p) cell.style.background = rgbStr(p);
+    cell.onmousedown = (e) => { e.preventDefault(); isDragging = true; paint(e, x, y); };
+    cell.onmouseenter = (e) => { if (isDragging) paint(e, x, y); };
+    cell.oncontextmenu = (e) => { e.preventDefault(); pushHistory(); setCell(x, y, null); };
+    el.appendChild(cell);
+  }
+}
+
+function pushHistory() {
+  history.push(JSON.stringify(data.frames[currentFrame]));
+  if (history.length > 50) history.shift();
+}
+function undo() {
+  const prev = history.pop();
+  if (!prev) return;
+  data.frames[currentFrame] = JSON.parse(prev);
+  renderEditor(); renderThumbs(); renderPreview();
+}
+
+function paint(e, x, y) {
+  if (e.altKey) {
+    const c = data.frames[currentFrame][y*W+x];
+    if (c) { currentColor = c; currentIsTransparent = false; }
+    else { currentIsTransparent = true; }
+    renderPalette();
+    return;
+  }
+  if (e.button === 2) return;
+  pushHistory();
+  setCell(x, y, currentIsTransparent ? null : currentColor);
+}
+
+function setCell(x, y, color) {
+  data.frames[currentFrame][y*W+x] = color ? [...color] : null;
+  const cells = document.querySelectorAll('#editor .cell');
+  const cell = cells[y*W+x];
+  if (color) { cell.classList.remove('transparent'); cell.style.background = rgbStr(color); }
+  else { cell.classList.add('transparent'); cell.style.background = ''; }
+  renderPreview();
+  clearTimeout(window._thumbTimer);
+  window._thumbTimer = setTimeout(renderThumbs, 100);
+}
+
+function renderPreview() {
+  const canvas = document.getElementById('preview');
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const frame = data.frames[currentFrame];
+  for (let j = 0; j < W*H; j++) {
+    const p = frame[j];
+    img.data[j*4] = p ? p[0] : 0;
+    img.data[j*4+1] = p ? p[1] : 0;
+    img.data[j*4+2] = p ? p[2] : 0;
+    img.data[j*4+3] = p ? 255 : 0;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function save() {
+  const status = document.getElementById('status');
+  status.className = '';
+  status.textContent = '儲存中...';
+  status.style.display = 'block';
+  try {
+    const res = await fetch('/save', { method: 'POST', body: JSON.stringify(data) });
+    const r = await res.json();
+    if (r.ok) { status.className = 'ok'; status.textContent = '✓ 儲存成功（已更新 packaged/assets/agumon_art_color.json）'; }
+    else { status.className = 'err'; status.textContent = '✗ 儲存失敗：' + r.error; }
+  } catch (e) {
+    status.className = 'err';
+    status.textContent = '✗ ' + e.message;
+  }
+}
+
+document.addEventListener('mouseup', () => { isDragging = false; });
+document.getElementById('save').onclick = save;
+document.getElementById('undo').onclick = undo;
+document.getElementById('reload').onclick = () => { if (confirm('重新載入？未儲存的變更會遺失！')) load(); };
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  else if (e.key === '[' || e.key === ']') {
+    const delta = e.key === ']' ? 1 : -1;
+    selectFrame((currentFrame + delta + 12) % 12);
+  }
+});
+load();
+</script>
+</body>
+</html>
+

@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# 編輯器 / OS
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# debug / 暫存
+debug-input.json
+*.log
+
+# 預設不追蹤的歷史檔型別
+*.bak
+*.rar
+*.zip
+packaged/
+
+# ★ 例外：legacy/ 內的歷史檔需要保留進 git
+!legacy/**
+!legacy/**/*.bak
+!legacy/**/*.rar
+!legacy/**/*.zip
+!legacy/**/packaged/
+!legacy/**/packaged/**
+
+# 像素編輯器即時匯出（character art 改用 char-cli convert 才正式產出）
+characters/*/pixels.json.bak

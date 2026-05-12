@@ -1,0 +1,26 @@
+{
+  "name": "agumon-cli",
+  "version": "2.0.0",
+  "description": "Animated pixel-art character (Agumon, etc.) for Claude CLI / Cursor CLI statusline.",
+  "main": "src/runtime/statusline-agumon-color.js",
+  "scripts": {
+    "install-runtime": "node scripts/install.js",
+    "uninstall-runtime": "node scripts/uninstall.js",
+    "uninstall-runtime:purge": "node scripts/uninstall.js --purge",
+    "char": "node src/tools/char-cli.js",
+    "editor": "node src/editor/sprite_editor_server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],
+  "author": "kaihsiangchang",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["win32", "darwin", "linux"],
+  "dependencies": {
+    "log-update": "^8.0.0",
+    "sharp": "^0.34.5"
+  }
+}

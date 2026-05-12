@@ -1,0 +1,10 @@
+{
+  "name": "agumon-cli-tooling",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "sharp": "^0.34.5"
+  }
+}
+

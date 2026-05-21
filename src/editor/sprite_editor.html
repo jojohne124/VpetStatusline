@@ -21,6 +21,13 @@ body {
   font-size: 14px;
 }
 h1 { margin: 0 0 16px; font-size: 18px; }
+.mode-toggle { display: inline-flex; gap: 4px; margin-left: 16px; vertical-align: middle; }
+.mode-toggle button {
+  background: #3a3a3a; color: #aaa; border: 1px solid var(--border);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.mode-toggle button.active { background: var(--accent); color: white; border-color: var(--accent); }
+.mode-toggle button:hover { filter: brightness(1.15); }
 .layout {
   display: grid;
   grid-template-columns: auto 1fr 240px;
@@ -60,7 +67,24 @@ h1 { margin: 0 0 16px; font-size: 18px; }
   border: 2px solid var(--border);
   image-rendering: pixelated;
   cursor: crosshair;
+  position: relative;
 }
+#editor.tool-select { cursor: cell; }
+#selection-overlay {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.6) inset;
+  pointer-events: none;
+  z-index: 5;
+  display: none;
+}
+.tool-toggle { display: inline-flex; gap: 4px; margin-left: 12px; vertical-align: middle; }
+.tool-toggle button {
+  background: #3a3a3a; color: #aaa; border: 1px solid var(--border);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.tool-toggle button.active { background: var(--ok); color: white; border-color: var(--ok); }
+.tool-toggle button:hover { filter: brightness(1.15); }
 #editor .cell {
   width: 28px; height: 28px;
   position: relative;
@@ -130,7 +154,18 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 </style>
 </head>
 <body>
-<h1 id="editor-title">🦖 Sprite Editor</h1>
+<h1>
+  <span id="editor-title">🦖 Sprite Editor</span>
+  <span class="mode-toggle">
+    <button id="mode-character" class="active" onclick="switchMode('character')">🦖 角色</button>
+    <button id="mode-bullet" onclick="switchMode('bullet')">💥 子彈</button>
+    <button id="mode-shared" onclick="switchMode('shared')">🌐 共用</button>
+  </span>
+  <span class="tool-toggle">
+    <button id="tool-paint" class="active" onclick="setTool('paint')">✏️ 畫筆</button>
+    <button id="tool-select" onclick="setTool('select')">⬚ 選取</button>
+  </span>
+</h1>
 
 <div class="layout">
   <!-- 左側：幀縮圖 -->
@@ -141,7 +176,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
     <div class="panel">
       <h3>編輯中：<span id="frame-title">Frame 0</span></h3>
       <div class="canvas-row">
-        <div id="editor"></div>
+        <div id="editor"><div id="selection-overlay"></div></div>
         <div>
           <div style="font-size:12px;color:#999;margin-bottom:4px;">8× 預覽</div>
           <canvas id="preview" width="16" height="16"></canvas>
@@ -168,13 +203,17 @@ h1 { margin: 0 0 16px; font-size: 18px; }
     </div>
 
     <div class="hotkeys">
-      <b>快捷鍵：</b><br>
-      <code>左鍵</code> 塗色<br>
-      <code>右鍵</code> 設為透明<br>
-      <code>Alt+點</code> 取色到調色盤<br>
+      <b>畫筆：</b><br>
+      <code>左鍵</code> 塗色　<code>右鍵</code> 透明<br>
+      <code>Alt+點</code> 取色<br>
+      <b style="display:inline-block;margin-top:4px;">選取：</b><br>
+      <code>框外拖</code> 畫選區<br>
+      <code>框內拖</code> 移動像素<br>
+      <code>Esc</code> 取消選取<br>
+      <b style="display:inline-block;margin-top:4px;">通用：</b><br>
+      <code>B / V</code> 畫筆 / 選取<br>
       <code>[ ]</code> 切換上/下幀<br>
-      <code>Ctrl+Z</code> 復原<br>
-      <code>Ctrl+S</code> 儲存
+      <code>Ctrl+Z</code> 復原　<code>Ctrl+S</code> 儲存
     </div>
 
     <div id="status"></div>
@@ -193,6 +232,19 @@ let currentIsTransparent = false;
 let palette = [];
 let history = []; // 復原堆疊
 let isDragging = false;
+let currentMode = 'character'; // 'character' | 'bullet'
+let currentTool = 'paint';     // 'paint' | 'select'
+let sel = null;                // { x0, y0, x1, y1 } 包含上下界
+let dragState = null;          // { mode: 'define', x0, y0 } | { mode: 'move', lifted, baseSel, anchorX, anchorY, dx, dy }
+
+const CELL_PX = 28, GAP_PX = 1, PAD_PX = 1;
+function cellOriginToPx(cx, cy) {
+    return { left: PAD_PX + cx * (CELL_PX + GAP_PX), top: PAD_PX + cy * (CELL_PX + GAP_PX) };
+}
+function normalizeBox(a, b, c, d) {
+    return { x0: Math.min(a, c), y0: Math.min(b, d), x1: Math.max(a, c), y1: Math.max(b, d) };
+}
+function isInSel(x, y) { return sel && x >= sel.x0 && x <= sel.x1 && y >= sel.y0 && y <= sel.y1; }
 
 function frameLabel(i) {
     if (RIGHT_OFFSET != null && i >= RIGHT_OFFSET) {
@@ -210,8 +262,9 @@ const pxEqual = (a, b) => !a && !b || (a && b && a[0]===b[0] && a[1]===b[1] && a
 // ── 初始化 ──────────────────────────────────
 async function load() {
     let charName = '';
+    RIGHT_OFFSET = null;
     try {
-        const metaRes = await fetch('/meta');
+        const metaRes = await fetch('/meta?mode=' + currentMode);
         if (metaRes.ok) {
             const meta = await metaRes.json();
             charName = meta.name;
@@ -220,16 +273,34 @@ async function load() {
         }
     } catch(e) {}
 
-    const dataRes = await fetch('/data');
+    const dataRes = await fetch('/data?mode=' + currentMode);
+    if (!dataRes.ok) {
+        document.getElementById('status').className = 'err';
+        document.getElementById('status').textContent = '✗ 載入失敗：' + currentMode;
+        return;
+    }
     data = await dataRes.json();
+    history = []; // 切換模式時清空 undo 堆疊
 
     if (charName) {
-        document.title = `${charName} - Sprite Editor`;
-        document.getElementById('editor-title').textContent = `🦖 ${charName} Sprite Editor`;
+        document.title = `${charName} - Sprite Editor [${currentMode}]`;
+        const icon  = currentMode === 'bullet' ? '💥' : currentMode === 'shared' ? '🌐' : '🦖';
+        const label = currentMode === 'bullet' ? '子彈' : currentMode === 'shared' ? '共用 sprite' : '角色';
+        document.getElementById('editor-title').textContent = `${icon} ${charName} ${label} Editor`;
     }
     buildPalette();
     renderThumbs();
     selectFrame(0);
+}
+
+async function switchMode(mode) {
+    if (mode === currentMode) return;
+    if (history.length > 0 && !confirm('切換模式會清空 undo 堆疊（已儲存的不影響），確定？')) return;
+    currentMode = mode;
+    document.getElementById('mode-character').classList.toggle('active', mode === 'character');
+    document.getElementById('mode-bullet').classList.toggle('active', mode === 'bullet');
+    document.getElementById('mode-shared').classList.toggle('active', mode === 'shared');
+    await load();
 }
 
 function buildPalette() {
@@ -304,6 +375,7 @@ function renderThumbs() {
 function selectFrame(i) {
     currentFrame = i;
     document.getElementById('frame-title').textContent = `Frame ${i}: ${frameLabel(i)}`;
+    clearSelection();
     renderEditor();
     renderThumbs();
     renderPreview();
@@ -311,7 +383,10 @@ function selectFrame(i) {
 
 function renderEditor() {
     const el = document.getElementById('editor');
+    // 保留 overlay div（重建格子時別清掉）
+    const overlay = document.getElementById('selection-overlay');
     el.innerHTML = '';
+    if (overlay) el.appendChild(overlay);
     const frame = data.frames[currentFrame];
 
     for (let y = 0; y < H; y++) {
@@ -323,12 +398,26 @@ function renderEditor() {
             }
             cell.dataset.x = x;
             cell.dataset.y = y;
-            cell.onmousedown = (e) => { e.preventDefault(); isDragging = true; paint(e, x, y); };
-            cell.onmouseenter = (e) => { if (isDragging) paint(e, x, y); };
-            cell.oncontextmenu = (e) => { e.preventDefault(); pushHistory(); setCell(x, y, null); };
+            cell.onmousedown = (e) => {
+                e.preventDefault();
+                if (currentTool === 'select') return handleSelectMouseDown(e, x, y);
+                isDragging = true;
+                paint(e, x, y);
+            };
+            cell.onmouseenter = (e) => {
+                if (dragState) return handleSelectMouseEnter(x, y);
+                if (isDragging) paint(e, x, y);
+            };
+            cell.oncontextmenu = (e) => {
+                e.preventDefault();
+                if (currentTool === 'select') return;
+                pushHistory();
+                setCell(x, y, null);
+            };
             el.appendChild(cell);
         }
     }
+    renderSelectionOverlay();
 }
 
 function paint(e, x, y) {
@@ -377,15 +466,150 @@ function renderPreview() {
     ctx.putImageData(img, 0, 0);
 }
 
+// ── 選取工具 ────────────────────────────────
+function setTool(t) {
+    if (t === currentTool || dragState) return;
+    currentTool = t;
+    document.getElementById('tool-paint').classList.toggle('active', t === 'paint');
+    document.getElementById('tool-select').classList.toggle('active', t === 'select');
+    document.getElementById('editor').classList.toggle('tool-select', t === 'select');
+    if (t === 'paint') clearSelection();
+}
+
+function clearSelection() {
+    sel = null;
+    dragState = null;
+    renderSelectionOverlay();
+}
+
+function handleSelectMouseDown(e, x, y) {
+    if (isInSel(x, y)) {
+        // 框內：開始移動
+        pushHistory();
+        const lifted = liftSelection();
+        dragState = { mode: 'move', lifted, baseSel: { ...sel }, anchorX: x, anchorY: y, dx: 0, dy: 0 };
+        repaintCells();
+        renderSelectionOverlay();
+        renderPreview();
+    } else {
+        // 框外：開始畫新選區
+        dragState = { mode: 'define', x0: x, y0: y };
+        sel = { x0: x, y0: y, x1: x, y1: y };
+        renderSelectionOverlay();
+    }
+}
+
+function handleSelectMouseEnter(x, y) {
+    if (dragState.mode === 'define') {
+        sel = normalizeBox(dragState.x0, dragState.y0, x, y);
+        renderSelectionOverlay();
+    } else if (dragState.mode === 'move') {
+        const ndx = x - dragState.anchorX, ndy = y - dragState.anchorY;
+        if (ndx === dragState.dx && ndy === dragState.dy) return;
+        dragState.dx = ndx; dragState.dy = ndy;
+        repaintCells();
+        renderSelectionOverlay();
+        renderPreview();
+    }
+}
+
+function liftSelection() {
+    const { x0, y0, x1, y1 } = sel;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    const pixels = [];
+    const frame = data.frames[currentFrame];
+    for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+            const idx = (y0 + r) * W + (x0 + c);
+            const px = frame[idx];
+            pixels.push(px ? [...px] : null);
+            frame[idx] = null;
+        }
+    }
+    return { pixels, w, h };
+}
+
+function dropLifted() {
+    const { lifted, baseSel, dx, dy } = dragState;
+    const x0 = baseSel.x0 + dx, y0 = baseSel.y0 + dy;
+    const frame = data.frames[currentFrame];
+    for (let r = 0; r < lifted.h; r++) {
+        for (let c = 0; c < lifted.w; c++) {
+            const px = lifted.pixels[r * lifted.w + c];
+            if (!px) continue;
+            const tx = x0 + c, ty = y0 + r;
+            if (tx < 0 || tx >= W || ty < 0 || ty >= H) continue;
+            frame[ty * W + tx] = [...px];
+        }
+    }
+    // 更新 sel 位置（裁切到 canvas 內）
+    sel = {
+        x0: Math.max(0, x0), y0: Math.max(0, y0),
+        x1: Math.min(W - 1, x0 + lifted.w - 1), y1: Math.min(H - 1, y0 + lifted.h - 1),
+    };
+    if (sel.x0 > sel.x1 || sel.y0 > sel.y1) sel = null;  // 整個移出畫面
+}
+
+function repaintCells() {
+    // 重畫所有 cell 顏色（不重建 DOM），含 lifted overlay
+    const cells = document.querySelectorAll('#editor .cell');
+    const frame = data.frames[currentFrame];
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const px = frame[y * W + x];
+            const cell = cells[y * W + x];
+            if (px) { cell.classList.remove('transparent'); cell.style.background = rgbStr(px); }
+            else    { cell.classList.add('transparent');    cell.style.background = ''; }
+        }
+    }
+    if (dragState && dragState.mode === 'move') {
+        const { lifted, baseSel, dx, dy } = dragState;
+        for (let r = 0; r < lifted.h; r++) {
+            for (let c = 0; c < lifted.w; c++) {
+                const px = lifted.pixels[r * lifted.w + c];
+                if (!px) continue;
+                const tx = baseSel.x0 + dx + c, ty = baseSel.y0 + dy + r;
+                if (tx < 0 || tx >= W || ty < 0 || ty >= H) continue;
+                const cell = cells[ty * W + tx];
+                cell.classList.remove('transparent');
+                cell.style.background = rgbStr(px);
+            }
+        }
+    }
+}
+
+function renderSelectionOverlay() {
+    const ov = document.getElementById('selection-overlay');
+    if (!ov) return;
+    let box = sel;
+    if (dragState && dragState.mode === 'move') {
+        box = {
+            x0: dragState.baseSel.x0 + dragState.dx, y0: dragState.baseSel.y0 + dragState.dy,
+            x1: dragState.baseSel.x1 + dragState.dx, y1: dragState.baseSel.y1 + dragState.dy,
+        };
+    }
+    if (!box) { ov.style.display = 'none'; return; }
+    const o = cellOriginToPx(box.x0, box.y0);
+    const wPx = (box.x1 - box.x0 + 1) * (CELL_PX + GAP_PX) - GAP_PX;
+    const hPx = (box.y1 - box.y0 + 1) * (CELL_PX + GAP_PX) - GAP_PX;
+    ov.style.left = o.left + 'px';
+    ov.style.top  = o.top + 'px';
+    ov.style.width  = wPx + 'px';
+    ov.style.height = hPx + 'px';
+    ov.style.display = 'block';
+}
+
 // ── 歷史 / 復原 ─────────────────────────────
 function pushHistory() {
     history.push(JSON.stringify(data.frames[currentFrame]));
     if (history.length > 50) history.shift();
 }
 function undo() {
+    if (dragState) return;  // 拖移中不允許 undo
     const prev = history.pop();
     if (!prev) return;
     data.frames[currentFrame] = JSON.parse(prev);
+    clearSelection();
     renderEditor();
     renderThumbs();
     renderPreview();
@@ -398,11 +622,12 @@ async function save() {
     status.textContent = '儲存中...';
     status.style.display = 'block';
     try {
-        const res = await fetch('/save', { method: 'POST', body: JSON.stringify(data) });
+        const res = await fetch('/save?mode=' + currentMode, { method: 'POST', body: JSON.stringify(data) });
         const r = await res.json();
         if (r.ok) {
             status.className = 'ok';
-            status.textContent = '✓ 儲存成功（已更新 art_color.json + 清除 statusline 快取）';
+            const target = currentMode === 'bullet' ? 'bullet-art.json' : 'art.json';
+            status.textContent = `✓ ${currentMode} 儲存成功（已更新 ${target} + 部署到 statusline）`;
         } else {
             status.className = 'err';
             status.textContent = '✗ 儲存失敗：' + r.error;
@@ -414,7 +639,20 @@ async function save() {
 }
 
 // ── 事件綁定 ────────────────────────────────
-document.addEventListener('mouseup', () => { isDragging = false; });
+document.addEventListener('mouseup', () => {
+    isDragging = false;
+    if (dragState) {
+        if (dragState.mode === 'move') {
+            dropLifted();
+            repaintCells();
+            renderSelectionOverlay();
+            renderPreview();
+            clearTimeout(window._thumbTimer);
+            window._thumbTimer = setTimeout(renderThumbs, 100);
+        }
+        dragState = null;
+    }
+});
 document.getElementById('save').onclick = save;
 document.getElementById('undo').onclick = undo;
 document.getElementById('reload').onclick = () => { if (confirm('重新載入？未儲存的變更會遺失！')) load(); };
@@ -434,6 +672,11 @@ window.addEventListener('keydown', (e) => {
         const delta = e.key === ']' ? 1 : -1;
         const total = data ? data.frames.length : 12;
         selectFrame((currentFrame + delta + total) % total);
+    }
+    else if (e.key === 'Escape') { clearSelection(); }
+    else if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (e.key.toLowerCase() === 'b') setTool('paint');
+        else if (e.key.toLowerCase() === 'v') setTool('select');
     }
 });
 

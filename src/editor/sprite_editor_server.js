@@ -11,7 +11,6 @@ const PORT = 3000;
 
 const REPO_ROOT   = path.resolve(__dirname, '..', '..');
 const CHAR_DIR    = path.join(REPO_ROOT, 'characters', name);
-const JSON_PATH   = path.join(CHAR_DIR, 'pixels.json');
 const HTML_PATH   = path.join(__dirname, 'sprite_editor.html');
 const CHAR_CLI    = path.join(REPO_ROOT, 'src', 'tools', 'char-cli.js');
 
@@ -24,53 +23,164 @@ if (!fs.existsSync(CHAR_DIR)) {
     process.exit(1);
 }
 
+const SHARED_DIR     = path.join(REPO_ROOT, 'shared');
+const SHARED_ART_DST = path.join(ASSETS_DIR, 'shared', 'art.json');
+const SHARED_SRC_DST = path.join(ASSETS_DIR, 'shared', 'sprites.json');
+
+// ── mode 對應：character vs bullet vs shared ─────────────────────
+function modePaths(mode) {
+    if (mode === 'bullet') {
+        return {
+            src:  path.join(CHAR_DIR, 'bullet.json'),
+            art:  path.join(CHAR_DIR, 'bullet-art.json'),
+            dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'bullet-art.json'),
+        };
+    }
+    if (mode === 'shared') {
+        return {
+            src:    path.join(SHARED_DIR, 'sprites.json'),
+            art:    path.join(SHARED_DIR, 'art.json'),
+            dstArt: SHARED_ART_DST,
+            dstSrc: SHARED_SRC_DST,
+            isShared: true,
+        };
+    }
+    return {
+        src:  path.join(CHAR_DIR, 'pixels.json'),
+        art:  path.join(CHAR_DIR, 'art.json'),
+        dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'art.json'),
+    };
+}
+
+// 從 manifest.json 反推出每個 frame 的名稱（encounter[0] → encounter1，等）
+function sharedFrameNames() {
+    try {
+        const m = JSON.parse(fs.readFileSync(path.join(SHARED_DIR, 'manifest.json'), 'utf8'));
+        const names = {};
+        for (const [spriteName, def] of Object.entries(m.sprites || {})) {
+            const idxs = def.indices || [];
+            const uniq = [...new Set(idxs)];
+            idxs.forEach((idx, i) => {
+                if (!(idx in names)) {
+                    // 單幀 sprite：純粹用名稱（dna_end）；多幀：加序號（dna1, dna2...）
+                    names[idx] = uniq.length === 1 ? spriteName : `${spriteName}${i + 1}`;
+                }
+            });
+        }
+        const max = Math.max(-1, ...Object.keys(names).map(Number));
+        return Array.from({ length: max + 1 }, (_, i) => names[i] || `frame${i}`);
+    } catch(e) { return null; }
+}
+
+// pixels (flat array, RGB or null) → half-block cell rows
+function pixelsToArt(pixels, w, h) {
+    const rows = [];
+    for (let y = 0; y < h; y += 2) {
+        const row = [];
+        for (let x = 0; x < w; x++) {
+            const up = pixels[y * w + x] || null;
+            const lo = pixels[(y + 1) * w + x] || null;
+            if (!up && !lo) { row.push(null); continue; }
+            row.push([
+                up ? up[0] : -1, up ? up[1] : -1, up ? up[2] : -1,
+                lo ? lo[0] : -1, lo ? lo[1] : -1, lo ? lo[2] : -1,
+            ]);
+        }
+        rows.push(row);
+    }
+    return rows;
+}
+
+function parseQuery(url) {
+    const q = url.split('?')[1] || '';
+    const out = {};
+    for (const kv of q.split('&')) {
+        if (!kv) continue;
+        const [k, v] = kv.split('=');
+        out[decodeURIComponent(k)] = decodeURIComponent(v || '');
+    }
+    return out;
+}
+
 const server = http.createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/') {
+    const urlPath = req.url.split('?')[0];
+    const query   = parseQuery(req.url);
+    const mode    = query.mode === 'bullet' ? 'bullet'
+                   : query.mode === 'shared' ? 'shared'
+                   : 'character';
+
+    if (req.method === 'GET' && urlPath === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(fs.readFileSync(HTML_PATH));
     }
-    else if (req.method === 'GET' && req.url === '/meta') {
+    else if (req.method === 'GET' && urlPath === '/meta') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        let frameNames = null, rightOffset = null;
-        try {
-            const cfg = JSON.parse(fs.readFileSync(path.join(CHAR_DIR, 'config.json'), 'utf8'));
-            frameNames = cfg.frameNames || null;
-            rightOffset = cfg.rightOffset ?? null;
-        } catch(e) {}
-        res.end(JSON.stringify({ name, frameNames, rightOffset }));
+        let frameNames = null, rightOffset = null, displayName = name;
+        if (mode === 'shared') {
+            frameNames = sharedFrameNames();
+            displayName = 'shared';
+        } else {
+            try {
+                const cfg = JSON.parse(fs.readFileSync(path.join(CHAR_DIR, 'config.json'), 'utf8'));
+                frameNames = cfg.frameNames || null;
+                rightOffset = cfg.rightOffset ?? null;
+            } catch(e) {}
+        }
+        res.end(JSON.stringify({ name: displayName, frameNames, rightOffset }));
     }
-    else if (req.method === 'GET' && req.url === '/data') {
+    else if (req.method === 'GET' && urlPath === '/data') {
+        const { src } = modePaths(mode);
+        if (!fs.existsSync(src)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `${path.basename(src)} not found` }));
+            return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(fs.readFileSync(JSON_PATH));
+        res.end(fs.readFileSync(src));
     }
-    else if (req.method === 'POST' && req.url === '/save') {
+    else if (req.method === 'POST' && urlPath === '/save') {
         let body = '';
         req.on('data', c => body += c);
         req.on('end', () => {
             try {
-                if (fs.existsSync(JSON_PATH)) fs.copyFileSync(JSON_PATH, JSON_PATH + '.bak');
-                fs.writeFileSync(JSON_PATH, body);
+                const { src, art, dstArt } = modePaths(mode);
+
+                if (fs.existsSync(src)) fs.copyFileSync(src, src + '.bak');
+                fs.writeFileSync(src, body);
 
                 let convertOut = '';
-                try {
-                    convertOut = execFileSync('node', [CHAR_CLI, 'build', name], { encoding: 'utf8' });
-                } catch(e) { convertOut = 'build error: ' + e.message; }
+                if (mode === 'bullet' || mode === 'shared') {
+                    // 直接從 pixels 編譯 art.json（不走 char-cli）
+                    try {
+                        const data = JSON.parse(body);
+                        const w = data.width || 16, h = data.height || 16;
+                        const frames = data.frames.map(px => pixelsToArt(px, w, h));
+                        const artData = { style: 'color-halfblock', width: w, height: h / 2, frames };
+                        fs.writeFileSync(art, JSON.stringify(artData));
+                        convertOut = `${path.basename(art)} written (${frames.length} frame)`;
+                    } catch(e) { convertOut = mode + ' compile error: ' + e.message; }
+                } else {
+                    try {
+                        convertOut = execFileSync('node', [CHAR_CLI, 'build', name], { encoding: 'utf8' });
+                    } catch(e) { convertOut = 'build error: ' + e.message; }
+                }
 
-                // 部署 art.json 到 statusline runtime（讓 statusline 即時吃到新圖）
-                const assetDir = path.join(ASSETS_DIR, name.toLowerCase());
-                const artSrc   = path.join(CHAR_DIR, 'art.json');
-                const artDst   = path.join(assetDir, 'art.json');
+                // 部署到 statusline runtime
+                const assetDir = path.dirname(dstArt);
                 try {
                     if (!fs.existsSync(assetDir)) fs.mkdirSync(assetDir, { recursive: true });
-                    fs.copyFileSync(artSrc, artDst);
+                    fs.copyFileSync(art, dstArt);
+                    // shared 模式還要同步 sprites.json（pixels）
+                    const { dstSrc } = modePaths(mode);
+                    if (dstSrc) fs.copyFileSync(src, dstSrc);
                 } catch(e) { convertOut += '\ncopy error: ' + e.message; }
 
-                // 清除 statusline 狀態快取
-                const stateFile = path.join(STATE_DIR, 'color-state.json');
-                try { fs.unlinkSync(stateFile); } catch(e) {}
+                // 不要動 state.json：art.json 每次 refresh 都會重讀，沒有 in-memory cache。
+                // 砍 state 會造成 (a) 角色倒退 fallback 到 agumon、(b) lastEvolveTriggerTs/lastBattleTriggerTs
+                // 跟著消失導致 force 內未過期的 trigger 被誤認為新 trigger 重觸發進化/戰鬥動畫。
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, convert: convertOut.trim() }));
+                res.end(JSON.stringify({ ok: true, convert: convertOut.trim(), mode }));
             } catch(e) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -82,7 +192,8 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`\n✓ Sprite editor [${name}] → http://localhost:${PORT}\n`);
+    console.log('  上方可切換「角色 / 子彈 / 共用」編輯模式');
     console.log('  編輯完按 Ctrl+S 或「儲存」');
-    console.log('  儲存時自動：備份 pixels.json、重建 art.json、部署到 ~/.claude/agumon-statusline/、清除快取');
+    console.log('  儲存時自動：備份 source、重建 art、部署到 ~/.claude/agumon-statusline/、清除快取');
     console.log('\n  Ctrl+C 結束\n');
 });

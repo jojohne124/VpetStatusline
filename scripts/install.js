@@ -13,7 +13,8 @@
  *   ├── agumon-art.json                  (v4 黑白)
  *   ├── assets/
  *   │   ├── roster.json
- *   │   └── <character>/{art.json, config.json}
+ *   │   ├── <character>/{art.json, config.json, bullet-art.json}
+ *   │   └── shared/{manifest.json, art.json}
  *   └── state/                            (使用者資料，install 只新建不覆蓋)
  *       ├── color-state.json
  *       ├── state.json
@@ -75,7 +76,7 @@ function copyFile(src, dst, label) {
 }
 
 function installRuntime() {
-    console.log('\n[1/6] 安裝 runtime js -> ~/.claude/agumon-statusline/');
+    console.log('\n[1/7] 安裝 runtime js -> ~/.claude/agumon-statusline/');
     const srcDir = path.join(REPO_ROOT, 'src', 'runtime');
     let ok = 0;
     for (const fn of RUNTIME_FILES) {
@@ -85,7 +86,7 @@ function installRuntime() {
 }
 
 function installCharacters() {
-    console.log('\n[2/6] 安裝角色資產 -> ~/.claude/agumon-statusline/assets/');
+    console.log('\n[2/7] 安裝角色資產 -> ~/.claude/agumon-statusline/assets/');
     const charsDir = path.join(REPO_ROOT, 'characters');
     if (!fs.existsSync(charsDir)) { console.warn(`  [skip] 找不到 characters/`); return; }
     const installed = [];
@@ -96,31 +97,52 @@ function installCharacters() {
         const dstCharDir = path.join(ASSETS_DIR, dstName);
         const art = path.join(srcCharDir, 'art.json');
         const cfg = path.join(srcCharDir, 'config.json');
+        const bulletArt = path.join(srcCharDir, 'bullet-art.json');
         if (!fs.existsSync(art) || !fs.existsSync(cfg)) {
             console.warn(`  [skip] ${entry.name}: 缺 art.json 或 config.json`);
             continue;
         }
         copyFile(art, path.join(dstCharDir, 'art.json'),    dstName);
         copyFile(cfg, path.join(dstCharDir, 'config.json'), dstName);
+        if (fs.existsSync(bulletArt)) {
+            copyFile(bulletArt, path.join(dstCharDir, 'bullet-art.json'), dstName);
+        }
         installed.push(dstName);
     }
     console.log(`  -> 已安裝 ${installed.length} 個角色：${installed.join(', ')}`);
 }
 
 function installRoster() {
-    console.log('\n[3/6] 安裝 roster.json');
+    console.log('\n[3/7] 安裝 roster.json');
     copyFile(path.join(REPO_ROOT, 'characters', 'roster.json'), path.join(ASSETS_DIR, 'roster.json'));
 }
 
+function installShared() {
+    console.log('\n[4/7] 安裝共用 sprite -> ~/.claude/agumon-statusline/assets/shared/');
+    const srcDir = path.join(REPO_ROOT, 'shared');
+    const dstDir = path.join(ASSETS_DIR, 'shared');
+    const files = ['manifest.json', 'art.json'];
+    let ok = 0;
+    for (const fn of files) {
+        const src = path.join(srcDir, fn);
+        if (fs.existsSync(src)) {
+            copyFile(src, path.join(dstDir, fn));
+            ok++;
+        }
+    }
+    if (ok === 0) console.warn('  [skip] 找不到 shared/manifest.json + art.json（請先執行 npm run gen-shared）');
+    else console.log(`  -> ${ok}/${files.length} 共用檔已安裝`);
+}
+
 function installV4Art() {
-    console.log('\n[4/6] 安裝 v4（黑白）art');
+    console.log('\n[5/7] 安裝 v4（黑白）art');
     const src = path.join(REPO_ROOT, 'legacy', 'agumon-source', 'agumon_art.json');
     if (!fs.existsSync(src)) { console.warn('  [skip] 找不到 legacy/agumon-source/agumon_art.json'); return; }
     copyFile(src, path.join(INSTALL_DIR, 'agumon-art.json'));
 }
 
 function migrateLegacyState() {
-    console.log('\n[5/6] 遷移舊版散落檔');
+    console.log('\n[6/7] 遷移舊版散落檔');
     ensureDir(STATE_DIR);
 
     let migrated = 0;
@@ -156,7 +178,7 @@ function migrateLegacyState() {
 }
 
 function updateSettings() {
-    console.log('\n[6/6] 更新 ~/.claude/settings.json');
+    console.log('\n[7/7] 更新 ~/.claude/settings.json');
     const settingsPath = path.join(CLAUDE_HOME, 'settings.json');
 
     const newCmd  = `node ${path.join(INSTALL_DIR, 'statusline-agumon-color.js').replace(/\\/g, '/')}`;
@@ -241,6 +263,7 @@ function main() {
     installRuntime();
     installCharacters();
     installRoster();
+    installShared();
     installV4Art();
     migrateLegacyState();
     updateSettings();

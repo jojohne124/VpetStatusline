@@ -9,6 +9,8 @@
     "uninstall-runtime:purge": "node scripts/uninstall.js --purge",
     "char": "node src/tools/char-cli.js",
     "editor": "node src/editor/sprite_editor_server.js",
+    "gen-shared": "node scripts/gen-shared-placeholders.js",
+    "gen-bullets": "node scripts/gen-bullet-placeholders.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],

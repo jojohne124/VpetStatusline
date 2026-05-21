@@ -36,7 +36,10 @@ npm run install-runtime
 ├── statusline-cheat.js
 ├── agumon-hook.js
 ├── agumon-art.json
-├── assets/  (roster.json + 各角色 art/config)
+├── assets/
+│   ├── roster.json
+│   ├── <name>/{art.json, config.json, bullet-art.json}
+│   └── shared/{manifest.json, art.json}   ← 共用 sprite（encounter / boom …）
 └── state/   (color-state / state / hook / force-char)
 ```
 
@@ -78,15 +81,21 @@ agumon-cli/
 │   └── editor/
 │       ├── sprite_editor_server.js   像素微調網頁（localhost:3000）
 │       └── sprite_editor.html
-├── characters/                  各角色資產（含原始 PNG + pixels + art + config）
+├── characters/                  各角色資產（含原始 PNG + pixels + art + config + 子彈）
 │   ├── roster.json
 │   ├── Agumon/  Greymon/  ...  Majaja/
-│   └── <Name>/{sprite.png 或 00_xxx.png, pixels.json, art.json, config.json}
-├── shared/                      P1 預留：跨角色共用點陣（蛋、進化光效…）
+│   └── <Name>/{sprite.png 或 00_xxx.png, pixels.json, art.json, config.json, bullet-art.json}
+├── shared/                      跨角色共用 sprite（encounter / boom）
+│   ├── manifest.json            sprite 命名表
+│   ├── sprites.json             pixel data
+│   └── art.json                 half-block cell data
 ├── legacy/                      歷史檔（舊版 statusline、agumon 原始素材）
 ├── scripts/
-│   ├── install.js
-│   └── uninstall.js
+│   ├── install.js / uninstall.js
+│   ├── gen-shared-placeholders.js    重新產 shared sprite
+│   ├── gen-bullet-placeholders.js    重新產所有角色子彈
+│   ├── battle-preview.js             終端跑完 13 step 戰鬥分鏡
+│   └── battle-stdin-test.js          模擬 Claude payload 跑一次 statusline
 └── package.json
 ```
 
@@ -160,15 +169,39 @@ node src/editor/sprite_editor_server.js <Name>
 
 ---
 
-## 切換角色（作弊碼）
+## 切換角色 / 觸發戰鬥（作弊碼）
 
 ```bash
+# 切角色
 node ~/.claude/agumon-statusline/statusline-cheat.js <index>      # 用編號
 node ~/.claude/agumon-statusline/statusline-cheat.js <name>       # 用名稱
 node ~/.claude/agumon-statusline/statusline-cheat.js --reset      # 隨機抽 starter
+
+# 立即觸發戰鬥（13 秒分鏡）
+node ~/.claude/agumon-statusline/statusline-cheat.js --battle                           # 對 godzilla_1999、隨機勝負
+node ~/.claude/agumon-statusline/statusline-cheat.js --battle godzilla_1999 --win       # 強制勝利
+node ~/.claude/agumon-statusline/statusline-cheat.js --battle agumon --lose             # 自打自輸
 ```
 
-> 完整作弊碼系統（強制戰鬥/進化/誕生）見 [PROJECT.md](PROJECT.md) §2 P1。
+> 完整作弊碼系統（強制進化/誕生）見 [PROJECT.md](PROJECT.md) §2 P1。
+
+---
+
+## 戰鬥表演（P1）
+
+當 Claude 進入 **Thinking mode** 時自動觸發：偵測 `model.param_summary` 含 thinking 後，於下一個大吼結束時啟動 13 秒分鏡（encounter → 對峙 → 攻擊 + 子彈飛行 → 爆炸 → 勝/敗結果）。
+
+- **寬度需求**：`render_width_chars >= status最長行 + 4 + 48`。不夠則跳過戰鬥當作沒事
+- **每隻角色一張子彈**：`characters/<Name>/bullet-art.json`（敵方靠 `flipRows` 翻向左）
+- **共用 sprite**：`shared/{encounter,boom}` 兩張置中
+- **重做暫代圖**：`npm run gen-shared`（紅驚嘆號 + 黃橘星爆）、`npm run gen-bullets`（白球＋拖尾）
+
+詳細時序表與場景座標見 [PROJECT.md §1.7](PROJECT.md)。
+
+```bash
+# 在終端直接看戰鬥（不用啟動 Claude）：
+node scripts/battle-preview.js agumon godzilla_1999 --win
+```
 
 ---
 
@@ -188,4 +221,6 @@ node ~/.claude/agumon-statusline/statusline-cheat.js --reset      # 隨機抽 st
 | 角色沒換 / 改 source 沒生效 | 跑 `npm run install-runtime` 再 refresh 一次 CLI |
 | 顏色亂掉 / 沒顏色 | PowerShell 視窗不支援 truecolor，請看 Claude CLI 內顯示 |
 | 位置怪 / 飄走 | 看 §1.6「已知限制」於 [PROJECT.md](PROJECT.md) |
-| 進化沒觸發 | 查 `~/.claude/agumon-color-state.json` 的 `_evoCostBase` 與目前 cost 差距 |
+| 進化沒觸發 | 查 `~/.claude/agumon-statusline/state/color-state.json` 的 `_evoCostBase` 與目前 cost 差距 |
+| 戰鬥沒觸發 | 終端寬度需 ≥ 110 cells；或用 `statusline-cheat.js --battle` 強制觸發測試 |
+| 戰鬥卡住沒結束 | 刪掉 state 中的 `battleStartStep` 欄位、或重 install-runtime |

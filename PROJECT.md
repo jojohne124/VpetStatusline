@@ -3,7 +3,7 @@
 > 用途：紀錄專案當前的完整規格、設計決策、待辦清單。
 > 與 `README.md` 的差異：README 是「使用者怎麼用」，本檔是「日後維護者要看什麼」。
 >
-> 最後更新：2026-05-12（P0 完成 + 方案 A 統一資料夾）
+> 最後更新：2026-05-13（P1 戰鬥表演骨架完成 + 共用 sprite 系統骨架）
 
 ---
 
@@ -41,8 +41,13 @@ agumon-cli/                              ← Git 管理範圍
 │       ├── sprite.png 或 00_xxx.png …   ← 來源圖（strip / grid / individual）
 │       ├── pixels.json                  ← 16×16 RGB 中間檔（編輯器存檔）
 │       ├── art.json                     ← half-block cell 終端可渲染檔
+│       ├── bullet.json / bullet-art.json← P1：每隻角色一張子彈（暫代白球）
 │       └── config.json                  ← 幀定義 / 進化規則 / layout
-├── shared/                              ← P1 預留：跨角色共用點陣
+├── shared/                              ← P1：跨角色共用點陣（encounter / boom …）
+│   ├── manifest.json                    ← 命名表：sprite name → frame indices
+│   ├── sprites.json                     ← all-in-one pixel data
+│   ├── art.json                         ← 對應 half-block cell 資料
+│   └── sprites/                         ← 未來來源 PNG（目前用程式產生 placeholder）
 ├── legacy/                              ← 歷史檔（不再使用但保留）
 │   ├── runtime/                         ← 舊版 statusline 與切換工具
 │   │   └── statusline{.js,.ps1,-noborder.js,-compact.js,-oneline.js,-switch.js,-command.sh}
@@ -54,8 +59,12 @@ agumon-cli/                              ← Git 管理範圍
 │       └── packaged/  *.rar  *.zip
 ├── scripts/
 │   ├── install.js                       ← 部署 runtime → ~/.claude/
-│   └── uninstall.js                     ← 反向操作
-├── package.json                         ← npm run install-runtime / uninstall-runtime / char / editor
+│   ├── uninstall.js                     ← 反向操作
+│   ├── gen-shared-placeholders.js       ← 產 shared/manifest+sprites+art.json
+│   ├── gen-bullet-placeholders.js       ← 為每隻角色產 bullet-art.json
+│   ├── battle-preview.js                ← 在終端跑完 13 step 戰鬥分鏡（人眼檢查）
+│   └── battle-stdin-test.js             ← 模擬 Claude payload 跑一次 statusline
+├── package.json                         ← npm run install-runtime / uninstall-runtime / char / editor / gen-shared / gen-bullets
 ├── .gitignore
 ├── README.md                            ← 使用者文件
 └── PROJECT.md                           ← 本檔（維護者文件）
@@ -70,7 +79,8 @@ agumon-cli/                              ← Git 管理範圍
 │   ├── agumon-art.json                  ← v4 黑白 art
 │   ├── assets/
 │   │   ├── roster.json
-│   │   └── <name>/{art.json, config.json}
+│   │   ├── <name>/{art.json, config.json, bullet-art.json}
+│   │   └── shared/{manifest.json, art.json}
 │   └── state/                           ← 使用者資料（install 只新建不覆蓋）
 │       ├── color-state.json
 │       ├── state.json
@@ -126,12 +136,16 @@ agumon-cli/                              ← Git 管理範圍
 
 #### 1.3.1 動畫優先順序（高 → 低）
 
-1. **大吼（ROAR）**：`agumon-hook.json` 時間戳更新時觸發。`roarFrames` 動畫，期間繼續走（不凍結位置）
-2. **Token 重置 happy**：偵測到 `rate_limits.five_hour.resets_at` 跨過舊值時觸發。`tokenResetFrames` 動畫
-3. **睡覺**：閒置超過 `IDLE_MS`（10 分鐘）後播 `sleepFrames`，位置凍結在最後位置
-4. **表情**：每秒 10% 機率觸發 `exprs` 之一（位置在觸發秒凍結，避免滑動）
-5. **走路**：三角波，週期 `MAX_POS * 2 = 40`，左右擺盪
-6. **進化檢查**：每次 render 結束時跑 `checkEvolution`，達成條件就切換 `characterId`
+1. **戰鬥（Battle）**（只在 `opts.allowBattle=true` 時啟用，即 color 統一啟用、v4 關閉）：
+   - 觸發：偵測 `model.param_summary` 含 "thinking" 的 OFF→ON 轉變，**queue 在 ROAR 後面**啟動
+   - 13 step 分鏡（encounter → approach → attack → boom → result），詳見 §1.7
+   - 寬度不足時 fallback：取消 battle、當成 thinking 沒發生、退回單角色 IDLE_1
+2. **大吼（ROAR）**：`hook.json` 時間戳更新時觸發。`roarFrames` 動畫，期間繼續走（不凍結位置）
+3. **Token 重置 happy**：偵測到 `rate_limits.five_hour.resets_at` 跨過舊值時觸發。`tokenResetFrames` 動畫
+4. **睡覺**：閒置超過 `IDLE_MS`（10 分鐘）後播 `sleepFrames`，位置凍結在最後位置
+5. **表情**：每秒 10% 機率觸發 `exprs` 之一（位置在觸發秒凍結，避免滑動）
+6. **走路**：三角波，週期 `MAX_POS * 2 = 40`，左右擺盪
+7. **進化檢查**：每次 render 結束時跑 `checkEvolution`，達成條件就切換 `characterId`
 
 #### 1.3.2 進化條件類型
 
@@ -142,13 +156,13 @@ agumon-cli/                              ← Git 管理範圍
 
 支援多條件 + `operator: "and"`/`"or"`。
 
-#### 1.3.3 狀態檔 `agumon-color-state.json`
+#### 1.3.3 狀態檔 `color-state.json`
 
 ```jsonc
 {
-  "characterId": "majaja",      // 目前角色
-  "_evoCostBase": 50.10,         // 進化用 cost 基準
-  "lastHookTs": 1778583047701,   // 上次大吼觸發
+  "characterId": "majaja",          // 目前角色
+  "_evoCostBase": 50.10,             // 進化用 cost 基準
+  "lastHookTs": 1778583047701,       // 上次大吼觸發
   "lastActivityAt": 1778583047907,
   "_r5hResetAt": 1778590800,
   "lastStepSeen": 1778583156,
@@ -158,38 +172,81 @@ agumon-cli/                              ← Git 管理範圍
   "exprStartStep": -1,
   "exprIdx": 0,
   "roarStartStep": -1,
-  "happyStartStep": -1
+  "happyStartStep": -1,
+  // ── Battle 相關（P1）─────────────────────────────────────
+  "thinkingPrimed": false,           // 本輪 hook 後是否還沒消耗過 thinking
+  "lastThinking": false,             // 上次 render 的 thinking 偵測值
+  "battlePending": false,            // 已 queue，等 ROAR 結束後啟動
+  "battleStartStep": -1,             // 戰鬥開始的 step（13 step 內活動中）
+  "battleEnemy": "godzilla_1999",
+  "battleWin": true
 }
 ```
 
 #### 1.3.4 作弊碼
 
-`agumon-force-char.json`：
+`force-char.json`：
 
-```json
-{ "character": "majaja", "resetCostBase": true }
+```jsonc
+{
+  "character": "majaja",      // 切換角色
+  "resetCostBase": true,
+  // ── Battle 強制觸發（P1）─────────────────────────────────
+  "forceBattle": true,         // 下次 render 立刻啟動戰鬥
+  "forceBattleEnemy": "godzilla_1999",  // 可選，預設 godzilla_1999
+  "forceBattleWin": true        // 可選，省略則隨機
+}
 ```
 
-寫入後，statusline 下次 render 會強制切換角色並清相關 state。
+寫入後，statusline 下次 render 會強制切換 / 啟動戰鬥並清相關 state。
+Battle flag 是一次性消耗，啟動後 statusline 會把這幾個欄位從 force 檔刪掉。
 
 ### 1.4 渲染管線（`statusline-agumon-color.js`）
 
 ```
 stdin (Claude payload JSON)
   ↓
-loadState → 套用 force-char → loadCharacter(id)
+loadState → 套用 force-char（含 forceBattle）→ loadCharacter(id)
   ↓
-decideAgumon() 決定 frameIdx / facing / pos
+decideAgumon(allowBattle=true) → 回傳 { kind:'single', frameIdx, facing, pos } 或
+                                     { kind:'battle', phase, meFrameIdx, enemyFrameIdx, bullet, sharedSpriteName, ... }
   ↓
-checkEvolution() 看要不要換角色
+checkEvolution() 看要不要換角色（進化時會中斷戰鬥）
   ↓
 saveState
   ↓
 buildStatusLines(i) → 三行狀態列文字
-讀 art.json → renderCells(rows) → ANSI 字串
   ↓
-composeOutput(status, agumon, aguCol) → 左右拼接 → stdout
+依 kind 分支渲染：
+  • single → renderCells(art.frames[idx])
+  • battle → 寬度檢查 → composeBattleScene({frame, meArt, enemyArt, meBullet, enemyBullet, shared})
+            （寬度不足 → 取消 battle 退回 single）
+  ↓
+composeOutput(status, lines, aguCol) → 左右拼接 → stdout
 ```
+
+### 1.7 戰鬥表演分鏡（13 step × 1s）
+
+| step | phase | me frame | enemy frame | bullet | shared | 我方位置 |
+|------|-------|----------|-------------|--------|--------|----------|
+| 0–1  | encounter | hidden | hidden | – | encounter | – |
+| 2    | approach | ANGRY | ANGRY | – | – | sides |
+| 3    | approach | IDLE_1 | IDLE_1 | – | – | sides |
+| 4–5  | approach | ANGRY | ANGRY | – | – | sides |
+| 6    | attack | ATTACK | ATTACK | progress 0 | – | sides |
+| 7    | attack | ATTACK | ATTACK | progress 1 | – | sides |
+| 8    | boom | hidden | hidden | – | boom | – |
+| 9    | result | IDLE_1 (面左) | hidden | – | – | center |
+| 10   | result | HAPPY / SAD | hidden | – | – | center |
+| 11   | result | IDLE_1 | hidden | – | – | center |
+| 12   | result | HAPPY / SAD | hidden | – | – | center |
+
+- **場景寬度**：48 cells（我方 16 + 中間 16 + 敵方 16）
+- **寬度門檻**：`render_width_chars >= statusMaxLen + ANCHOR_GAP + 48`
+- **不足時**：取消 battle、視 thinking 沒發生，退回單角色 IDLE_1
+- **子彈位置**：我方子彈 frame 起點 col 13 → 16，敵方子彈（翻轉後）col 19 → 16；兩球在 progress=1 時於 scene col 23–24 對撞
+- **勝負**：第一版 50/50 隨機，未來可接 cost / tool-use 統計
+- **敵人**：第一版固定 `godzilla_1999`（允許自打自）
 
 ### 1.5 角色名冊（`roster.json`）
 
@@ -232,10 +289,15 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 > 統一規格：在 `agumon-core.js` 增加「performance」優先層，介於「大吼」與「token reset happy」之間（或更高，視類型）。
 > 每個表演有 `frames`、`hold`（偶數）、觸發條件、是否凍結位置。
 
-- ⬜ **a. 戰鬥（Battle）**
-  - 觸發：手動作弊碼 / 工具使用次數累計（待定）
-  - 建議幀組合：`ATTACK → IDLE_1 → ATTACK → IDLE_2 → ATTACK`
-  - 凍結位置：是
+- ✅ **a. 戰鬥（Battle）**（2026-05-13 完成骨架）
+  - ✅ 觸發：Thinking mode 偵測（`param_summary` 含 thinking）、ROAR 結束後啟動；亦可由 `--battle` cheat 立即觸發
+  - ✅ 13 step 分鏡（見 §1.7）：encounter → approach → attack → boom → result
+  - ✅ 雙角色並排合成（48 cells 場景）、子彈飛行插值、共用 sprite 居中
+  - ✅ 寬度不足（< status + 4 + 48）fallback：取消 battle、退回單角色
+  - ✅ 50/50 隨機勝負（cheat 可指定 `--win` / `--lose`）
+  - ✅ 固定敵人 `godzilla_1999`（允許自打自）
+  - ⬜ 待補：真實美術圖（目前 bullet / encounter / boom 都是 placeholder）
+  - ⬜ 待補：隨機敵人池、勝率調整邏輯、戰鬥音效或字幕
 - ⬜ **b. 進化（Evolution）**
   - 觸發：`checkEvolution` 命中後、切換 `characterId` **之前**先播一段表演
   - 建議：白光閃爍 + 縮放 → 切角色 → 落地姿勢
@@ -252,43 +314,58 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 
 ### P1 — 共用點陣資源
 
-- ⬜ **新增 `shared/` 目錄存共用 art**
-  - 結構：`shared/{art.json, pixels.json, frames/}`
-  - 內容（初步）：
-    - 蛋（egg）/ 蛋殼破裂幾幀
-    - 進化白光 / 閃光圈
-    - 戰鬥火花 / 衝擊波
+- ✅ **`shared/` 目錄骨架**（2026-05-13 完成）
+  - ✅ 結構：`shared/{manifest.json, sprites.json, art.json, sprites/}`
+  - ✅ 第一批內容：`encounter`（紅驚嘆號）、`boom`（黃橘星爆）— 都是程式產生的 placeholder
+  - ✅ `agumon-core.js` 加 `loadShared()` / `getSharedFrame(name, frameIdx)` API
+  - ✅ `install.js` 部署 `shared/` → `~/.claude/agumon-statusline/assets/shared/`
+  - ✅ `package.json` 加 `npm run gen-shared` 重新產生 placeholder
+- ⬜ **共用點陣後續補強**
+  - 待補內容：
+    - 蛋（egg）/ 蛋殼破裂幾幀（給 P1 誕生表演用）
+    - 進化白光 / 閃光圈（給 P1 進化表演用）
     - 通用睡眠泡泡 Z
     - 通用情緒符號（汗滴、愛心、驚訝符號）
-  - `agumon-core.js` 增加 `loadSharedArt()`，角色 frame 不夠時 fallback 到 shared
+  - 配色繪製：改用真實 PNG → 通過 `char-cli` 處理
   - `config.json` 用特殊索引引用，如 `"frames": { "EVO_FLASH": "shared:evo_flash_0" }`
+
+### P1 — 子彈資產
+
+- ✅ **每隻角色 `bullet.json` / `bullet-art.json`**（2026-05-13 完成）
+  - ✅ `scripts/gen-bullet-placeholders.js` — 統一寫入白球暫代圖
+  - ✅ `loadCharacter()` 多回傳 `bulletArtFile`、`install.js` 多複製 `bullet-art.json`
+  - ✅ 戰鬥渲染：我方 frame 直接用、敵方靠 `flipRows()` 翻成面左
+  - ⬜ 待補：每隻角色獨立美術設計的子彈（目前都是同一顆白球+拖尾）
 
 ### P1 — 完整作弊碼系統
 
-- ⬜ **擴充 `agumon-force-char.json` schema**
+- 🟡 **擴充 `force-char.json` schema**（戰鬥部分已實作，其餘待後續表演加上來）
   ```jsonc
   {
-    "character": "greymon",     // 已有
-    "resetCostBase": true,       // 已有
+    "character": "greymon",         // 已有
+    "resetCostBase": true,           // 已有
+    "forceBattle": true,             // ✅ 已有：強制播戰鬥表演一次
+    "forceBattleEnemy": "godzilla_1999",  // ✅ 已有
+    "forceBattleWin": true,          // ✅ 已有
     "force": {
-      "battle": true,            // 強制播戰鬥表演一次
-      "evolve": "metalgreymon",  // 強制進化到指定角色（跑進化表演）
-      "birth": true,             // 強制播誕生表演
-      "expression": "ANGRY"      // 強制特定表情持續到下次清除
+      "evolve": "metalgreymon",      // ⬜ 強制進化
+      "birth": true,                 // ⬜ 強制誕生
+      "expression": "ANGRY"           // ⬜ 強制表情
     },
-    "ttl": 5                     // 自動清除秒數（可選）
+    "ttl": 5                          // ⬜ 自動清除秒數
   }
   ```
-- ⬜ **CLI 子命令**
-  - `node char-cli.js cheat battle`
-  - `node char-cli.js cheat evolve <next>`
-  - `node char-cli.js cheat birth`
-  - `node char-cli.js cheat reset`（清 state，回到 starter）
-  - `node char-cli.js cheat switch <name>`（=目前 force-char）
-- ⬜ **statusline 端處理**
-  - 讀完 force 後依類別 dispatch 到對應表演層
-  - 一次性表演：播完即刪 force 檔
-  - 持續性（如表情）：保留直到 TTL 到期
+- ✅ **CLI 子命令**（戰鬥部分完成）
+  - ✅ `node statusline-cheat.js --battle [enemy] [--win|--lose]`
+  - ✅ `node statusline-cheat.js --reset`（隨機 starter）
+  - ✅ `node statusline-cheat.js <index|name>`（切角色）
+  - ⬜ `node statusline-cheat.js --evolve <next>`
+  - ⬜ `node statusline-cheat.js --birth`
+  - ⬜ `node statusline-cheat.js --expression <name>`
+- ✅ **statusline 端處理**（戰鬥部分完成）
+  - ✅ 讀完 force 後啟動戰鬥，一次性消耗 forceBattle 旗標
+  - ⬜ 其他類別 dispatch 到對應表演層
+  - ⬜ 持續性（如表情）：保留直到 TTL 到期
 
 ### P2 — 後續改善（雜項）
 
@@ -316,10 +393,10 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 | 用途 | Source（repo） | Runtime（部署後） | install 動作 |
 |------|----------------|---------------------|--------------|
 | Runtime 程式 | `src/runtime/*.js` | `~/.claude/agumon-statusline/*.js` | copy |
-| Character 資產 | `characters/<Name>/{art,config}.json` | `~/.claude/agumon-statusline/assets/<name>/` | copy + 小寫化 |
+| Character 資產 | `characters/<Name>/{art,config,bullet-art}.json` | `~/.claude/agumon-statusline/assets/<name>/` | copy + 小寫化 |
 | Roster | `characters/roster.json` | `~/.claude/agumon-statusline/assets/roster.json` | copy |
 | v4 黑白 art | `legacy/agumon-source/agumon_art.json` | `~/.claude/agumon-statusline/agumon-art.json` | copy |
-| 共用資產（P1） | `shared/` | `~/.claude/agumon-statusline/shared/`（未定） | （P1 規劃） |
+| 共用 sprite | `shared/{manifest,art}.json` | `~/.claude/agumon-statusline/assets/shared/` | copy |
 | color-state | — | `~/.claude/agumon-statusline/state/color-state.json` | **不動**（runtime 寫入）；舊版會自動遷移 |
 | state（v4） | — | `~/.claude/agumon-statusline/state/state.json` | **不動**；舊版會自動遷移 |
 | hook 寫入 | — | `~/.claude/agumon-statusline/state/hook.json` | **不動**；舊版會自動遷移 |
@@ -342,6 +419,17 @@ const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 ## 5. 變更紀錄
 
+- **2026-05-13（P1 戰鬥表演 + 共用 sprite 骨架）**：
+  - 新增 `shared/` 目錄與共用 sprite 系統（manifest / sprites / art）
+  - `agumon-core.js` 新增 `loadShared()` / `getSharedFrame()` / `composeBattleScene()` / `getFacingRows()` / `flipRows()` / `renderCells()` 公開 API（從 color.js 搬入）
+  - `loadCharacter()` 多回傳 `bulletArtFile`
+  - `decideAgumon` 新增 `opts.allowBattle`、Thinking 偵測（`param_summary` /thinking/i）、`battlePending` queue、`battleStartStep` / `battleEnemy` / `battleWin` 三個 state、`decideBattleFrame()` 13 step 時序機、`chooseBattleEnemy()`
+  - 回傳值改為 `{ kind: 'single' | 'battle', ... }` discriminated union（v4 仍可向下相容）
+  - `statusline-agumon-color.js`：整合 battle 分支、`render_width_chars` 門檻檢查、fallback
+  - `statusline-cheat.js`：加 `--battle [enemy] [--win|--lose]`
+  - `install.js`：新增 `installShared()`、`installCharacters()` 多複製 `bullet-art.json`
+  - 新增 `scripts/gen-shared-placeholders.js`、`scripts/gen-bullet-placeholders.js`、`scripts/battle-preview.js`、`scripts/battle-stdin-test.js`
+  - `package.json`：加 `gen-shared` / `gen-bullets` script
 - **2026-05-12**：建立本文件；目前 active 角色 = `majaja`（force 中），整體架構為 v7。
 - **2026-05-12（P0 完成）**：
   - v7 runtime 與工具搬入 `src/runtime/`、`src/tools/`、`src/editor/`

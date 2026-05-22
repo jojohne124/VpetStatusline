@@ -28,9 +28,16 @@
       "frames": 3,
       "size": 16
     },
-    "dna_end": {
+    "dna_end1": {
       "indices": [
         7
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "dna_end2": {
+      "indices": [
+        8
       ],
       "frames": 1,
       "size": 16

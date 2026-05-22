@@ -116,7 +116,7 @@ function checkEvolution(st, input, config) {
 const evenHold = n => n % 2 === 0 ? n : n + 1;
 
 // ── 進化（Evolution）─────────────────────────────────────────────
-const EVO_LENGTH = 12;                                                 // 0-2 dna1 / 3-5 dna2 / 6-7 dna3 (隱形) / 8-11 新角色 IDLE-HAPPY 交替
+const EVO_LENGTH = 12;                                                 // 0-5 dna1/2/3 ×2 / 6-7 dna_end1 隱形 / 8 dna_end2 光繭破裂 / 9-11 新角色 IDLE-HAPPY 交替
 
 function decideEvoFrame(elapsed, oldF, newF, pos) {
     const base = {
@@ -139,10 +139,14 @@ function decideEvoFrame(elapsed, oldF, newF, pos) {
             : (oldF.HAPPY  ?? oldF.IDLE_1 ?? 0);
         return { ...base, frameIdx: charIdx, overlaySpriteName: 'dna', overlayFrameIdx: elapsed % 3 };
     }
-    // 6-7: dna_end 光繭包覆（角色隱形）
+    // 6-7: dna_end1 光繭包覆（角色隱形）
     if (elapsed <= 7) return { ...base, useNewChar: true, hideChar: true,
-                                  overlaySpriteName: 'dna_end', overlayFrameIdx: 0 };
-    // 8-11: 新角色 IDLE_1 ↔ HAPPY 交替
+                                  overlaySpriteName: 'dna_end1', overlayFrameIdx: 0 };
+    // 8: 新角色 HAPPY + dna_end2 光繭破裂（角色可見、特效疊在上方）
+    if (elapsed === 8) return { ...base, useNewChar: true,
+                                  frameIdx: newF.HAPPY ?? newF.IDLE_1 ?? 0,
+                                  overlaySpriteName: 'dna_end2', overlayFrameIdx: 0 };
+    // 9-11: 新角色 HAPPY ↔ IDLE_1 交替（無特效）
     const newIdx = (elapsed % 2 === 0)
         ? (newF.IDLE_1 ?? 0)
         : (newF.HAPPY  ?? newF.IDLE_1 ?? 0);
@@ -303,11 +307,14 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         }
     }
 
-    // Token 重置偵測：舊 resets_at 已過期 + 新值不同 → 窗口真的滾過了
+    // Token 重置偵測：新 resets_at 嚴格大於 stored + 舊值已過期 → 窗口真的滾過了
+    // ⚠ 必須用 `>` 而非 `!==`：搭配下面 Math.max 保留舊值的設計，
+    //   若 input 偶發回傳比 stored 還舊的值（多視窗 race / 邊角 case），
+    //   `!==` 會觸發 HAPPY 但 stored 不更新 → 4 秒後重複觸發無限循環。
     const r5hResetAt = i.rate_limits?.five_hour?.resets_at;
     const nowSec = Math.floor(now / 1000);
     if (r5hResetAt && st._r5hResetAt
-        && r5hResetAt !== st._r5hResetAt
+        && r5hResetAt > st._r5hResetAt
         && st._r5hResetAt <= nowSec                    // 舊值已是過去式
         && !(st.happyStartStep >= 0)) {                // 動畫未在播放中
         st.happyStartStep = step;

@@ -121,5 +121,8 @@ if (!target || !roster.includes(target)) {
 const force = readForce();
 force.character     = target;
 force.resetCostBase = true;
+// 清掉殘留的進化 trigger，避免「切角色 + 之前還沒消費掉的 --evolve」同次 refresh 一起觸發
+delete force.evolveTriggerTs;
+delete force.evolveTarget;
 writeForce(force);
 console.log(`✓ 已切換至 ${target}（下次 refresh 生效）`);

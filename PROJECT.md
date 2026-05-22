@@ -138,8 +138,8 @@ agumon-cli/                              ← Git 管理範圍
 
 1. **戰鬥（Battle）**（只在 `opts.allowBattle=true` 時啟用，即 color 統一啟用、v4 關閉）：
    - 觸發：偵測 `model.param_summary` 含 "thinking" 的 OFF→ON 轉變，**queue 在 ROAR 後面**啟動
-   - 13 step 分鏡（encounter → approach → attack → boom → result），詳見 §1.7
-   - 寬度不足時 fallback：取消 battle、當成 thinking 沒發生、退回單角色 IDLE_1
+   - 19 step 分鏡（encounter 3 拍 → approach → attack → boom 3 拍 → result），詳見 §1.7
+   - 寬度檢查理論上會 fallback，但 `render_width_chars` 通常為 undefined → 實際永遠演（已接受為當前模式，2026-05-22）
 2. **大吼（ROAR）**：`hook.json` 時間戳更新時觸發。`roarFrames` 動畫，期間繼續走（不凍結位置）
 3. **Token 重置 happy**：偵測到 `rate_limits.five_hour.resets_at` 跨過舊值時觸發。`tokenResetFrames` 動畫
 4. **睡覺**：閒置超過 `IDLE_MS`（10 分鐘）後播 `sleepFrames`，位置凍結在最後位置
@@ -241,9 +241,10 @@ composeOutput(status, lines, aguCol) → 左右拼接 → stdout
 | 11   | result | IDLE_1 | hidden | – | – | center |
 | 12   | result | HAPPY / SAD | hidden | – | – | center |
 
-- **場景寬度**：48 cells（我方 16 + 中間 16 + 敵方 16）
-- **寬度門檻**：`render_width_chars >= statusMaxLen + ANCHOR_GAP + 48`
-- **不足時**：取消 battle、視 thinking 沒發生，退回單角色 IDLE_1
+- **場景寬度**：52 cells（我方 16 + 中間 20 gap + 敵方 16）
+- **寬度門檻**：`render_width_chars >= statusMaxLen + ANCHOR_GAP + 52`
+- **實際行為（2026-05-22 採用）**：因 Claude CLI 子程序拿到的 `render_width_chars` 通常為 undefined（fallback 至 999），這個寬度檢查實質上**永遠通過 → 戰鬥/進化表演不論寬度都會演**。視為當前模式接受。寬度不足時終端會自動換行顯示，畫面有點亂但仍可看出表演內容
+- **不足時 fallback（理論）**：取消 battle、視 thinking 沒發生，退回單角色 IDLE_1（保留為防禦性 code，等真實 `render_width_chars` 可用時自然會生效）
 - **子彈位置**：我方子彈 frame 起點 col 13 → 16，敵方子彈（翻轉後）col 19 → 16；兩球在 progress=1 時於 scene col 23–24 對撞
 - **勝負**：第一版 50/50 隨機，未來可接 cost / tool-use 統計
 - **敵人**：第一版固定 `godzilla_1999`（允許自打自）

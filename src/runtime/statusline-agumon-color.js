@@ -80,14 +80,13 @@ process.stdin.on('end', () => {
             st.characterId = 'agumon';
         }
 
-        const { charDef, artFile, bulletArtFile, config } = loadCharacter(st.characterId);
-
         // ── 進化生命週期 ────────────────────────────────────────────
         // STEP_MS 必須跟 agumon-core 一致（1000ms = 1 step/sec），否則 step 對不上會
         // 讓 decideAgumon 內的殘留清理把 evoStartStep 重設掉
         const STEP_MS = 1000;
         const step = Math.floor(now / STEP_MS);
-        // 1. commit：表演結束 → 切換 characterId
+        // 1. commit：表演結束 → 切換 characterId（必須在 loadCharacter 之前，否則
+        //    commit 那一步會用舊 charDef 載入 art，render 出舊角色走路 1 幀）
         if (st.evoStartStep != null && st.evoStartStep >= 0 && (step - st.evoStartStep) >= EVO_LENGTH) {
             st.characterId = st.evoNextCharId || st.characterId;
             st.evoStartStep = -1;
@@ -100,6 +99,9 @@ process.stdin.on('end', () => {
                 fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
             } catch(e) {}
         }
+
+        const { charDef, artFile, bulletArtFile, config } = loadCharacter(st.characterId);
+
         // 2. cheat trigger：強制進化
         if (st._forceEvolve && !(st.evoStartStep >= 0)) {
             st.evoStartStep = step;

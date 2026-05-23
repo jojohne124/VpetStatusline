@@ -151,6 +151,54 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 .color-picker-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
 .color-picker-row input[type="color"] { width: 40px; height: 32px; border: 1px solid var(--border); background: transparent; }
 .color-picker-row button { flex: 1; font-size: 12px; padding: 5px; }
+
+/* 顏色取代浮動選單 */
+.replace-menu {
+  position: fixed;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  z-index: 100;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+  display: none;
+}
+.replace-menu.open { display: block; }
+.replace-menu-header { font-size: 12px; margin-bottom: 8px; color: #ccc; display: flex; align-items: center; gap: 6px; }
+.replace-menu-header .from-swatch {
+  display: inline-block; width: 16px; height: 16px;
+  border: 1px solid #666; border-radius: 3px;
+}
+.replace-menu-header .from-swatch.transparent {
+  background:
+    linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+.replace-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 24px);
+  gap: 4px;
+}
+.replace-menu .swatch {
+  width: 24px; height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 3px; cursor: pointer;
+  position: relative;
+}
+.replace-menu .swatch:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.replace-menu .swatch.transparent {
+  background:
+    linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
 </style>
 </head>
 <body>
@@ -210,6 +258,8 @@ h1 { margin: 0 0 16px; font-size: 18px; }
       <code>框外拖</code> 畫選區<br>
       <code>框內拖</code> 移動像素<br>
       <code>Esc</code> 取消選取<br>
+      <b style="display:inline-block;margin-top:4px;">調色盤：</b><br>
+      <code>左鍵</code> 選色　<code>右鍵</code> 取代為...<br>
       <b style="display:inline-block;margin-top:4px;">通用：</b><br>
       <code>B / V</code> 畫筆 / 選取<br>
       <code>[ ]</code> 切換上/下幀<br>
@@ -218,6 +268,14 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 
     <div id="status"></div>
   </div>
+</div>
+
+<!-- 顏色取代浮動選單（右鍵調色盤色塊觸發）-->
+<div class="replace-menu" id="replace-menu">
+  <div class="replace-menu-header">
+    取代 <span class="from-swatch" id="replace-from"></span> → 點選目標色（本幀）
+  </div>
+  <div class="replace-menu-grid" id="replace-targets"></div>
 </div>
 
 <script>
@@ -336,11 +394,85 @@ function renderPalette() {
         const div = document.createElement('div');
         div.className = 'swatch';
         div.style.background = rgbStr(c);
-        div.title = rgbStr(c) + ' (sum ' + (c[0]+c[1]+c[2]) + ')';
+        div.title = rgbStr(c) + ' (sum ' + (c[0]+c[1]+c[2]) + ')\n右鍵：取代為...';
         if (!currentIsTransparent && pxEqual(c, currentColor)) div.classList.add('active');
         div.onclick = () => { currentIsTransparent = false; currentColor = c; renderPalette(); };
+        div.oncontextmenu = (e) => { e.preventDefault(); openReplaceMenu(c, e.clientX, e.clientY); };
         el.appendChild(div);
     }
+}
+
+// ── 顏色取代（右鍵調色盤色塊 → 選 B → 取代本幀所有 A 為 B）─────────
+let replaceFromColor = null;   // null = 透明；陣列 = RGB
+
+function openReplaceMenu(fromColor, x, y) {
+    replaceFromColor = fromColor;
+    const menu = document.getElementById('replace-menu');
+    const fromSwatch = document.getElementById('replace-from');
+    fromSwatch.classList.toggle('transparent', !fromColor);
+    fromSwatch.style.background = fromColor ? rgbStr(fromColor) : '';
+
+    const grid = document.getElementById('replace-targets');
+    grid.innerHTML = '';
+
+    // 透明選項
+    const transBtn = document.createElement('div');
+    transBtn.className = 'swatch transparent';
+    transBtn.title = '取代為透明';
+    transBtn.onclick = (e) => { e.stopPropagation(); replaceColorInFrame(fromColor, null); closeReplaceMenu(); };
+    grid.appendChild(transBtn);
+
+    // 其他調色盤色（排除 A 自己）
+    for (const c of palette) {
+        if (fromColor && pxEqual(c, fromColor)) continue;
+        const div = document.createElement('div');
+        div.className = 'swatch';
+        div.style.background = rgbStr(c);
+        div.title = '取代為 ' + rgbStr(c);
+        div.onclick = (e) => { e.stopPropagation(); replaceColorInFrame(fromColor, c); closeReplaceMenu(); };
+        grid.appendChild(div);
+    }
+
+    // 防止跑出視窗右下：先定位再用 rect 反算調整
+    menu.style.left = x + 'px';
+    menu.style.top  = y + 'px';
+    menu.classList.add('open');
+    requestAnimationFrame(() => {
+        const r = menu.getBoundingClientRect();
+        const W = window.innerWidth, H = window.innerHeight;
+        if (r.right > W) menu.style.left = Math.max(4, W - r.width - 4) + 'px';
+        if (r.bottom > H) menu.style.top  = Math.max(4, H - r.height - 4) + 'px';
+    });
+}
+
+function closeReplaceMenu() {
+    document.getElementById('replace-menu').classList.remove('open');
+    replaceFromColor = null;
+}
+
+function replaceColorInFrame(from, to) {
+    pushHistory();
+    const frame = data.frames[currentFrame];
+    let count = 0;
+    for (let i = 0; i < frame.length; i++) {
+        if (pxEqual(frame[i], from)) {
+            frame[i] = to ? [...to] : null;
+            count++;
+        }
+    }
+    // 同步重畫
+    renderEditor();
+    renderThumbs();
+    renderPreview();
+    // 短訊息
+    const status = document.getElementById('status');
+    status.className = 'ok';
+    status.textContent = `✓ 本幀 ${count} 個像素已取代`;
+    status.style.display = 'block';
+    clearTimeout(window._replaceMsgTimer);
+    window._replaceMsgTimer = setTimeout(() => {
+        if (status.textContent.startsWith('✓ 本幀')) { status.className = ''; status.style.display = 'none'; }
+    }, 2200);
 }
 
 function renderThumbs() {
@@ -673,11 +805,21 @@ window.addEventListener('keydown', (e) => {
         const total = data ? data.frames.length : 12;
         selectFrame((currentFrame + delta + total) % total);
     }
-    else if (e.key === 'Escape') { clearSelection(); }
+    else if (e.key === 'Escape') {
+        // Esc 優先關閉取代選單，否則清除選取
+        if (document.getElementById('replace-menu').classList.contains('open')) closeReplaceMenu();
+        else clearSelection();
+    }
     else if (!e.ctrlKey && !e.altKey && !e.metaKey) {
         if (e.key.toLowerCase() === 'b') setTool('paint');
         else if (e.key.toLowerCase() === 'v') setTool('select');
     }
+});
+
+// 點到選單外 → 關閉
+document.addEventListener('mousedown', (e) => {
+    const menu = document.getElementById('replace-menu');
+    if (menu.classList.contains('open') && !menu.contains(e.target)) closeReplaceMenu();
 });
 
 load();

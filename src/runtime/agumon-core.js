@@ -9,9 +9,9 @@ const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
 const ANCHOR_GAP  = 4;
-const STEP_MS     = 1000;
+const STEP_MS     = 750;
 const IDLE_MS     = 600000;
-const MAX_POS     = 20;
+const MAX_POS     = 36;                                                 // 走路範圍：對齊 BATTLE_SCENE_WIDTH(52) - 角色寬(16)
 const EXPR_CHANCE = 0.10;
 const EXPR_HOLD   = 3;
 
@@ -154,8 +154,9 @@ function decideEvoFrame(elapsed, oldF, newF, pos) {
 }
 
 // ── 戰鬥（Battle）─────────────────────────────────────────────────
-const BATTLE_LENGTH = 19;                                              // 共 19 step（Encounter 3 拍 + Boom 3 拍）
-const BATTLE_SAFETY = 30;                                              // 殘留清理門檻
+const BATTLE_LENGTH    = 19;                                           // v1：共 19 step（Encounter 3 拍 + Boom 3 拍）
+const BATTLE_LENGTH_V2 = 21;                                           // v2：encounter 多 2 拍（cut-in 滑入 + 對峙）→ 共 21 step
+const BATTLE_SAFETY    = 30;                                           // 殘留清理門檻
 
 const safeF = (F, name, fallback = 0) => F[name] ?? fallback;
 
@@ -164,7 +165,21 @@ function chooseBattleEnemy(/* myId */) {
     return 'godzilla_1999';
 }
 
-function decideBattleFrame(elapsed, win, enemyId, F) {
+// 角色是否有 cut-in art（檔案存在即視為有）
+function hasCutIn(charId) {
+    if (!charId) return false;
+    try { return fs.existsSync(path.join(ASSETS_DIR, charId, 'cutin-art.json')); }
+    catch(e) { return false; }
+}
+
+// v2 vs v1 分鏡選擇：只在「我方與敵方都有 cut-in art」時啟用 v2
+function pickBattleVersion(myId, enemyId) {
+    return (hasCutIn(myId) && hasCutIn(enemyId)) ? 2 : 1;
+}
+
+function battleLength(version) { return version === 2 ? BATTLE_LENGTH_V2 : BATTLE_LENGTH; }
+
+function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
     const base = {
         kind: 'battle',
         elapsed,
@@ -178,12 +193,30 @@ function decideBattleFrame(elapsed, win, enemyId, F) {
         bullet: null,
         sharedSpriteName: null,
         position: 'sides',
+        meCutIn: false,
+        enemyCutIn: false,
+        meCutInCol: null,      // null = 用預設 BATTLE_CUTIN_ME_COL；其他值覆寫（用於滑入動畫）
+        enemyCutInCol: null,   // 同上
     };
     const IDLE_1 = safeF(F, 'IDLE_1', 0);
     const ANGRY  = safeF(F, 'ANGRY',  IDLE_1);
     const ATTACK = safeF(F, 'ATTACK', ANGRY);
     const HAPPY  = safeF(F, 'HAPPY',  IDLE_1);
     const SAD    = safeF(F, 'SAD',    IDLE_1);
+
+    // ── v2：encounter 多 2 拍（滑入 + 對峙）。
+    // step 0：cut-in 滑入半進場（me col -16、enemy col 36，各露出 16 col 的前緣）；無驚嘆號
+    // step 1-3：cut-in 全進場 + encounter[0/1/2] 驚嘆號
+    // step 4：cut-in 保留、驚嘆號離場（對峙一拍）
+    // step 5+：同 v1，把 elapsed 平移 2 重用 v1 邏輯
+    if (useCutIn) {
+        if (elapsed === 0) return { ...base, meCutIn: true, enemyCutIn: true, meCutInCol: -16, enemyCutInCol: 36 };
+        if (elapsed === 1) return { ...base, sharedSpriteName: 'encounter', sharedFrameIdx: 0, meCutIn: true, enemyCutIn: true };
+        if (elapsed === 2) return { ...base, sharedSpriteName: 'encounter', sharedFrameIdx: 1, meCutIn: true, enemyCutIn: true };
+        if (elapsed === 3) return { ...base, sharedSpriteName: 'encounter', sharedFrameIdx: 2, meCutIn: true, enemyCutIn: true };
+        if (elapsed === 4) return { ...base, meCutIn: true, enemyCutIn: true };
+        elapsed = elapsed - 2;
+    }
 
     if (elapsed <= 2) {
         // Encounter1 → Encounter2 → Encounter1（manifest.json 中 encounter.indices = [0, X, 0]）
@@ -216,10 +249,11 @@ function decideBattleFrame(elapsed, win, enemyId, F) {
 }
 
 function startBattle(st, step, myId) {
-    st.battleStartStep = step;
-    st.battleEnemy     = chooseBattleEnemy(myId);
-    st.battleWin       = Math.random() < 0.5;
-    st.battlePending   = false;
+    st.battleStartStep   = step;
+    st.battleEnemy       = chooseBattleEnemy(myId);
+    st.battleWin         = Math.random() < 0.5;
+    st.battlePending     = false;
+    st.battleVersion     = pickBattleVersion(myId, st.battleEnemy);
 }
 
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
@@ -264,7 +298,11 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         startBattle(st, step, st.characterId);
         if (st._forceBattleWin === true)  st.battleWin = true;
         if (st._forceBattleWin === false) st.battleWin = false;
-        if (typeof st._forceBattleEnemy === 'string') st.battleEnemy = st._forceBattleEnemy;
+        if (typeof st._forceBattleEnemy === 'string') {
+            st.battleEnemy = st._forceBattleEnemy;
+            // enemy 換掉了 → 重判 cut-in 可用性
+            st.battleVersion = pickBattleVersion(st.characterId, st.battleEnemy);
+        }
         delete st._forceBattle; delete st._forceBattleWin; delete st._forceBattleEnemy;
     }
 
@@ -288,18 +326,22 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     // ── Battle 表演（高優先級；但 ROAR 在它前面播完才啟動）─────────
     if (allowBattle && st.battleStartStep != null && st.battleStartStep >= 0) {
-        const elapsed = step - st.battleStartStep;
-        if (elapsed >= 0 && elapsed < BATTLE_LENGTH) {
-            return decideBattleFrame(elapsed, st.battleWin, st.battleEnemy, F);
+        const elapsed   = step - st.battleStartStep;
+        const useCutIn  = st.battleVersion === 2;
+        const length    = battleLength(st.battleVersion);
+        if (elapsed >= 0 && elapsed < length) {
+            return decideBattleFrame(elapsed, st.battleWin, st.battleEnemy, F, useCutIn);
         }
         // 殘留清理：跨機 / 跨重啟導致 step 不連續
         if (elapsed < 0 || elapsed >= BATTLE_SAFETY) {
             st.battleStartStep = -1;
             st.battleEnemy     = null;
+            st.battleVersion   = 1;
         } else {
             // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
             st.battleStartStep = -1;
             st.battleEnemy     = null;
+            st.battleVersion   = 1;
             st.lastStepSeen    = step;
             const PERIOD     = MAX_POS * 2;                            // 40
             const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
@@ -335,14 +377,14 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         // ROAR 結束的同一秒：若有 battlePending，馬上接戰鬥
         if (allowBattle && st.battlePending) {
             startBattle(st, step, st.characterId);
-            return decideBattleFrame(0, st.battleWin, st.battleEnemy, F);
+            return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
         }
     }
 
     // ROAR 沒在播 + battlePending（thinking 在 ROAR 結束後才被偵測）
     if (allowBattle && st.battlePending) {
         startBattle(st, step, st.characterId);
-        return decideBattleFrame(0, st.battleWin, st.battleEnemy, F);
+        return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
     }
 
     // Token 重置高興（hold 確保為偶數）
@@ -480,6 +522,7 @@ function loadCharacter(name) {
     const dir    = path.join(ASSETS_DIR, name);
     const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
     const bulletArtFile = path.join(dir, 'bullet-art.json');
+    const cutinArtFile  = path.join(dir, 'cutin-art.json');
     return {
         charDef: {
             F:                  config.frames,
@@ -492,6 +535,7 @@ function loadCharacter(name) {
         },
         artFile: path.join(dir, 'art.json'),
         bulletArtFile,
+        cutinArtFile,
         config,
     };
 }
@@ -547,6 +591,11 @@ const BATTLE_ME_LEFT_COL    = 0;
 const BATTLE_ENEMY_RIGHT_COL = BATTLE_SCENE_WIDTH - 16;  // 36
 const BATTLE_CENTER_COL      = (BATTLE_SCENE_WIDTH - 16) / 2;  // 18
 
+// v2 cut-in settled 位置：32 寬，往兩側各退 BATTLE_CUTIN_RETREAT 拉開距離
+const BATTLE_CUTIN_RETREAT   = 4;                                       // 各退 4 cells → 中央 col 24-27 重疊 4 cells
+const BATTLE_CUTIN_ME_COL    = 0 - BATTLE_CUTIN_RETREAT;                // -4 (左側裁掉 4 cells)
+const BATTLE_CUTIN_ENEMY_COL = (BATTLE_SCENE_WIDTH - 32) + BATTLE_CUTIN_RETREAT; // 24 (右側裁掉 4 cells)
+
 function paintCells(buffer, rows, col0) {
     if (!rows) return;
     const H = buffer.length;
@@ -580,6 +629,7 @@ function composeBattleScene(opts) {
         frame,
         meArt, enemyArt,
         meBulletArt, enemyBulletArt,
+        meCutInArt = null, enemyCutInArt = null,
         shared,
         meRightOffset = null,
         enemyRightOffset = null,
@@ -588,7 +638,23 @@ function composeBattleScene(opts) {
     const buffer = Array.from({ length: BATTLE_SCENE_HEIGHT },
         () => Array(BATTLE_SCENE_WIDTH).fill(null));
 
-    // 共用 sprite 居中（在角色下方繪製）
+    // ── v2 cut-in（先畫，作為背景；shared sprite / 角色會壓在上方）─────
+    // 兩張各 32 cell 寬，中央 12 cell 重疊（col 20-31）。原圖固定面左：
+    //   - 敵方在右 → 維持面左（原樣朝向中央/我方）
+    //   - 我方在左 → 翻轉成面右（朝中央/敵方）→ 兩邊互瞪
+    // 我方畫在敵方之上（玩家視角優先）
+    if (frame.enemyCutIn && enemyCutInArt?.frames?.[0]) {
+        const col = frame.enemyCutInCol ?? BATTLE_CUTIN_ENEMY_COL;
+        paintCells(buffer, enemyCutInArt.frames[0], col);
+    }
+    if (frame.meCutIn && meCutInArt?.frames?.[0]) {
+        const col = frame.meCutInCol ?? BATTLE_CUTIN_ME_COL;
+        // 我方需要面右；優先用客製右向（frames[1]），沒有就翻轉左向
+        const meRows = meCutInArt.frames[1] || flipRows(meCutInArt.frames[0]);
+        paintCells(buffer, meRows, col);
+    }
+
+    // 共用 sprite 居中（在角色下方繪製，cut-in 上方繪製）
     if (frame.sharedSpriteName && shared) {
         const spriteRows = getSharedFrame(shared, frame.sharedSpriteName, frame.sharedFrameIdx ?? 0);
         if (spriteRows) paintCells(buffer, spriteRows, BATTLE_CENTER_COL);
@@ -644,7 +710,8 @@ function composeEvoScene({ frame, charArt, shared, charRightOffset = null }) {
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     ANCHOR_GAP,
-    BATTLE_LENGTH, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT,
+    BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT,
+    hasCutIn, pickBattleVersion, battleLength,
     EVO_LENGTH,
     decideBattleFrame,
     decideEvoFrame,

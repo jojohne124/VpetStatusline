@@ -98,6 +98,7 @@ function installCharacters() {
         const art = path.join(srcCharDir, 'art.json');
         const cfg = path.join(srcCharDir, 'config.json');
         const bulletArt = path.join(srcCharDir, 'bullet-art.json');
+        const cutinArt  = path.join(srcCharDir, 'cutin-art.json');
         if (!fs.existsSync(art) || !fs.existsSync(cfg)) {
             console.warn(`  [skip] ${entry.name}: 缺 art.json 或 config.json`);
             continue;
@@ -106,6 +107,9 @@ function installCharacters() {
         copyFile(cfg, path.join(dstCharDir, 'config.json'), dstName);
         if (fs.existsSync(bulletArt)) {
             copyFile(bulletArt, path.join(dstCharDir, 'bullet-art.json'), dstName);
+        }
+        if (fs.existsSync(cutinArt)) {
+            copyFile(cutinArt, path.join(dstCharDir, 'cutin-art.json'), dstName);
         }
         installed.push(dstName);
     }

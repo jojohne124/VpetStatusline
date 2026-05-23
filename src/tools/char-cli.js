@@ -447,6 +447,72 @@ function cmdBuild(name) {
   console.log(`✓ ${outPath}`);
 }
 
+// ── cutin: CutIn.png (96x48 RGBA) → cutin-art.json (32x8 halfblock) ──
+// 規格：原圖 96x48 RGBA，alpha < 128 視為透明；3:1 nearest-neighbor
+// downsample 到 32x16 pixels，再轉成 32 寬 × 8 高 halfblock cells。
+//   frames[0] = 左向（CutIn.png；給敵方原樣，給我方翻轉）
+//   frames[1] = 客製右向（如有 CutIn_r.png 才會輸出；給我方使用，不翻轉）
+async function cmdCutin(name) {
+  const sharp = require('sharp');
+  const dir    = charDir(name);
+  const leftP  = path.join(dir, 'CutIn.png');
+  const rightP = path.join(dir, 'CutIn_r.png');
+  const outP   = path.join(dir, 'cutin-art.json');
+  if (!fs.existsSync(leftP)) { console.error(`找不到 ${leftP}`); process.exit(1); }
+
+  const TW = 32, TH = 16;
+
+  async function pngToCells(p) {
+    const { data, info } = await sharp(p).raw().toBuffer({ resolveWithObject: true });
+    const SW = info.width, SH = info.height, CH = info.channels;
+    if (SW % TW !== 0 || SH % TH !== 0) {
+      console.warn(`警告：${path.basename(p)} ${SW}x${SH} 不能整除 ${TW}x${TH}，仍用 nearest 取樣`);
+    }
+    const sx = SW / TW, sy = SH / TH;
+    const pixels = [];
+    for (let y = 0; y < TH; y++) {
+      for (let x = 0; x < TW; x++) {
+        const ssx = Math.min(SW - 1, Math.floor((x + 0.5) * sx));
+        const ssy = Math.min(SH - 1, Math.floor((y + 0.5) * sy));
+        const i = (ssy * SW + ssx) * CH;
+        const a = CH === 4 ? data[i + 3] : 255;
+        if (a < 128) { pixels.push(null); continue; }
+        pixels.push([data[i], data[i+1], data[i+2]]);
+      }
+    }
+    const rows = [];
+    for (let y = 0; y < TH; y += 2) {
+      const row = [];
+      for (let x = 0; x < TW; x++) {
+        const up = pixels[y * TW + x] || null;
+        const lo = pixels[(y + 1) * TW + x] || null;
+        if (!up && !lo) { row.push(null); continue; }
+        row.push([
+          up ? up[0] : -1, up ? up[1] : -1, up ? up[2] : -1,
+          lo ? lo[0] : -1, lo ? lo[1] : -1, lo ? lo[2] : -1,
+        ]);
+      }
+      rows.push(row);
+    }
+    return { rows, SW, SH };
+  }
+
+  const left = await pngToCells(leftP);
+  const frames = [left.rows];
+  let line = `[${name}] CutIn ${left.SW}x${left.SH} → ${TW}x${TH} (左向)`;
+  if (fs.existsSync(rightP)) {
+    const right = await pngToCells(rightP);
+    frames.push(right.rows);
+    line += `  + CutIn_r ${right.SW}x${right.SH} (客製右向)`;
+  }
+  console.log(line);
+
+  fs.writeFileSync(outP, JSON.stringify({
+    style: 'color-halfblock', width: TW, height: TH / 2, frames,
+  }));
+  console.log(`✓ ${outP}`);
+}
+
 // ── edit: 啟動 sprite editor ───────────────────────────────────────
 function cmdEdit(name) {
   loadConfig(name);
@@ -464,6 +530,7 @@ if (!cmd || !name) {
     '  prepare <name>   sprite.png → pixels.json',
     '  build <name>     pixels.json → art.json',
     '  process <name>   prepare + build',
+    '  cutin <name>     CutIn.png → cutin-art.json',
     '  edit <name>      啟動 sprite editor',
   ].join('\n'));
   process.exit(0);
@@ -473,6 +540,7 @@ const cmds = {
   prepare: () => cmdPrepare(name).catch(e => { console.error(e.message); process.exit(1); }),
   build:   () => cmdBuild(name),
   process: () => cmdPrepare(name).then(() => cmdBuild(name)).catch(e => { console.error(e.message); process.exit(1); }),
+  cutin:   () => cmdCutin(name).catch(e => { console.error(e.message); process.exit(1); }),
   edit:    () => cmdEdit(name),
 };
 (cmds[cmd] || (() => { console.error('未知指令：' + cmd); process.exit(1); }))();

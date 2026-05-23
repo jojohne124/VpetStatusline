@@ -9,7 +9,7 @@ const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
 const ANCHOR_GAP  = 4;
-const STEP_MS     = 750;
+const STEP_MS     = 1000;
 const IDLE_MS     = 600000;
 const MAX_POS     = 36;                                                 // 走路範圍：對齊 BATTLE_SCENE_WIDTH(52) - 角色寬(16)
 const EXPR_CHANCE = 0.10;
@@ -249,11 +249,12 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
 }
 
 function startBattle(st, step, myId) {
-    st.battleStartStep   = step;
-    st.battleEnemy       = chooseBattleEnemy(myId);
-    st.battleWin         = Math.random() < 0.5;
-    st.battlePending     = false;
-    st.battleVersion     = pickBattleVersion(myId, st.battleEnemy);
+    st.battleStartStep    = step;
+    st.battleEnemy        = chooseBattleEnemy(myId);
+    st.battleWin          = Math.random() < 0.5;
+    st.battlePending      = false;
+    st.battleVersion      = pickBattleVersion(myId, st.battleEnemy);
+    st.battleShownElapsed = -1;
 }
 
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
@@ -308,41 +309,57 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     // ── 進化表演（最高優先；超越 battle、roar）─────────
     if (st.evoStartStep != null && st.evoStartStep >= 0) {
-        const elapsed = step - st.evoStartStep;
-        if (elapsed >= 0 && elapsed < EVO_LENGTH) {
+        const targetElapsed = step - st.evoStartStep;
+        // Frame throttle（同 battle）：每 render 最多 +1，保證每拍都被渲染
+        // Commit 由 statusline-agumon-color.js 在「shown 會推進到 EVO_LENGTH」那拍處理
+        const prevShown    = st.evoShownElapsed ?? -1;
+        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
+
+        // 殘留清理（跨機 / 跨重啟導致 target 不連續）
+        if (targetElapsed < 0 || targetElapsed >= EVO_LENGTH + 18) {
+            st.evoStartStep    = -1;
+            st.evoNextCharId   = null;
+            st.evoShownElapsed = -1;
+        } else if (shownElapsed >= 0 && shownElapsed < EVO_LENGTH) {
+            st.evoShownElapsed = shownElapsed;
             let newF = F;
             try {
                 const newChar = loadCharacter(st.evoNextCharId);
                 if (newChar?.charDef?.F) newF = newChar.charDef.F;
             } catch(e) {}
-            return decideEvoFrame(elapsed, F, newF, st.lastPos ?? 0);
+            return decideEvoFrame(shownElapsed, F, newF, st.lastPos ?? 0);
         }
-        // 殘留清理（跨機 / 跨重啟導致 step 不連續）
-        if (elapsed < 0 || elapsed >= EVO_LENGTH + 18) {
-            st.evoStartStep = -1;
-            st.evoNextCharId = null;
-        }
+        // shownElapsed >= EVO_LENGTH 且 target 未超 safety → 等 statusline commit
     }
 
     // ── Battle 表演（高優先級；但 ROAR 在它前面播完才啟動）─────────
     if (allowBattle && st.battleStartStep != null && st.battleStartStep >= 0) {
-        const elapsed   = step - st.battleStartStep;
-        const useCutIn  = st.battleVersion === 2;
-        const length    = battleLength(st.battleVersion);
-        if (elapsed >= 0 && elapsed < length) {
-            return decideBattleFrame(elapsed, st.battleWin, st.battleEnemy, F, useCutIn);
-        }
-        // 殘留清理：跨機 / 跨重啟導致 step 不連續
-        if (elapsed < 0 || elapsed >= BATTLE_SAFETY) {
-            st.battleStartStep = -1;
-            st.battleEnemy     = null;
-            st.battleVersion   = 1;
+        const targetElapsed = step - st.battleStartStep;
+        const useCutIn      = st.battleVersion === 2;
+        const length        = battleLength(st.battleVersion);
+
+        // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
+        // 取樣 aliasing 會跳幀；用 shownElapsed 保證每拍都被渲染。
+        // 代價：render 稀疏時戰鬥 wallclock 會被拉長（最壞 = render 間隔 × length）。
+        const prevShown    = st.battleShownElapsed ?? -1;
+        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
+
+        // 殘留清理：跨機 / 跨重啟導致 target 不連續（startStep 來自很久以前）
+        if (targetElapsed < 0 || targetElapsed >= BATTLE_SAFETY) {
+            st.battleStartStep    = -1;
+            st.battleEnemy        = null;
+            st.battleVersion      = 1;
+            st.battleShownElapsed = -1;
+        } else if (shownElapsed < length) {
+            st.battleShownElapsed = shownElapsed;
+            return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
         } else {
             // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
-            st.battleStartStep = -1;
-            st.battleEnemy     = null;
-            st.battleVersion   = 1;
-            st.lastStepSeen    = step;
+            st.battleStartStep    = -1;
+            st.battleEnemy        = null;
+            st.battleVersion      = 1;
+            st.battleShownElapsed = -1;
+            st.lastStepSeen       = step;
             const PERIOD     = MAX_POS * 2;                            // 40
             const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
             st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;

@@ -81,23 +81,31 @@ process.stdin.on('end', () => {
         }
 
         // ── 進化生命週期 ────────────────────────────────────────────
-        // STEP_MS 必須跟 agumon-core 一致（750ms / step），否則 step 對不上會
+        // STEP_MS 必須跟 agumon-core 一致（1000ms = 1 step/sec），否則 step 對不上會
         // 讓 decideAgumon 內的殘留清理把 evoStartStep 重設掉
-        const STEP_MS = 750;
+        const STEP_MS = 1000;
         const step = Math.floor(now / STEP_MS);
         // 1. commit：表演結束 → 切換 characterId（必須在 loadCharacter 之前，否則
         //    commit 那一步會用舊 charDef 載入 art，render 出舊角色走路 1 幀）
-        if (st.evoStartStep != null && st.evoStartStep >= 0 && (step - st.evoStartStep) >= EVO_LENGTH) {
-            st.characterId = st.evoNextCharId || st.characterId;
-            st.evoStartStep = -1;
-            st.evoNextCharId = null;
-            delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
-            // 清掉 force.character，避免下次 refresh 把角色拉回進化前 → 形成「進化→拉回→進化」無限迴圈
-            try {
-                const f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));
-                delete f.character; delete f.resetCostBase;
-                fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
-            } catch(e) {}
+        // 用 shownElapsed 判斷而非 target：搭配 core 的 frame throttle，避免 wallclock 超過
+        // 但仍有未播完的拍卡在後面就提前 commit
+        if (st.evoStartStep != null && st.evoStartStep >= 0) {
+            const targetElapsed = step - st.evoStartStep;
+            const prevShown     = st.evoShownElapsed ?? -1;
+            const wouldAdvance  = Math.min(targetElapsed, prevShown + 1);
+            if (wouldAdvance >= EVO_LENGTH) {
+                st.characterId = st.evoNextCharId || st.characterId;
+                st.evoStartStep = -1;
+                st.evoNextCharId = null;
+                st.evoShownElapsed = -1;
+                delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
+                // 清掉 force.character，避免下次 refresh 把角色拉回進化前 → 形成「進化→拉回→進化」無限迴圈
+                try {
+                    const f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));
+                    delete f.character; delete f.resetCostBase;
+                    fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
+                } catch(e) {}
+            }
         }
 
         const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
@@ -106,6 +114,7 @@ process.stdin.on('end', () => {
         if (st._forceEvolve && !(st.evoStartStep >= 0)) {
             st.evoStartStep = step;
             st.evoNextCharId = st._forceEvolve;
+            st.evoShownElapsed = -1;
             delete st._forceEvolve;
             st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
             delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
@@ -116,6 +125,7 @@ process.stdin.on('end', () => {
             if (nextChar) {
                 st.evoStartStep = step;
                 st.evoNextCharId = nextChar;
+                st.evoShownElapsed = -1;
                 st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
                 delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
             }

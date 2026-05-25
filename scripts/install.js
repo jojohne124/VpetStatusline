@@ -218,12 +218,15 @@ function updateSettings() {
     }
 
     cur.hooks = cur.hooks || {};
+    if (!Array.isArray(cur.hooks.UserPromptSubmit)) cur.hooks.UserPromptSubmit = [];
     const ups = cur.hooks.UserPromptSubmit;
-    if (Array.isArray(ups)) {
-        for (const block of ups) {
-            if (!block || !Array.isArray(block.hooks)) continue;
-            for (const h of block.hooks) {
-                if (h && typeof h.command === 'string' && /agumon[-_]?hook/i.test(h.command) && h.command !== newHook) {
+    let agumonHookFound = false;
+    for (const block of ups) {
+        if (!block || !Array.isArray(block.hooks)) continue;
+        for (const h of block.hooks) {
+            if (h && typeof h.command === 'string' && /agumon[-_]?hook/i.test(h.command)) {
+                agumonHookFound = true;
+                if (h.command !== newHook) {
                     const old = h.command;
                     h.command = newHook;
                     console.log(`  [update] hooks.UserPromptSubmit:`);
@@ -233,6 +236,12 @@ function updateSettings() {
                 }
             }
         }
+    }
+    if (!agumonHookFound) {
+        ups.push({ hooks: [{ type: 'command', command: newHook }] });
+        console.log(`  [add]    hooks.UserPromptSubmit:`);
+        console.log(`           新增: ${newHook}`);
+        changed = true;
     }
 
     if (changed) {

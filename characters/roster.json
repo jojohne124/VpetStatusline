@@ -14,7 +14,15 @@
     "godzilla_1954",
     "godzilla_1999",
     "soulseer_mizutsune",
-    "majaja"
+    "majaja",
+    "demidevimon",
+    "devimon",
+    "myotismon",
+    "venommyotismon",
+    "renamon",
+    "tenkomon",
+    "sekkamon",
+    "yukinamon"
   ],
-  "starters": ["agumon", "gabumon", "babygodzilla"]
+  "starters": ["agumon", "gabumon", "babygodzilla", "demidevimon", "renamon"]
 }

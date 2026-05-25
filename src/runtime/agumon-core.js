@@ -160,9 +160,25 @@ const BATTLE_SAFETY    = 30;                                           // 殘留
 
 const safeF = (F, name, fallback = 0) => F[name] ?? fallback;
 
-function chooseBattleEnemy(/* myId */) {
-    // 第一版固定 GodZilla_1999（允許自己打自己）
-    return 'godzilla_1999';
+function getCharacterRank(name) {
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        return config.rank || 'UnRank';
+    } catch(e) { return 'UnRank'; }
+}
+
+function chooseBattleEnemy(myId) {
+    // 同階隨機（排除自己）；若同階只有自己 → 退回預設
+    try {
+        const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
+        const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
+        const myRank = getCharacterRank(myId);
+        const candidates = roster.filter(n => n !== myId && getCharacterRank(n) === myRank);
+        if (candidates.length === 0) return 'godzilla_1999';
+        return candidates[Math.floor(Math.random() * candidates.length)];
+    } catch(e) {
+        return 'godzilla_1999';
+    }
 }
 
 // 角色是否有 cut-in art（檔案存在即視為有）
@@ -380,6 +396,16 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
     if (r5hResetAt) st._r5hResetAt = Math.max(r5hResetAt, st._r5hResetAt || 0);
 
+    // 從睡眠喚醒：重新對齊 walkPhaseOffset，讓 computeWalk(step) 從 lastPos / lastFacing 繼續
+    // 否則 step 在睡眠期間持續累加，醒來瞬間 pos 會跳到三角波的別處（包含 ROAR 那幾幀）
+    if (st.wasSleeping && (now - st.lastActivityAt) <= IDLE_MS) {
+        const PERIOD    = MAX_POS * 2;
+        const lastPos   = st.lastPos ?? 0;
+        const wantPhase = (st.lastFacing === 'left') ? (PERIOD - lastPos) % PERIOD : lastPos;
+        st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+        st.wasSleeping = false;
+    }
+
     const walk = computeWalk(step, st.walkPhaseOffset || 0);
 
     // 大吼最優先（hold 確保為偶數，維持 step 奇偶）
@@ -416,6 +442,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     // 睡覺（靜止不動，保留最後位置）
     if ((now - st.lastActivityAt) > IDLE_MS) {
+        st.wasSleeping = true;
         const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
         return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0 };
     }
@@ -441,14 +468,13 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.exprIdx       = Math.floor(Math.random() * EXPRS.length);
             return { kind: 'single', frameIdx: EXPRS[st.exprIdx].frames[0], facing: walk.facing, pos: walk.pos };
         }
-        // 走路幀依上一幀交替，不依賴 step % 2，避免 timing jitter 造成同幀重複
-        st.lastWalkFrame = (st.lastWalkFrame === F.IDLE_1) ? F.IDLE_2 : F.IDLE_1;
     }
 
-    // 正常走路
+    // 走路幀：純函數 of step，多視窗算出來必相同；evenHold 確保動畫結束後 step 奇偶不翻轉
+    const walkFrame = ((step + (st.walkPhaseOffset || 0)) % 2 === 0) ? F.IDLE_1 : F.IDLE_2;
     st.lastPos    = walk.pos;
     st.lastFacing = walk.facing;
-    return { kind: 'single', frameIdx: st.lastWalkFrame ?? F.IDLE_1, facing: walk.facing, pos: walk.pos };
+    return { kind: 'single', frameIdx: walkFrame, facing: walk.facing, pos: walk.pos };
 }
 
 // ── 狀態列 ───────────────────────────────────────────────────────
@@ -740,6 +766,8 @@ module.exports = {
     composeOutput,
     visLen,
     loadCharacter,
+    getCharacterRank,
+    chooseBattleEnemy,
     loadShared,
     getSharedFrame,
     renderCells,

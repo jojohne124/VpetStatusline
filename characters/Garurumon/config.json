@@ -1,5 +1,6 @@
 {
   "name": "garurumon",
+  "rank": "Adult",
   "frameCount": 12,
   "targetSize": 16,
   "layout": "grid",

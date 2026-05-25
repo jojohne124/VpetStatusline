@@ -15,6 +15,18 @@ const {
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
 const FORCE_FILE = path.join(STATE_DIR, 'force-char.json');
 
+// 把 _evoCostBase 重置到當前 cost，並啟動 5 秒 sticky 視窗（讓多視窗用各自 cost bump 到 max）
+function tryResetEvoBase(st, i) {
+    const cost = i.cost?.total_cost_usd;
+    if (cost && cost > 0) {
+        st._evoCostBase = cost;
+        st._evoCheatStickyUntilMs = Date.now() + 5000;
+        delete st._evoCostBasePending;
+        return true;
+    }
+    return false;
+}
+
 // 安全讀取角色 art / bullet-art；失敗回 null
 function tryLoadArt(file) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) { return null; }
@@ -40,7 +52,23 @@ process.stdin.on('end', () => {
                     Object.keys(st).forEach(k => { if (k.startsWith('_evo_') || k === '_r5hPeaked' || k === '_costEvolved') delete st[k]; });
                     delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
                     delete st._r5hResetAt;
-                    if (force.resetCostBase) st._evoCostBase = i.cost?.total_cost_usd ?? 0;
+                    // cost 缺失/為 0 → pending；下次 refresh cost 有效再 reset。
+                    // 否則 base=0 + 下次 cost=正常值 會讓 delta 立刻超門檻 → 切換後立即被誤觸發進化。
+                    if (force.resetCostBase) {
+                        if (!tryResetEvoBase(st, i)) st._evoCostBasePending = true;
+                    }
+                }
+            }
+            // 延後處理：上次 resetCostBase 時 cost 還沒有效
+            if (st._evoCostBasePending) tryResetEvoBase(st, i);
+            // Sticky：cheat 後 5 秒內，把 base 往上抬到任何視窗看到的 max cost。
+            // 解決多視窗 race（每個視窗各自 cost 不同 → 後寫的覆蓋前寫的 → 用另一視窗較低 base 算 delta → 誤觸發進化）。
+            if (st._evoCheatStickyUntilMs) {
+                if (Date.now() < st._evoCheatStickyUntilMs) {
+                    const cost = i.cost?.total_cost_usd;
+                    if (cost && cost > (st._evoCostBase ?? 0)) st._evoCostBase = cost;
+                } else {
+                    delete st._evoCheatStickyUntilMs;
                 }
             }
             // Battle token：trigger 時間戳不同於本視窗上次看過的，且 10 秒內仍有效，才觸發

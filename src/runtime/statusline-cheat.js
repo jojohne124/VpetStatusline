@@ -71,9 +71,24 @@ if (args[0] === '--battle') {
     if (win !== null)     force.forceBattleWin   = win;
     else                  delete force.forceBattleWin;
     writeForce(force);
-    const enemyLabel = enemy || 'godzilla_1999 (預設)';
-    const winLabel   = win === null ? '隨機' : (win ? '勝利' : '失敗');
+    const enemyLabel = enemy || '同階隨機敵人';
+    const winLabel   = win === null ? '依 trigger 決定' : (win ? '勝利' : '失敗');
     console.log(`✓ 已排入戰鬥：vs ${enemyLabel}，勝負 ${winLabel}（下次 refresh 生效）`);
+    process.exit(0);
+}
+
+// ── --sleep / --wake 模式（強制睡覺開關，持續到手動喚醒）──────────
+if (args[0] === '--sleep' || args[0] === '--wake') {
+    const force = readForce();
+    if (args[0] === '--sleep') {
+        force.forceSleep = true;
+        writeForce(force);
+        console.log('✓ 已強制睡覺（持續到 ac --wake；發訊息不會喚醒）');
+    } else {
+        delete force.forceSleep;
+        writeForce(force);
+        console.log('✓ 已喚醒（解除強制睡覺）');
+    }
     process.exit(0);
 }
 

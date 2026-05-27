@@ -8,8 +8,8 @@ const {
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
-    loadCharacter, loadShared,
-    renderCells, flipRows, getFacingRows, composeBattleScene, composeEvoScene,
+    loadCharacter, loadShared, getSharedFrame,
+    renderCells, flipRows, overlayCells, composeSleepScene, getFacingRows, composeBattleScene, composeEvoScene,
 } = require('./agumon-core');
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
@@ -89,6 +89,8 @@ process.stdin.on('end', () => {
                 }
                 st.lastEvolveTriggerTs = force.evolveTriggerTs;
             }
+            // Sleep 開關（cheat）：持續到 --wake 才解除，發訊息不會喚醒
+            st._forceSleep = !!force.forceSleep;
         } catch(e) {}
 
         if (!st.characterId) {
@@ -225,7 +227,13 @@ process.stdin.on('end', () => {
             const art = tryLoadArt(artFile);
             if (art) {
                 const rows = getFacingRows(art, frameIdx, facing, charDef.RIGHT_OFFSET);
-                if (rows) outputLines = renderCells(rows);
+                // 睡覺 Z 特效：角色右方加寬一塊放 Z（不疊在角色身上）
+                if (rows && result.sleepFx) {
+                    const fxRows = getSharedFrame(loadShared(), result.sleepFx, 0);
+                    outputLines = renderCells(composeSleepScene(rows, fxRows));
+                } else if (rows) {
+                    outputLines = renderCells(rows);
+                }
             }
         }
 

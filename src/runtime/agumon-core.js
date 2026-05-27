@@ -167,15 +167,28 @@ function getCharacterRank(name) {
     } catch(e) { return 'UnRank'; }
 }
 
-function chooseBattleEnemy(myId) {
-    // 同階隨機（排除自己）；若同階只有自己 → 退回預設
+function chooseBattleEnemy(myId, seed) {
+    // 同階隨機（排除自己）；若同階只有自己 → 退回預設。
+    // 給 seed 時改用「確定性挑選」：同一個 trigger 在所有視窗算出同一敵人，
+    // 避免多視窗各自 random 抽到不同敵人 → 後寫蓋前寫 → 第一幀閃出別的敵人。
     try {
         const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
         const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
         const myRank = getCharacterRank(myId);
         const candidates = roster.filter(n => n !== myId && getCharacterRank(n) === myRank);
         if (candidates.length === 0) return 'godzilla_1999';
-        return candidates[Math.floor(Math.random() * candidates.length)];
+        let idx;
+        if (seed != null) {
+            // 32-bit 整數雜湊，把 timestamp seed 打散後取模
+            let h = (Math.floor(seed) ^ 0x9e3779b9) >>> 0;
+            h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+            h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+            h = (h ^ (h >>> 16)) >>> 0;
+            idx = h % candidates.length;
+        } else {
+            idx = Math.floor(Math.random() * candidates.length);
+        }
+        return candidates[idx];
     } catch(e) {
         return 'godzilla_1999';
     }
@@ -208,6 +221,7 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
         enemyFacing: 'left',
         bullet: null,
         sharedSpriteName: null,
+        weather: null,
         position: 'sides',
         meCutIn: false,
         enemyCutIn: false,
@@ -253,21 +267,25 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
         // Boom1 → Boom2 → Boom1（manifest.json 中 boom.indices = [1, 2, 1]）
         return { ...base, phase: 'boom', sharedSpriteName: 'boom', sharedFrameIdx: elapsed - 12 };
     }
+    // result 階段：右上角天氣特效（勝=小太陽 / 敗=小烏雲），整段 result 都掛著
+    const weather = win ? 'sun' : 'cloud';
     if (elapsed === 15 || elapsed === 17) {
         return { ...base, phase: 'result', position: 'center',
-                 meFrameIdx: IDLE_1, meFacing: 'left' };
+                 meFrameIdx: IDLE_1, meFacing: 'left', weather };
     }
     if (elapsed === 16 || elapsed === 18) {
         return { ...base, phase: 'result', position: 'center',
-                 meFrameIdx: win ? HAPPY : SAD, meFacing: 'left' };
+                 meFrameIdx: win ? HAPPY : SAD, meFacing: 'left', weather };
     }
-    return { ...base, phase: 'result', position: 'center', meFrameIdx: IDLE_1, meFacing: 'left' };
+    return { ...base, phase: 'result', position: 'center', meFrameIdx: IDLE_1, meFacing: 'left', weather };
 }
 
-function startBattle(st, step, myId) {
+// seed：跨視窗共享的 trigger 值（cheat 用 lastBattleTriggerTs、自然戰鬥用 lastHookTs）。
+// 給 seed → 敵人與勝負皆確定性，所有視窗算出同一場戰鬥，避免多視窗 race 閃幀。
+function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
-    st.battleEnemy        = chooseBattleEnemy(myId);
-    st.battleWin          = Math.random() < 0.5;
+    st.battleEnemy        = chooseBattleEnemy(myId, seed);
+    st.battleWin          = seed != null ? ((Math.floor(seed) & 1) === 0) : (Math.random() < 0.5);
     st.battlePending      = false;
     st.battleVersion      = pickBattleVersion(myId, st.battleEnemy);
     st.battleShownElapsed = -1;
@@ -312,7 +330,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     // ── force battle 觸發（cheat code）─────────────────────────────
     if (allowBattle && st._forceBattle && !(st.battleStartStep >= 0)) {
-        startBattle(st, step, st.characterId);
+        // seed = 共享的 trigger ts → 多視窗算出同一敵人/勝負
+        startBattle(st, step, st.characterId, st.lastBattleTriggerTs);
         if (st._forceBattleWin === true)  st.battleWin = true;
         if (st._forceBattleWin === false) st.battleWin = false;
         if (typeof st._forceBattleEnemy === 'string') {
@@ -408,6 +427,14 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     const walk = computeWalk(step, st.walkPhaseOffset || 0);
 
+    // 強制睡覺（cheat ac --sleep）：最高優先，跳過 roar/battle/expr，持續到 ac --wake
+    if (st._forceSleep) {
+        st.wasSleeping = true;
+        const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
+        const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
+        return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0, sleepFx };
+    }
+
     // 大吼最優先（hold 確保為偶數，維持 step 奇偶）
     // 動畫播放中繼續走路（不凍結位置），避免位置定格
     if (st.roarStartStep != null && st.roarStartStep >= 0) {
@@ -419,14 +446,14 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         st.roarStartStep = -1;
         // ROAR 結束的同一秒：若有 battlePending，馬上接戰鬥
         if (allowBattle && st.battlePending) {
-            startBattle(st, step, st.characterId);
+            startBattle(st, step, st.characterId, st.lastHookTs);
             return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
         }
     }
 
     // ROAR 沒在播 + battlePending（thinking 在 ROAR 結束後才被偵測）
     if (allowBattle && st.battlePending) {
-        startBattle(st, step, st.characterId);
+        startBattle(st, step, st.characterId, st.lastHookTs);
         return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
     }
 
@@ -440,11 +467,12 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         st.happyStartStep = -1;
     }
 
-    // 睡覺（靜止不動，保留最後位置）
+    // 睡覺（靜止不動，保留最後位置）；右上疊 Z 特效：sleep_1→Z、sleep_2→zZ
     if ((now - st.lastActivityAt) > IDLE_MS) {
         st.wasSleeping = true;
         const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
-        return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0 };
+        const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
+        return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0, sleepFx };
     }
 
     // 表演中（hold 確保為偶數）；位置凍結在觸發當秒，避免表演期間滑動
@@ -626,6 +654,35 @@ function renderCells(rows) {
 
 const flipRows = rows => rows.map(r => [...r].reverse());
 
+// 把 overlay cell rows 疊到 base cell rows 之上（非 null 才覆蓋），回傳新 buffer（不改原陣列）
+function overlayCells(baseRows, overlayRows) {
+    const buf = baseRows.map(r => r.slice());
+    if (!overlayRows) return buf;
+    for (let r = 0; r < overlayRows.length && r < buf.length; r++) {
+        for (let c = 0; c < overlayRows[r].length && c < buf[r].length; c++) {
+            if (overlayRows[r][c]) buf[r][c] = overlayRows[r][c];
+        }
+    }
+    return buf;
+}
+
+// 睡覺場景：角色放左、特效（Z）放右側額外欄位 → 輸出加寬 buffer（特效在角色右方，不重疊）
+const SLEEP_SCENE_WIDTH = 24;   // 角色 16 + 右側 Z 區 8
+function composeSleepScene(charRows, fxRows, fxCol = 16) {
+    const H = charRows.length;
+    const buf = Array.from({ length: H }, () => Array(SLEEP_SCENE_WIDTH).fill(null));
+    for (let r = 0; r < H; r++)
+        for (let c = 0; c < charRows[r].length && c < SLEEP_SCENE_WIDTH; c++)
+            if (charRows[r][c]) buf[r][c] = charRows[r][c];
+    if (fxRows)
+        for (let r = 0; r < fxRows.length && r < H; r++)
+            for (let c = 0; c < fxRows[r].length; c++) {
+                const x = fxCol + c;
+                if (x >= 0 && x < SLEEP_SCENE_WIDTH && fxRows[r][c]) buf[r][x] = fxRows[r][c];
+            }
+    return buf;
+}
+
 // ── 戰鬥場景合成 ─────────────────────────────────────────────────
 // 場景 52 cells 寬 × 8 cells 高（gap 20 cells，子彈輕觸式爆炸）
 const BATTLE_SCENE_WIDTH  = 52;
@@ -732,6 +789,12 @@ function composeBattleScene(opts) {
         paintCells(buffer, rows, BATTLE_ENEMY_RIGHT_COL);
     }
 
+    // 天氣特效（勝=sun / 敗=cloud）→ 右上角，畫在最上層
+    if (frame.weather && shared) {
+        const wRows = getSharedFrame(shared, frame.weather, 0);
+        if (wRows) paintCells(buffer, wRows, BATTLE_SCENE_WIDTH - 16);  // col 36，sprite 內容靠上 → 右上角
+    }
+
     return renderCells(buffer);
 }
 
@@ -772,6 +835,8 @@ module.exports = {
     getSharedFrame,
     renderCells,
     flipRows,
+    overlayCells,
+    composeSleepScene,
     composeBattleScene,
     getFacingRows,
 };

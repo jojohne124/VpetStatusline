@@ -41,6 +41,34 @@
       ],
       "frames": 1,
       "size": 16
+    },
+    "sun": {
+      "indices": [
+        9
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "cloud": {
+      "indices": [
+        10
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "zsleep1": {
+      "indices": [
+        11
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "zsleep2": {
+      "indices": [
+        12
+      ],
+      "frames": 1,
+      "size": 16
     }
   }
 }

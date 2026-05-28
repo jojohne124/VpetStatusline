@@ -1,7 +1,7 @@
 {
   "name": "devimon",
   "rank": "Adult",
-  "power": 80,
+  "power": 70,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

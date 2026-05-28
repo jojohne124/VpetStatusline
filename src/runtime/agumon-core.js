@@ -153,6 +153,11 @@ function decideEvoFrame(elapsed, oldF, newF, pos) {
     return { ...base, useNewChar: true, frameIdx: newIdx };
 }
 
+// ── 狀態卡（Card）─────────────────────────────────────────────────
+// 5 拍：elapsed 0 = fade-in dim，1-3 = 全亮，4 = fade-out dim，>=5 隱藏
+const CARD_LENGTH = 5;
+const CARD_SCENE_WIDTH = 52;  // 對齊 BATTLE_SCENE_WIDTH，足以蓋住整個走路範圍
+
 // ── 戰鬥（Battle）─────────────────────────────────────────────────
 const BATTLE_LENGTH    = 19;                                           // v1：共 19 step（Encounter 3 拍 + Boom 3 拍）
 const BATTLE_LENGTH_V2 = 21;                                           // v2：encounter 多 2 拍（cut-in 滑入 + 對峙）→ 共 21 step
@@ -479,14 +484,6 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     const walk = computeWalk(step, st.walkPhaseOffset || 0);
 
-    // 強制睡覺（cheat ac --sleep）：最高優先，跳過 roar/battle/expr，持續到 ac --wake
-    if (st._forceSleep) {
-        st.wasSleeping = true;
-        const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
-        const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
-        return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0, sleepFx };
-    }
-
     // 大吼最優先（hold 確保為偶數，維持 step 奇偶）
     // 動畫播放中繼續走路（不凍結位置），避免位置定格
     if (st.roarStartStep != null && st.roarStartStep >= 0) {
@@ -517,6 +514,29 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             return { kind: 'single', frameIdx: TOKEN_RESET_FRAMES[Math.min(elapsed, TOKEN_RESET_FRAMES.length - 1)], facing: walk.facing, pos: walk.pos };
         }
         st.happyStartStep = -1;
+    }
+
+    // 狀態卡（蓋住睡覺，但 sleep state 不中斷；不阻擋 roar/battle/evo/happy）
+    if (st._forceCard) {
+        st.cardStartStep = step;
+        delete st._forceCard;
+    }
+    if (st.cardStartStep != null && st.cardStartStep >= 0) {
+        const elapsed = step - st.cardStartStep;
+        if (elapsed < 0 || elapsed >= CARD_LENGTH) {
+            st.cardStartStep = -1;
+        } else {
+            const dim = (elapsed === 0 || elapsed === CARD_LENGTH - 1);
+            return { kind: 'card', dim, pos: 0 };
+        }
+    }
+
+    // 強制睡覺（cheat ac --sleep）：持續到 --wake；卡片可在 5 秒內蓋過但 sleep state 不受影響
+    if (st._forceSleep) {
+        st.wasSleeping = true;
+        const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
+        const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
+        return { kind: 'single', frameIdx: sleepFrames[idx], facing: 'left', pos: st.lastPos ?? 0, sleepFx };
     }
 
     // 睡覺（靜止不動，保留最後位置）；右上疊 Z 特效：sleep_1→Z、sleep_2→zZ
@@ -706,6 +726,21 @@ function renderCells(rows) {
 
 const flipRows = rows => rows.map(r => [...r].reverse());
 
+// 整張 cell rows 做 dim（RGB × factor），用於卡片淡入淡出
+function dimCellRows(rows, factor = 0.5) {
+    return rows.map(row => row.map(c => {
+        if (!c) return null;
+        return [
+            c[0] >= 0 ? Math.floor(c[0] * factor) : -1,
+            c[1] >= 0 ? Math.floor(c[1] * factor) : -1,
+            c[2] >= 0 ? Math.floor(c[2] * factor) : -1,
+            c[3] >= 0 ? Math.floor(c[3] * factor) : -1,
+            c[4] >= 0 ? Math.floor(c[4] * factor) : -1,
+            c[5] >= 0 ? Math.floor(c[5] * factor) : -1,
+        ];
+    }));
+}
+
 // 把 overlay cell rows 疊到 base cell rows 之上（非 null 才覆蓋），回傳新 buffer（不改原陣列）
 function overlayCells(baseRows, overlayRows) {
     const buf = baseRows.map(r => r.slice());
@@ -850,6 +885,41 @@ function composeBattleScene(opts) {
     return renderCells(buffer);
 }
 
+// ── 狀態卡合成（左 3 行文字 + 右 CutIn 32 寬，總 52 寬 × 8 高）─────
+// dim=true 時整張淡化（RGB×0.5 + 文字 ANSI dim），用於 fade-in/out
+function composeStatusCard({ charId, st, cutInArt, dim = false }) {
+    const H = 8;
+    const TEXT_W = 18;
+
+    // 顯示用 power = my power + trainingBonus，受階段 cap 約束（與戰力公式一致）
+    const myPower      = getCharacterPower(charId);
+    const myCap        = getTierCap(getCharacterRank(charId));
+    const train        = (st && st.trainingBonus) || 0;
+    const displayPower = Math.min(myPower + train, myCap);
+    const rank         = getCharacterRank(charId);
+
+    // CutIn 32×8 cell（無 CutIn 留空）
+    let cutInRows = cutInArt?.frames?.[0]
+        ? cutInArt.frames[0]
+        : Array.from({ length: H }, () => Array(32).fill(null));
+    if (dim) cutInRows = dimCellRows(cutInRows);
+    const cutInLines = renderCells(cutInRows);
+
+    const pad = (s) => s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
+    const textRaw = [
+        '',
+        `Name: ${charId}`,
+        `power: ${displayPower}`,
+        `Rank: ${rank}`,
+    ];
+    while (textRaw.length < H) textRaw.push('');
+    const wrap = dim ? (s) => `\x1b[2m${s}\x1b[0m` : (s) => s;
+    const textLines = textRaw.map(s => wrap(pad(s)));
+
+    // text(18) + gap(2) + cutin(32) = 52
+    return textLines.map((t, i) => t + '⠀⠀' + (cutInLines[i] || ''));
+}
+
 // ── 進化場景合成（單角色 + DNA overlay）─────────────────────────
 function composeEvoScene({ frame, charArt, shared, charRightOffset = null }) {
     const W = 16, H = 8;
@@ -892,7 +962,9 @@ module.exports = {
     renderCells,
     flipRows,
     overlayCells,
+    dimCellRows,
     composeSleepScene,
+    composeStatusCard,
     composeBattleScene,
     getFacingRows,
 };

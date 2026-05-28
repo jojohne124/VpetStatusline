@@ -9,7 +9,7 @@ const {
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame,
-    renderCells, flipRows, overlayCells, composeSleepScene, getFacingRows, composeBattleScene, composeEvoScene,
+    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene,
 } = require('./agumon-core');
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
@@ -92,6 +92,15 @@ process.stdin.on('end', () => {
             }
             // Sleep 開關（cheat）：持續到 --wake 才解除，發訊息不會喚醒
             st._forceSleep = !!force.forceSleep;
+            // Card token：cheat 顯示狀態卡（不排隊：trigger 當下若被長動畫擋住直接丟；睡覺不算阻擋）
+            if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
+                const age = Date.now() - force.cardTriggerTs;
+                const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0) || (st.cardStartStep >= 0);
+                if (age >= 0 && age < 10000 && !blocked) {
+                    st._forceCard = true;
+                }
+                st.lastCardTriggerTs = force.cardTriggerTs;
+            }
         } catch(e) {}
 
         if (!st.characterId) {
@@ -222,6 +231,11 @@ process.stdin.on('end', () => {
                 shared,
                 charRightOffset: evoChar?.charDef?.RIGHT_OFFSET ?? null,
             });
+        }
+
+        if (result.kind === 'card' && !outputLines) {
+            const cutInArt = tryLoadArt(cutinArtFile);
+            outputLines = composeStatusCard({ charId: st.characterId, st, cutInArt, dim: result.dim });
         }
 
         if (result.kind === 'single' && !outputLines) {

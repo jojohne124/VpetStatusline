@@ -1,7 +1,7 @@
 {
   "name": "renamon",
   "rank": "Child",
-  "power": 25,
+  "power": 15,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

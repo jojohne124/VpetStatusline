@@ -77,6 +77,15 @@ if (args[0] === '--battle') {
     process.exit(0);
 }
 
+// ── --card 模式（顯示狀態卡 5 秒，自動隱藏）──────────────────────
+if (args[0] === '--card') {
+    const force = readForce();
+    force.cardTriggerTs = Date.now();
+    writeForce(force);
+    console.log('✓ 已排入狀態卡（下次 refresh 顯示 5 秒，淡入淡出）');
+    process.exit(0);
+}
+
 // ── --sleep / --wake 模式（強制睡覺開關，持續到手動喚醒）──────────
 if (args[0] === '--sleep' || args[0] === '--wake') {
     const force = readForce();

@@ -167,6 +167,45 @@ function getCharacterRank(name) {
     } catch(e) { return 'UnRank'; }
 }
 
+// 各階級戰力上限（UnRank 無上限）
+const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnRank: Infinity };
+function getTierCap(rank) { return TIER_CAP[rank] ?? Infinity; }
+
+// 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
+function getCharacterPower(name) {
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        return typeof config.power === 'number' ? config.power : 10;
+    } catch(e) { return 10; }
+}
+
+// seed → 決定性 [0, 1) 隨機數（給多視窗用同一個 seed 算出同一機率擲骰）
+function seedRand01(seed) {
+    let h = (Math.floor(seed) ^ 0xb5297a4d) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h / 0x100000000;
+}
+
+// 戰力與勝率計算
+// 我戰力 = min(我power + trainingBonus, 我階段 cap)
+// 敵戰力 = 敵power
+// winProb = 我/(我+敵) + expBonus + otherBonus，clamp [0,1]
+function computeWinProb(myId, st, enemyId) {
+    const myPower = getCharacterPower(myId);
+    const myCap   = getTierCap(getCharacterRank(myId));
+    const train   = st.trainingBonus ?? 0;
+    const myStr   = Math.min(myPower + train, myCap);
+    const eStr    = getCharacterPower(enemyId);
+    const expBonus   = 0.10;
+    const otherBonus = 0;
+    const denom = myStr + eStr;
+    if (denom <= 0) return 0.5 + expBonus + otherBonus;  // 兩邊都 0 → 給體驗補正後預設
+    const raw = myStr / denom + expBonus + otherBonus;
+    return Math.max(0, Math.min(1, raw));
+}
+
 function chooseBattleEnemy(myId, seed) {
     // 同階隨機（排除自己）；若同階只有自己 → 退回預設。
     // 給 seed 時改用「確定性挑選」：同一個 trigger 在所有視窗算出同一敵人，
@@ -281,11 +320,18 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
 }
 
 // seed：跨視窗共享的 trigger 值（cheat 用 lastBattleTriggerTs、自然戰鬥用 lastHookTs）。
-// 給 seed → 敵人與勝負皆確定性，所有視窗算出同一場戰鬥，避免多視窗 race 閃幀。
+// 給 seed → 敵人 + 勝負皆確定性（多視窗算出同一場戰鬥）。勝負改機率制：
+//   winProb = computeWinProb(我, 敵)；用 seedRand01(seed) 擲骰決定。
 function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
     st.battleEnemy        = chooseBattleEnemy(myId, seed);
-    st.battleWin          = seed != null ? ((Math.floor(seed) & 1) === 0) : (Math.random() < 0.5);
+    if (seed != null) {
+        const winProb = computeWinProb(myId, st, st.battleEnemy);
+        st.battleWin  = seedRand01(seed) < winProb;
+    } else {
+        // 無 seed → fallback：50/50 random（極少數沒 seed 來源的路徑）
+        st.battleWin = Math.random() < 0.5;
+    }
     st.battlePending      = false;
     st.battleVersion      = pickBattleVersion(myId, st.battleEnemy);
     st.battleShownElapsed = -1;
@@ -307,6 +353,12 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                 st.roarStartStep  = step;
                 st.lastActivityAt = now;
                 hookFired         = true;
+                // 訓練補正：每則新訊息 +1，受階段上限約束（UnRank 無上限）
+                // 多視窗 race-safe：每個視窗讀同一 disk 狀態都得到 train+1，最後一個寫的 wins，淨增 +1
+                const cap   = getTierCap(getCharacterRank(st.characterId));
+                const base  = getCharacterPower(st.characterId);
+                const train = st.trainingBonus ?? 0;
+                if (base + train < cap) st.trainingBonus = train + 1;
             }
         }
     } catch(e) {}
@@ -830,6 +882,10 @@ module.exports = {
     visLen,
     loadCharacter,
     getCharacterRank,
+    getCharacterPower,
+    getTierCap,
+    computeWinProb,
+    seedRand01,
     chooseBattleEnemy,
     loadShared,
     getSharedFrame,

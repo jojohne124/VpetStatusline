@@ -1,6 +1,7 @@
 {
   "name": "agumon",
   "rank": "Child",
+  "power": 30,
   "frameCount": 12,
   "targetSize": 16,
   "frameNames": ["Idle_1","Idle_2","Eat_1","Eat_2","Sleep_1","Sleep_2","Refuse","Happy","Angry","Hurt","Sad","Attack"],

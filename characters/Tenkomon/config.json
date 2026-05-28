@@ -1,6 +1,7 @@
 {
   "name": "tenkomon",
   "rank": "Adult",
+  "power": 70,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

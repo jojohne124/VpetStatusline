@@ -1,6 +1,7 @@
 {
   "name": "venommyotismon",
   "rank": "Ultimate",
+  "power": 180,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

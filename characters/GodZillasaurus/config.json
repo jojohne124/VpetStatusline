@@ -1,6 +1,7 @@
 {
   "name": "godzillasaurus",
   "rank": "Adult",
+  "power": 90,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

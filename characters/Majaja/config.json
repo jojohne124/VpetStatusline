@@ -1,5 +1,6 @@
 {
   "name": "majaja",
+  "power": 200,
   "layout": "individual",
   "frameCount": 12,
   "targetSize": 16,

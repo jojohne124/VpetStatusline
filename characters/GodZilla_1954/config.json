@@ -1,6 +1,7 @@
 {
   "name": "godzilla_1954",
   "rank": "Perfect",
+  "power": 140,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

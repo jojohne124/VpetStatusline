@@ -1,6 +1,7 @@
 {
   "name": "g-wargreymon",
   "rank": "Ultimate",
+  "power": 195,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

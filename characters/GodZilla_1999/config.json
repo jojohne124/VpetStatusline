@@ -1,6 +1,7 @@
 {
   "name": "godzilla_1999",
   "rank": "Ultimate",
+  "power": 190,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

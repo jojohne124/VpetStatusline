@@ -1,6 +1,7 @@
 {
   "name": "sekkamon",
   "rank": "Perfect",
+  "power": 120,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

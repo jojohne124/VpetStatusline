@@ -1,6 +1,7 @@
 {
   "name": "babygodzilla",
   "rank": "Child",
+  "power": 40,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

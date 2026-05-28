@@ -1,6 +1,7 @@
 {
   "name": "yukinamon",
   "rank": "Ultimate",
+  "power": 170,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

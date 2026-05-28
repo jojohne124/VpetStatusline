@@ -1,6 +1,7 @@
 {
   "name": "demidevimon",
   "rank": "Child",
+  "power": 30,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

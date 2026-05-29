@@ -211,28 +211,38 @@ function computeWinProb(myId, st, enemyId) {
     return Math.max(0, Math.min(1, raw));
 }
 
-function chooseBattleEnemy(myId, seed) {
-    // 同階隨機（排除自己）；若同階只有自己 → 退回預設。
-    // 給 seed 時改用「確定性挑選」：同一個 trigger 在所有視窗算出同一敵人，
-    // 避免多視窗各自 random 抽到不同敵人 → 後寫蓋前寫 → 第一幀閃出別的敵人。
+function _hashSeed(seed) {
+    let h = (Math.floor(seed) ^ 0x9e3779b9) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h;
+}
+
+function chooseBattleEnemy(myId, seed, lastEnemyId) {
+    // 同階隨機（排除自己）；給 seed → 決定性挑選（多視窗一致）。
+    // anti-stick：若抽到的 == 上一場敵人，用 seed+1 變體 re-roll；仍同就順移下一個 candidate。
+    //   連續同敵機率從 1/N 降到 ~1/N²，避免短樣本下「一直重複」的觀感。
     try {
         const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
         const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
         const myRank = getCharacterRank(myId);
         const candidates = roster.filter(n => n !== myId && getCharacterRank(n) === myRank);
         if (candidates.length === 0) return 'godzilla_1999';
-        let idx;
+        let pick;
         if (seed != null) {
-            // 32-bit 整數雜湊，把 timestamp seed 打散後取模
-            let h = (Math.floor(seed) ^ 0x9e3779b9) >>> 0;
-            h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
-            h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
-            h = (h ^ (h >>> 16)) >>> 0;
-            idx = h % candidates.length;
+            pick = candidates[_hashSeed(seed) % candidates.length];
+            if (lastEnemyId && pick === lastEnemyId && candidates.length > 1) {
+                pick = candidates[_hashSeed(seed + 1) % candidates.length];
+                if (pick === lastEnemyId) {
+                    const i = candidates.indexOf(lastEnemyId);
+                    pick = candidates[(i + 1) % candidates.length];
+                }
+            }
         } else {
-            idx = Math.floor(Math.random() * candidates.length);
+            pick = candidates[Math.floor(Math.random() * candidates.length)];
         }
-        return candidates[idx];
+        return pick;
     } catch(e) {
         return 'godzilla_1999';
     }
@@ -329,7 +339,7 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
 //   winProb = computeWinProb(我, 敵)；用 seedRand01(seed) 擲骰決定。
 function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
-    st.battleEnemy        = chooseBattleEnemy(myId, seed);
+    st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy);
     if (seed != null) {
         const winProb = computeWinProb(myId, st, st.battleEnemy);
         st.battleWin  = seedRand01(seed) < winProb;
@@ -447,6 +457,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
         } else {
             // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
+            st.lastBattleEnemy    = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
             st.battleStartStep    = -1;
             st.battleEnemy        = null;
             st.battleVersion      = 1;
@@ -905,10 +916,11 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     if (dim) cutInRows = dimCellRows(cutInRows);
     const cutInLines = renderCells(cutInRows);
 
+    const displayName = charId ? charId.charAt(0).toUpperCase() + charId.slice(1) : '';
     const pad = (s) => s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
     const textRaw = [
         '',
-        `Name: ${charId}`,
+        `Name: ${displayName}`,
         `power: ${displayPower}`,
         `Rank: ${rank}`,
     ];

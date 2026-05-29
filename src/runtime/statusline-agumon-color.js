@@ -53,6 +53,7 @@ process.stdin.on('end', () => {
                     delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
                     delete st._r5hResetAt;
                     delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
+                    delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
                     // cost 缺失/為 0 → pending；下次 refresh cost 有效再 reset。
                     // 否則 base=0 + 下次 cost=正常值 會讓 delta 立刻超門檻 → 切換後立即被誤觸發進化。
                     if (force.resetCostBase) {
@@ -140,6 +141,7 @@ process.stdin.on('end', () => {
                 st.evoShownElapsed = -1;
                 delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
                 delete st.trainingBonus;  // 進化歸零
+                delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
                 // 清掉 force.character，避免下次 refresh 把角色拉回進化前 → 形成「進化→拉回→進化」無限迴圈
                 try {
                     const f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));

@@ -32,11 +32,26 @@ const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 const visLen    = s => [...stripAnsi(s)].length;
 
 // ── 狀態 ─────────────────────────────────────────────────────────
+// 清掃孤兒 tmp：process 在 write→rename 之間被 kill 時 catch 來不及執行，會留下 tmp 殘骸。
+// 掃同目錄、刪掉超過 30 秒未被 rename 掉的 <file>.*.tmp（在途的更年輕，不碰）。
+function sweepStaleTmps(file) {
+    try {
+        const dir  = path.dirname(file);
+        const base = path.basename(file);
+        const now  = Date.now();
+        for (const name of fs.readdirSync(dir)) {
+            if (!name.startsWith(`${base}.`) || !name.endsWith('.tmp')) continue;
+            const full = path.join(dir, name);
+            try { if (now - fs.statSync(full).mtimeMs > 30000) fs.unlinkSync(full); } catch(_) {}
+        }
+    } catch(_) {}
+}
 // atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write
 function atomicWrite(file, data) {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
+        sweepStaleTmps(file);
         fs.writeFileSync(tmp, data);
         fs.renameSync(tmp, file);
     } catch(e) {
@@ -457,6 +472,13 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
         } else {
             // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
+            // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
+            // 「結束」而重複加計（同 lastBattleTriggerTs 的思路）。
+            if (st.lastBattleCountedStartStep !== st.battleStartStep) {
+                st.lastBattleCountedStartStep = st.battleStartStep;
+                st.battleTotalCount = (st.battleTotalCount || 0) + 1;
+                if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
+            }
             st.lastBattleEnemy    = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
             st.battleStartStep    = -1;
             st.battleEnemy        = null;
@@ -917,12 +939,17 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     const cutInLines = renderCells(cutInRows);
 
     const displayName = charId ? charId.charAt(0).toUpperCase() + charId.slice(1) : '';
+    // 勝率：勝場 / 總戰鬥場數；0 場顯示 0%（不顯示 NaN）
+    const total   = (st && st.battleTotalCount) || 0;
+    const wins    = (st && st.battleWinCount) || 0;
+    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
     const pad = (s) => s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
     const textRaw = [
         '',
         `Name: ${displayName}`,
         `power: ${displayPower}`,
         `Rank: ${rank}`,
+        `Win Rate: ${winRate}%`,
     ];
     while (textRaw.length < H) textRaw.push('');
     const wrap = dim ? (s) => `\x1b[2m${s}\x1b[0m` : (s) => s;

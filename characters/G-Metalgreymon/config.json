@@ -1,7 +1,7 @@
 {
-  "name": "g-wargreymon",
-  "rank": "Ultimate",
-  "power": 190,
+  "name": "g-metalgreymon",
+  "rank": "Perfect",
+  "power": 130,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -20,5 +20,7 @@
     {"frames": [8]}
   ],
   "rightOffset": 12,
-  "evolvesTo": []
+  "evolvesTo": [
+    { "character": "g-wargreymon", "conditions": [{ "type": "cost_threshold", "usd": 10 }] }
+  ]
 }

@@ -28,3 +28,7 @@ packaged/
 
 # 像素編輯器即時匯出（character art 改用 char-cli convert 才正式產出）
 characters/*/pixels.json.bak
+
+# Cloudflare Worker (PvP) 本機 dev 殘留與密鑰
+server/**/.wrangler/
+server/**/.dev.vars

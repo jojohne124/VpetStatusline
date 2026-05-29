@@ -13,6 +13,8 @@ const path = require('path');
 const INSTALL_ROOT = __dirname;
 const ROSTER_FILE  = path.join(INSTALL_ROOT, 'assets', 'roster.json');
 const FORCE_FILE   = path.join(INSTALL_ROOT, 'state', 'force-char.json');
+const STATE_FILE   = path.join(INSTALL_ROOT, 'state', 'color-state.json');
+const PVP_FILE     = path.join(INSTALL_ROOT, 'state', 'pvp.json');   // { endpoint, key, code, name }
 
 const rosterData = JSON.parse(fs.readFileSync(ROSTER_FILE, 'utf8'));
 const roster   = Array.isArray(rosterData) ? rosterData : rosterData.roster;
@@ -27,6 +29,10 @@ if (!args.length) {
     console.log('  node statusline-cheat.js --battle [enemy]  立即觸發戰鬥');
     console.log('    --win / --lose 強制勝負');
     console.log('  node statusline-cheat.js --evolve <next>   立即播進化表演');
+    console.log('  node statusline-cheat.js --pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
+    console.log('  node statusline-cheat.js --pvp [code]      幽靈對戰（隨機 / 指名 friend code）');
+    console.log('  node statusline-cheat.js --code [name]     查看 / 設定 friend code 與名稱');
+    console.log('  node statusline-cheat.js --pvp-server <url> [key]  只設後端（進階）');
     console.log('\n目前角色列表:');
     roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
     console.log('Starters:', starters.join(', '));
@@ -47,6 +53,149 @@ function writeForce(obj) {
         try { fs.unlinkSync(tmp); } catch(_) {}
         throw e;
     }
+}
+
+// ── 幽靈對戰（--pvp）helpers ─────────────────────────────────────
+// 結算重用 agumon-core 的戰力/階級函式，保證跟本機演出一致。
+const core = require('./agumon-core.js');
+
+function readPvp()  { try { return JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')); } catch(e) { return {}; } }
+function writePvp(o){ fs.mkdirSync(path.dirname(PVP_FILE), { recursive: true }); fs.writeFileSync(PVP_FILE, JSON.stringify(o, null, 2)); }
+function genCode() {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 去掉易混 I/O/0/1
+    let s = ''; for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)];
+    return s;
+}
+function ensureIdentity() {
+    const p = readPvp();
+    if (!p.code) { p.code = genCode(); writePvp(p); }
+    return p;
+}
+function myCard() {
+    const st   = core.loadState(STATE_FILE);
+    const char = st.characterId || 'agumon';
+    const p    = ensureIdentity();
+    return {
+        code: p.code, name: p.name || p.code,
+        character: char,
+        power: core.getCharacterPower(char),
+        train: st.trainingBonus || 0,
+        rank:  core.getCharacterRank(char),
+    };
+}
+async function pvpFetch(method, urlPath, body) {
+    const p = readPvp();
+    if (!p.endpoint) throw new Error('尚未設定 server，請先：ac --pvp-server <url> [key]');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+        const res = await fetch(p.endpoint.replace(/\/$/, '') + urlPath, {
+            method, signal: ctrl.signal,
+            headers: { 'Content-Type': 'application/json', ...(p.key ? { 'X-Pvp-Key': p.key } : {}) },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        const txt = await res.text();
+        let data; try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${data.error || txt}`);
+        return data;
+    } finally { clearTimeout(timer); }
+}
+
+// ── --pvp-setup <url> <key> [name]：一鍵上手（server + 密鑰 + 名稱，並印出 friend code）──
+if (args[0] === '--pvp-setup') {
+    const url = args[1], key = args[2];
+    if (!url || !key) {
+        console.log('用法：ac --pvp-setup <url> <key> [name]');
+        console.log('  url / key 由 PvP server 架設者(host)提供');
+        process.exit(1);
+    }
+    const p = readPvp();
+    p.endpoint = url;
+    p.key      = key;
+    if (args[3]) p.name = args.slice(3).join(' ').slice(0, 24);
+    if (!p.code) p.code = genCode();
+    writePvp(p);
+    console.log('✓ PvP 設定完成');
+    console.log(`  server     ：${p.endpoint}`);
+    console.log(`  friend code：${p.code}  ← 貼給朋友讓他指名你`);
+    console.log(`  顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
+    console.log('  開打：ac --pvp（隨機同階） / ac --pvp <code>（指名）');
+    process.exit(0);
+}
+
+// ── --pvp-server <url> [key]：設定後端 ───────────────────────────
+if (args[0] === '--pvp-server') {
+    const url = args[1];
+    if (!url) { console.log('用法：ac --pvp-server <url> [key]'); process.exit(1); }
+    const p = readPvp();
+    p.endpoint = url;
+    if (args[2]) p.key = args[2];
+    if (!p.code) p.code = genCode();
+    writePvp(p);
+    console.log(`✓ PvP server 已設定：${url}${args[2] ? '（含密鑰）' : ''}`);
+    console.log(`  你的 friend code：${p.code}`);
+    process.exit(0);
+}
+
+// ── --code [name]：查看 / 設定身分 ──────────────────────────────
+if (args[0] === '--code') {
+    const p = ensureIdentity();
+    if (args[1]) {
+        p.name = args.slice(1).join(' ').slice(0, 24);
+        writePvp(p);
+        console.log(`✓ 顯示名稱已設定：${p.name}`);
+    } else {
+        console.log(`friend code：${p.code}`);
+        console.log(`顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
+        console.log(`server     ：${p.endpoint || '(未設定，ac --pvp-server <url> [key])'}`);
+    }
+    process.exit(0);
+}
+
+// ── --pvp [code]：幽靈對戰（隨機 / 指名）─────────────────────────
+if (args[0] === '--pvp') {
+    (async () => {
+        try {
+            const me = myCard();
+            await pvpFetch('PUT', `/card/${me.code}`, me);   // 順手更新自己的卡
+
+            const target = args[1];
+            const opp = target
+                ? await pvpFetch('GET', `/card/${encodeURIComponent(target)}`)
+                : await pvpFetch('GET', `/random?rank=${encodeURIComponent(me.rank)}&exclude=${me.code}`);
+
+            if (!roster.includes(opp.character)) {
+                console.log(`✗ 對手角色「${opp.character}」本機沒有資產，無法演出（雙方需同一套角色）`);
+                process.exit(1);
+            }
+
+            // 戰力加權隨機：winProb = 我戰力 / (我+敵戰力)，戰力 = min(power+train, 階級 cap)
+            const myStr  = Math.min(me.power  + (me.train  || 0), core.getTierCap(me.rank));
+            const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.rank));
+            const denom  = myStr + oppStr;
+            const winProb = denom > 0 ? myStr / denom : 0.5;
+
+            // seed：雙方 code + 當下時間 → 每次挑戰結果會變，但用 core 的決定性擲骰
+            const seedStr = `${me.code}:${opp.code}:${Date.now()}`;
+            let h = 0; for (const ch of seedStr) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
+            const win = core.seedRand01(h) < winProb;
+
+            // 寫進跟 --battle 完全一樣的 force 欄位 → statusline 照原流程演出
+            const force = readForce();
+            force.battleTriggerTs  = Date.now();
+            force.forceBattleEnemy = opp.character;
+            force.forceBattleWin   = win;
+            writeForce(force);
+
+            console.log(`✓ 幽靈對戰：vs ${opp.name || opp.code} (${opp.character}) → ${win ? '勝利 🏆' : '失敗'}　勝率 ${Math.round(winProb * 100)}%（下次 refresh 演出）`);
+            process.exitCode = 0;   // 不用 process.exit()：fetch keep-alive socket 還在關閉時硬退會觸發
+                                    // Windows libuv UV_HANDLE_CLOSING assertion。設 exitCode 讓事件迴圈自然排空。
+        } catch (e) {
+            console.log('✗ 幽靈對戰失敗：' + e.message);
+            process.exitCode = 1;
+        }
+    })();
+    return;   // 不要往下掉到切角色邏輯（CommonJS 允許 top-level return）
 }
 
 // ── --battle 模式 ────────────────────────────────────────────────

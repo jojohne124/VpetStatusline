@@ -12,6 +12,7 @@
   --border: #444;
   --danger: #ff5555;
   --ok: #50c878;
+  --cell-px: 28px;
 }
 * { box-sizing: border-box; }
 body {
@@ -51,7 +52,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 }
 .thumb:hover { background: #333; }
 .thumb.active { border-color: var(--accent); background: #2d3a4a; }
-.thumb canvas { image-rendering: pixelated; width: 48px; height: 48px; background: #1a1a1a; }
+.thumb canvas { image-rendering: pixelated; height: 48px; background: #1a1a1a; /* width 由 JS 按 W/H 比例設定 */ }
 .thumb span { font-size: 12px; color: #bbb; }
 
 /* 中間：編輯區 */
@@ -59,8 +60,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 .canvas-row { display: flex; gap: 16px; }
 #editor {
   display: grid;
-  grid-template-columns: repeat(16, 28px);
-  grid-template-rows: repeat(16, 28px);
+  /* grid-template-columns/rows 由 JS 動態設定（不同模式 W/H 不同） */
   gap: 1px;
   background: #222;
   padding: 1px;
@@ -86,7 +86,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 .tool-toggle button.active { background: var(--ok); color: white; border-color: var(--ok); }
 .tool-toggle button:hover { filter: brightness(1.15); }
 #editor .cell {
-  width: 28px; height: 28px;
+  width: var(--cell-px); height: var(--cell-px);
   position: relative;
 }
 #editor .cell.transparent::before {
@@ -102,7 +102,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 }
 #preview {
   image-rendering: pixelated;
-  width: 128px; height: 128px;
+  /* width/height 由 JS 按 W/H 設定 */
   background: #1a1a1a;
   border: 1px solid var(--border);
   align-self: start;
@@ -145,7 +145,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 .info { font-size: 12px; color: #aaa; line-height: 1.5; }
 .hotkeys { font-size: 11px; color: #888; margin-top: 8px; }
 .hotkeys code { background: #111; padding: 1px 5px; border-radius: 3px; }
-#status { margin-top: 10px; padding: 8px; border-radius: 4px; font-size: 12px; display: none; }
+#status { margin-top: 10px; padding: 8px; border-radius: 4px; font-size: 12px; display: none; white-space: pre-line; }
 #status.ok { background: #1d4d33; color: #aaffcc; display: block; }
 #status.err { background: #4d1d1d; color: #ffaaaa; display: block; }
 .color-picker-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
@@ -208,6 +208,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
     <button id="mode-character" class="active" onclick="switchMode('character')">🦖 角色</button>
     <button id="mode-bullet" onclick="switchMode('bullet')">💥 子彈</button>
     <button id="mode-shared" onclick="switchMode('shared')">🌐 共用</button>
+    <button id="mode-cutin" onclick="switchMode('cutin')">✨ CutIn</button>
   </span>
   <span class="tool-toggle">
     <button id="tool-paint" class="active" onclick="setTool('paint')">✏️ 畫筆</button>
@@ -281,7 +282,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
 <script>
 let FRAME_NAMES = ['Idle_1','Idle_2','Eat_1','Eat_2','Sleep_1','Sleep_2','Refuse','Happy','Angry','Hurt','Sad','Attack'];
 let RIGHT_OFFSET = null; // null = 全部翻轉；數字 = 右向幀起始 index
-const W = 16, H = 16;
+let W = 16, H = 16;       // 隨 data 動態（character/bullet 16x16；cutin 32x16）
 
 let data = null;
 let currentFrame = 0;
@@ -290,12 +291,27 @@ let currentIsTransparent = false;
 let palette = [];
 let history = []; // 復原堆疊
 let isDragging = false;
-let currentMode = 'character'; // 'character' | 'bullet'
+let currentMode = 'character'; // 'character' | 'bullet' | 'shared' | 'cutin'
 let currentTool = 'paint';     // 'paint' | 'select'
 let sel = null;                // { x0, y0, x1, y1 } 包含上下界
 let dragState = null;          // { mode: 'define', x0, y0 } | { mode: 'move', lifted, baseSel, anchorX, anchorY, dx, dy }
 
-const CELL_PX = 28, GAP_PX = 1, PAD_PX = 1;
+let CELL_PX = 28;
+const GAP_PX = 1, PAD_PX = 1;
+
+function applyDimensions() {
+    // cell 大小：寬幀（cutin 32）縮小避免畫面太寬
+    CELL_PX = Math.min(28, Math.floor(600 / Math.max(W, H)));
+    document.documentElement.style.setProperty('--cell-px', CELL_PX + 'px');
+    const editor = document.getElementById('editor');
+    editor.style.gridTemplateColumns = `repeat(${W}, ${CELL_PX}px)`;
+    editor.style.gridTemplateRows    = `repeat(${H}, ${CELL_PX}px)`;
+    // preview：8× scale 維持比例
+    const prev = document.getElementById('preview');
+    prev.width = W; prev.height = H;
+    prev.style.width  = (W * 8) + 'px';
+    prev.style.height = (H * 8) + 'px';
+}
 function cellOriginToPx(cx, cy) {
     return { left: PAD_PX + cx * (CELL_PX + GAP_PX), top: PAD_PX + cy * (CELL_PX + GAP_PX) };
 }
@@ -340,10 +356,15 @@ async function load() {
     data = await dataRes.json();
     history = []; // 切換模式時清空 undo 堆疊
 
+    // 從 data 抓尺寸（cutin 是 32×16，其他 16×16）
+    W = data.width  || 16;
+    H = data.height || 16;
+    applyDimensions();
+
     if (charName) {
         document.title = `${charName} - Sprite Editor [${currentMode}]`;
-        const icon  = currentMode === 'bullet' ? '💥' : currentMode === 'shared' ? '🌐' : '🦖';
-        const label = currentMode === 'bullet' ? '子彈' : currentMode === 'shared' ? '共用 sprite' : '角色';
+        const icon  = currentMode === 'bullet' ? '💥' : currentMode === 'shared' ? '🌐' : currentMode === 'cutin' ? '✨' : '🦖';
+        const label = currentMode === 'bullet' ? '子彈' : currentMode === 'shared' ? '共用 sprite' : currentMode === 'cutin' ? 'CutIn' : '角色';
         document.getElementById('editor-title').textContent = `${icon} ${charName} ${label} Editor`;
     }
     buildPalette();
@@ -358,6 +379,7 @@ async function switchMode(mode) {
     document.getElementById('mode-character').classList.toggle('active', mode === 'character');
     document.getElementById('mode-bullet').classList.toggle('active', mode === 'bullet');
     document.getElementById('mode-shared').classList.toggle('active', mode === 'shared');
+    document.getElementById('mode-cutin').classList.toggle('active', mode === 'cutin');
     await load();
 }
 
@@ -485,6 +507,7 @@ function renderThumbs() {
 
         const canvas = document.createElement('canvas');
         canvas.width = W; canvas.height = H;
+        canvas.style.width = (48 * W / H) + 'px';  // CSS 鎖 48px 高，寬按比例
         const ctx = canvas.getContext('2d');
         const img = ctx.createImageData(W, H);
         for (let j = 0; j < W*H; j++) {
@@ -758,8 +781,12 @@ async function save() {
         const r = await res.json();
         if (r.ok) {
             status.className = 'ok';
-            const target = currentMode === 'bullet' ? 'bullet-art.json' : 'art.json';
-            status.textContent = `✓ ${currentMode} 儲存成功（已更新 ${target} + 部署到 statusline）`;
+            const target = currentMode === 'bullet' ? 'bullet-art.json'
+                         : currentMode === 'cutin'  ? 'cutin-art.json'
+                         : 'art.json';
+            let msg = `✓ ${currentMode} 儲存成功（已更新 ${target} + 部署到 statusline）`;
+            if (currentMode === 'cutin') msg += '\n⚠ 注意：CutIn.png 未同步；重跑 cutin CLI 會覆蓋';
+            status.textContent = msg;
         } else {
             status.className = 'err';
             status.textContent = '✗ 儲存失敗：' + r.error;

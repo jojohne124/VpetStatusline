@@ -102,10 +102,13 @@ async function cmdPrepare(name) {
     for (let fi = 0; fi < SPRITE_COUNT; fi++) {
       const prefix = fi.toString().padStart(2, '0');
       const fname  = config.frameNames[fi];
-      const fpath  = fs.existsSync(path.join(dir, `${prefix}_${fname}.png`))
-        ? path.join(dir, `${prefix}_${fname}.png`)
-        : path.join(dir, `${fname}.png`);
-      if (!fs.existsSync(fpath)) { console.error(`找不到：${fpath}`); process.exit(1); }
+      const candidates = [
+        path.join(dir, `${prefix}_${fname}.png`),
+        path.join(dir, `${fname}.png`),
+        path.join(dir, `${fi}.png`),
+      ];
+      const fpath = candidates.find(p => fs.existsSync(p));
+      if (!fpath) { console.error(`找不到任一：${candidates.join(' / ')}`); process.exit(1); }
       const { data, info } = await sharp(fpath).raw().toBuffer({ resolveWithObject: true });
       const fw = info.width, fh = info.height;
       const ch = info.channels;
@@ -366,8 +369,11 @@ async function cmdPrepare(name) {
         for (let fi = 0; fi < SPRITE_COUNT; fi++) {
           const prefix = fi.toString().padStart(2, '0');
           const fname  = config.frameNames[fi];
-          const rpath  = [path.join(dir, `${prefix}_${fname}_r.png`), path.join(dir, `${fname}_r.png`)]
-            .find(p => fs.existsSync(p));
+          const rpath  = [
+            path.join(dir, `${prefix}_${fname}_r.png`),
+            path.join(dir, `${fname}_r.png`),
+            path.join(dir, `${fi}_r.png`),
+          ].find(p => fs.existsSync(p));
           if (rpath) {
             const { data, info } = await sharp(rpath).raw().toBuffer({ resolveWithObject: true });
             const fw = info.width, fh = info.height, ch = info.channels;

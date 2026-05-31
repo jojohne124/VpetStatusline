@@ -27,7 +27,7 @@ const SHARED_DIR     = path.join(REPO_ROOT, 'shared');
 const SHARED_ART_DST = path.join(ASSETS_DIR, 'shared', 'art.json');
 const SHARED_SRC_DST = path.join(ASSETS_DIR, 'shared', 'sprites.json');
 
-// ── mode 對應：character vs bullet vs shared ─────────────────────
+// ── mode 對應：character vs bullet vs shared vs cutin ─────────────
 function modePaths(mode) {
     if (mode === 'bullet') {
         return {
@@ -45,11 +45,37 @@ function modePaths(mode) {
             isShared: true,
         };
     }
+    if (mode === 'cutin') {
+        // cutin 沒有 pixels.json 中介檔；art.json 是唯一 source of truth
+        return {
+            art:    path.join(CHAR_DIR, 'cutin-art.json'),
+            dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'cutin-art.json'),
+            isCutin: true,
+        };
+    }
     return {
         src:  path.join(CHAR_DIR, 'pixels.json'),
         art:  path.join(CHAR_DIR, 'art.json'),
         dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'art.json'),
     };
+}
+
+// half-block art.json → flat pixel array（供 cutin 編輯時反解用）
+function artToPixels(artData) {
+    const w = artData.width, h = artData.height * 2;
+    return artData.frames.map(rows => {
+        const px = new Array(w * h).fill(null);
+        for (let cy = 0; cy < rows.length; cy++) {
+            const row = rows[cy] || [];
+            for (let cx = 0; cx < row.length; cx++) {
+                const cell = row[cx];
+                if (!cell) continue;
+                if (cell[0] !== -1) px[(cy * 2)     * w + cx] = [cell[0], cell[1], cell[2]];
+                if (cell[3] !== -1) px[(cy * 2 + 1) * w + cx] = [cell[3], cell[4], cell[5]];
+            }
+        }
+        return px;
+    });
 }
 
 // 從 manifest.json 反推出每個 frame 的名稱（encounter[0] → encounter1，等）
@@ -107,6 +133,7 @@ const server = http.createServer((req, res) => {
     const query   = parseQuery(req.url);
     const mode    = query.mode === 'bullet' ? 'bullet'
                    : query.mode === 'shared' ? 'shared'
+                   : query.mode === 'cutin'  ? 'cutin'
                    : 'character';
 
     if (req.method === 'GET' && urlPath === '/') {
@@ -119,6 +146,14 @@ const server = http.createServer((req, res) => {
         if (mode === 'shared') {
             frameNames = sharedFrameNames();
             displayName = 'shared';
+        } else if (mode === 'cutin') {
+            // 第 0 幀左向、第 1 幀右向（若有）；用 rightOffset 讓 label 自動加 →
+            frameNames = ['CutIn'];
+            try {
+                const { art } = modePaths(mode);
+                const a = JSON.parse(fs.readFileSync(art, 'utf8'));
+                if (a.frames && a.frames.length >= 2) rightOffset = 1;
+            } catch(e) {}
         } else {
             try {
                 const cfg = JSON.parse(fs.readFileSync(path.join(CHAR_DIR, 'config.json'), 'utf8'));
@@ -129,6 +164,18 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ name: displayName, frameNames, rightOffset }));
     }
     else if (req.method === 'GET' && urlPath === '/data') {
+        if (mode === 'cutin') {
+            const { art } = modePaths(mode);
+            if (!fs.existsSync(art)) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `cutin-art.json not found。請先放 CutIn.png 進 characters/${name}/ 並執行：node src/tools/char-cli.js cutin ${name}` }));
+                return;
+            }
+            const a = JSON.parse(fs.readFileSync(art, 'utf8'));
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ width: a.width, height: a.height * 2, frames: artToPixels(a) }));
+            return;
+        }
         const { src } = modePaths(mode);
         if (!fs.existsSync(src)) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -145,15 +192,17 @@ const server = http.createServer((req, res) => {
             try {
                 const { src, art, dstArt } = modePaths(mode);
 
-                if (fs.existsSync(src)) fs.copyFileSync(src, src + '.bak');
-                fs.writeFileSync(src, body);
+                // cutin 沒有 src（直接編 art.json）
+                if (src && fs.existsSync(src)) fs.copyFileSync(src, src + '.bak');
+                if (src) fs.writeFileSync(src, body);
 
                 let convertOut = '';
-                if (mode === 'bullet' || mode === 'shared') {
+                if (mode === 'bullet' || mode === 'shared' || mode === 'cutin') {
                     // 直接從 pixels 編譯 art.json（不走 char-cli）
                     try {
                         const data = JSON.parse(body);
                         const w = data.width || 16, h = data.height || 16;
+                        if (mode === 'cutin' && fs.existsSync(art)) fs.copyFileSync(art, art + '.bak');
                         const frames = data.frames.map(px => pixelsToArt(px, w, h));
                         const artData = { style: 'color-halfblock', width: w, height: h / 2, frames };
                         fs.writeFileSync(art, JSON.stringify(artData));
@@ -172,7 +221,7 @@ const server = http.createServer((req, res) => {
                     fs.copyFileSync(art, dstArt);
                     // shared 模式還要同步 sprites.json（pixels）
                     const { dstSrc } = modePaths(mode);
-                    if (dstSrc) fs.copyFileSync(src, dstSrc);
+                    if (dstSrc && src) fs.copyFileSync(src, dstSrc);
                 } catch(e) { convertOut += '\ncopy error: ' + e.message; }
 
                 // 不要動 state.json：art.json 每次 refresh 都會重讀，沒有 in-memory cache。

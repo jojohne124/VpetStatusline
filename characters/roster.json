@@ -26,7 +26,37 @@
     "yukinamon",
     "biollante",
     "kiryu",
-    "destoroyah"
+    "destoroyah",
+    "patamon",
+    "angemon",
+    "magnaangemon",
+    "dominimon",
+    "salamon",
+    "gatomon",
+    "angewomon",
+    "magnadramon",
+    "gomamon",
+    "ikkakumon",
+    "zudomon",
+    "vikemon",
+    "tentomon",
+    "kabuterimon",
+    "megakabuterimon",
+    "herculeskabuterimon",
+    "palmon",
+    "togemon",
+    "lillymon",
+    "rosemon",
+    "biyomon",
+    "birdramon",
+    "garudamon",
+    "phoenixmon"
   ],
-  "starters": ["agumon", "gabumon", "babygodzilla", "demidevimon", "renamon"]
+  "starters": [
+    "agumon",
+    "gabumon",
+    "babygodzilla",
+    "demidevimon",
+    "renamon"
+  ]
 }

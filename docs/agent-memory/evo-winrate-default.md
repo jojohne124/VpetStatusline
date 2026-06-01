@@ -25,4 +25,6 @@ VpetStatusline 角色 `config.json` 的 `evolvesTo[].conditions[]` 裡 `win_rate
 - 改完跑 `node scripts/install.js` 部署。
 - 批次套用可仿照當時的外科式替換腳本（只改 win_rate 內 pct/minBattles 兩數字，保持 diff 乾淨）。
 
+**分歧進化**：一個角色多條 `evolvesTo` 同時達標時，以進化目標 power 強者優先（見 [[project-vpet-statusline]] 的「分歧進化」段；首例 DemiDevimon→Bakemon 鬼族線）。
+
 關聯：勝率公式本身見 [[project-vpet-statusline]] 的「勝率（差距制線性）」。

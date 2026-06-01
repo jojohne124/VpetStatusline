@@ -180,6 +180,17 @@ starters（roster.json）：agumon, gabumon, babygodzilla, g-metalgreymon
 agumon, greymon, metalgreymon, wargreymon, g-wargreymon(雙圖), g-metalgreymon(雙圖), gabumon, garurumon, weregarurumon, metalgarurumon, babygodzilla, godzillasaurus, godzilla_1954, godzilla_1999, biollante, kiryu, destoroyah, devimon, myotismon, demidevimon, renamon, sekkamon, tenkomon, yukinamon, venommyotismon, majaja, soulseer_mizutsune
 （查最新清單：`ls characters/*/cutin-art.json`）
 
+## 分歧進化（branch evolution，2026-06-02 新增）
+
+- 一個角色可有多條 `evolvesTo`；**多條路線同時滿足條件時，以「進化目標 power 強者」為優先**（user 拍板的分歧決定規則）。
+- 實作：`checkEvolution`（agumon-core.js）改成每 tick 評估**所有**路線（不再第一條達成就 return，讓各路線 latch 狀態 `_ready`/`_peaked` 都保持更新），收集達成者後 `sort` by `getCharacterPower(target)` desc 取最強。單一路線行為不變。
+- **首例：DemiDevimon 在 Adult 多開一條鬼族線**
+  - 原線：DemiDevimon → Devimon(70)（win_rate 60%）
+  - 新線：DemiDevimon → Bakemon(60) → Phantomon(110) → Creepymon(175)（win_rate 50/55/75%，門檻照 [[evo-winrate-default]]）
+  - 因 Devimon 門檻 60% > Bakemon 50%：勝率 **50–59% 時只有 Bakemon 達標→走鬼族線**；**≥60% 兩條都達標→比 power 走 Devimon**。即「表現中庸→鬼族，表現強→惡魔」。已用 core 實測驗證。
+  - 三隻素材：`0.png`~`11.png`（individual layout `<index>.png`）+ CutIn；bullet 暫複製 DemiDevimon（鬼族預設，日後可換）。Bakemon 原 `Cutin.png`（小寫 i）已正規化成 `CutIn.png`。
+  - **⚠ bullet 複製要連 `bullet.json` 一起**：runtime 戰鬥只讀 `bullet-art.json`（編譯產物），但 **editor 的 bullet 模式讀 `bullet.json`（pixel 來源）**，缺它 editor 會「載入失敗」（cutin 能從 art 反解、bullet 不行）。複製子彈時兩個檔都要帶。
+
 ## 狀態機優先級（高 → 低）
 1. 進化 (evo) - 12 步
 2. 戰鬥 (battle) - v1:19 步 / v2:21 步

@@ -48,6 +48,7 @@ npm run install-runtime
 - 把舊版散落在 `~/.claude/` 的 state 檔遷移到 `agumon-statusline/state/`
 - 清除舊版散落在 `~/.claude/` 的 runtime js 與 `agumon-assets/`
 - 更新 `~/.claude/settings.json` 的 `statusLine.command` 與 `UserPromptSubmit` hook 路徑（**會備份原檔**到 `settings.json.before-agumon-statusline.bak`）
+- 安裝 `vpet` 啟動器（`vpet` + `vpet.bat`）到 `~/bin/`，並檢查 `~/bin` 是否在 PATH（不在會提示加入）→ 之後可直接用 `vpet`（見下方 [`vpet` 指令](#vpet-指令切角色--戰鬥--進化--pvp)）
 
 **不會動到**：`state/` 內的任何使用者資料（即使重 install）、`settings.json` 內其他欄位。
 
@@ -169,20 +170,29 @@ node src/editor/sprite_editor_server.js <Name>
 
 ---
 
-## 切換角色 / 觸發戰鬥（作弊碼）
+## `vpet` 指令（切角色 / 戰鬥 / 進化 / PvP）
+
+`npm run install-runtime` 會把 `vpet` 啟動器裝到 `~/bin/`（install 會檢查 `~/bin` 是否在 PATH，不在會提示加入）。之後即可直接用 `vpet`，在 Claude Code 內用 `! vpet ...`。**指令可省略 `--`**（`vpet pvp` == `vpet --pvp`，舊寫法仍相容）。
 
 ```bash
-# 切角色
-node ~/.claude/agumon-statusline/statusline-cheat.js <index>      # 用編號
-node ~/.claude/agumon-statusline/statusline-cheat.js <name>       # 用名稱
-node ~/.claude/agumon-statusline/statusline-cheat.js --reset      # 隨機抽 starter
+# 角色
+vpet <index|name>        # 切角色，例 vpet phoenixmon / vpet 33
+vpet reset               # 隨機抽一個 starter
+vpet evolve <next>       # 立即播進化表演
+vpet freeze / unfreeze   # 凍結 / 解除自動進化（凍結時達標也不進化；手動 evolve 不受影響）
 
-# 立即觸發戰鬥（13 秒分鏡）
-node ~/.claude/agumon-statusline/statusline-cheat.js --battle                           # 對 godzilla_1999、隨機勝負
-node ~/.claude/agumon-statusline/statusline-cheat.js --battle godzilla_1999 --win       # 強制勝利
-node ~/.claude/agumon-statusline/statusline-cheat.js --battle agumon --lose             # 自打自輸
+# 表演
+vpet battle [enemy]      # 觸發戰鬥（13 秒分鏡，可加 win / lose 強制勝負）
+vpet card                # 顯示狀態卡 5 秒
+vpet sleep / wake        # 強制睡覺 / 喚醒
+
+# 幽靈對戰 PvP（非同步；需 host 先架 server，見 server/pvp/README.md）
+vpet pvp-setup <url> <key> [name]   # 首次一鍵設定（server + 密鑰 + 名稱）
+vpet pvp [code]          # 隨機同階對手 / 指名 friend code
+vpet code [name]         # 查看 / 設定自己的 friend code 與顯示名稱
 ```
 
+> `vpet` 只是 `~/.claude/agumon-statusline/statusline-cheat.js` 的薄殼。不想上 PATH 也可直接 `node ~/.claude/agumon-statusline/statusline-cheat.js <args>`。跑 `vpet`（無參數）會列出完整指令與角色清單。
 > 完整作弊碼系統（強制進化/誕生）見 [PROJECT.md](PROJECT.md) §2 P1。
 
 ---

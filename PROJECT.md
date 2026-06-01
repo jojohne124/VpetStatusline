@@ -201,6 +201,11 @@ agumon-cli/                              ← Git 管理範圍
 寫入後，statusline 下次 render 會強制切換 / 啟動戰鬥並清相關 state。
 Battle flag 是一次性消耗，啟動後 statusline 會把這幾個欄位從 force 檔刪掉。
 
+**持久開關**（非一次性，持續到關閉）：`forceSleep`（`vpet sleep`/`wake`）、`freezeEvolve`（`vpet freeze`/`unfreeze`，凍結時跳過自動 `checkEvolution`，手動 evolve 不受影響）。
+
+**CLI 入口 `vpet`**：所有作弊碼透過 `vpet <cmd>` 操作（`~/bin/vpet` 薄殼 → 部署後的 `statusline-cheat.js`；`install-runtime` 自動安裝）。指令可省略 `--`。完整清單跑 `vpet` 無參數，使用者向用法見 [README](README.md#vpet-指令切角色--戰鬥--進化--pvp)。
+**PvP（幽靈對戰）**：`vpet pvp` 把對手卡的結算結果寫進 `forceBattleEnemy`/`forceBattleWin`（沿用同一套 battle 渲染），詳見 [server/pvp/README.md](server/pvp/README.md)。
+
 ### 1.4 渲染管線（`statusline-agumon-color.js`）
 
 ```
@@ -356,13 +361,16 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
     "ttl": 5                          // ⬜ 自動清除秒數
   }
   ```
-- ✅ **CLI 子命令**（戰鬥部分完成）
-  - ✅ `node statusline-cheat.js --battle [enemy] [--win|--lose]`
-  - ✅ `node statusline-cheat.js --reset`（隨機 starter）
-  - ✅ `node statusline-cheat.js <index|name>`（切角色）
-  - ⬜ `node statusline-cheat.js --evolve <next>`
-  - ⬜ `node statusline-cheat.js --birth`
-  - ⬜ `node statusline-cheat.js --expression <name>`
+- ✅ **CLI 子命令**（入口改為 `vpet`，指令可省略 `--`；`vpet` = `statusline-cheat.js` 薄殼）
+  - ✅ `vpet battle [enemy] [win|lose]`
+  - ✅ `vpet reset`（隨機 starter）
+  - ✅ `vpet <index|name>`（切角色）
+  - ✅ `vpet evolve <next>`
+  - ✅ `vpet freeze` / `unfreeze`（凍結自動進化）
+  - ✅ `vpet card` / `sleep` / `wake`
+  - ✅ `vpet pvp` / `pvp <code>` / `pvp-setup` / `code`（幽靈對戰，見 server/pvp/）
+  - ⬜ `vpet birth`
+  - ⬜ `vpet expression <name>`
 - ✅ **statusline 端處理**（戰鬥部分完成）
   - ✅ 讀完 force 後啟動戰鬥，一次性消耗 forceBattle 旗標
   - ⬜ 其他類別 dispatch 到對應表演層

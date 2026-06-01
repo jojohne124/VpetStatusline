@@ -182,7 +182,8 @@ vpet evolve <next>       # 立即播進化表演
 vpet freeze / unfreeze   # 凍結 / 解除自動進化（凍結時達標也不進化；手動 evolve 不受影響）
 
 # 表演
-vpet battle [enemy]      # 觸發戰鬥（13 秒分鏡，可加 win / lose 強制勝負）
+vpet battle [enemy]      # 手動觸發戰鬥（13 秒分鏡，可加 win / lose 強制勝負）
+vpet battle on / off     # 恢復 / 停用「prompt 後自動戰鬥」（手動觸發不受影響）
 vpet card                # 顯示狀態卡 5 秒
 vpet sleep / wake        # 強制睡覺 / 喚醒
 

@@ -95,6 +95,8 @@ process.stdin.on('end', () => {
             st._forceSleep = !!force.forceSleep;
             // Freeze 開關（cheat）：凍結自動進化，持續到 --unfreeze（手動 evolve 不受影響）
             st._freezeEvolve = !!force.freezeEvolve;
+            // 自動戰鬥開關（cheat）：vpet battle off 停用 prompt 後自動戰鬥（手動 vpet battle 不受影響）
+            st._noAutoBattle = !!force.autoBattleOff;
             // Card token：cheat 顯示狀態卡（不排隊：trigger 當下若被長動畫擋住直接丟；睡覺不算阻擋）
             if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
                 const age = Date.now() - force.cardTriggerTs;

@@ -32,6 +32,7 @@ if (!args.length) {
     console.log('  vpet <index|name>           切換角色');
     console.log('  vpet reset                  reset 到隨機 starter');
     console.log('  vpet battle [enemy]         立即觸發戰鬥（可加 win / lose 強制勝負）');
+    console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
     console.log('  vpet evolve <next>          立即播進化表演');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
@@ -205,6 +206,20 @@ if (args[0] === '--pvp') {
 
 // ── --battle 模式 ────────────────────────────────────────────────
 if (args[0] === '--battle') {
+    // 持久開關：vpet battle off / on（停用 / 恢復 prompt 後自動戰鬥；手動測試不受影響）
+    if (args[1] === 'off' || args[1] === 'on') {
+        const force = readForce();
+        if (args[1] === 'off') {
+            force.autoBattleOff = true;
+            writeForce(force);
+            console.log('🛡 已停用自動戰鬥（prompt 後不會自動開打；vpet battle 仍可手動測試、vpet battle on 恢復）');
+        } else {
+            delete force.autoBattleOff;
+            writeForce(force);
+            console.log('⚔ 已恢復自動戰鬥');
+        }
+        process.exit(0);
+    }
     let enemy = null;
     let win   = null;  // null = 隨機
     for (let i = 1; i < args.length; i++) {

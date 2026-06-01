@@ -10,6 +10,7 @@ const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
 const ANCHOR_GAP  = 4;
 const STEP_MS     = 1000;
+const BATTLE_DELAY_MS = 5000;   // prompt 後思考超過這秒數 → 自動觸發戰鬥（取代無效的 thinking 字串偵測）
 const IDLE_MS     = 600000;
 const MAX_POS     = 36;                                                 // 走路範圍：對齊 BATTLE_SCENE_WIDTH(52) - 角色寬(16)
 const EXPR_CHANCE = 0.10;
@@ -395,19 +396,19 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     if (!st.lastActivityAt) st.lastActivityAt = now;
 
     if (allowBattle && hookFired) {
-        // 新訊息 → 重置 thinking 偵測，準備這一輪可觸發 battle
-        st.thinkingPrimed = true;
-        st.lastThinking   = false;
+        // 新訊息 → 武裝這一回合的自動戰鬥（用 hook ts 當唯一識別，每個 prompt 最多觸發一次）
+        st.battleArmHookTs = st.lastHookTs;
     }
 
-    if (allowBattle && st.thinkingPrimed && !(st.battleStartStep >= 0) && !st.battlePending) {
-        const summary    = i.model?.param_summary || '';
-        const isThinking = /thinking/i.test(summary);
-        if (isThinking && !st.lastThinking) {
-            st.battlePending  = true;
-            st.thinkingPrimed = false;
+    // 自動戰鬥：prompt 後經過 BATTLE_DELAY_MS 仍未開打 → 觸發一次（思考比較久才打）。
+    // _noAutoBattle（vpet battle off）可停用；手動 vpet battle 走 _forceBattle 不受影響。
+    if (allowBattle && !st._noAutoBattle
+        && st.battleArmHookTs && st.battleArmHookTs !== st.battleFiredHookTs
+        && !(st.battleStartStep >= 0) && !st.battlePending) {
+        if (now - st.battleArmHookTs >= BATTLE_DELAY_MS) {
+            st.battlePending     = true;
+            st.battleFiredHookTs = st.battleArmHookTs;
         }
-        st.lastThinking = isThinking;
     }
 
     // ── force battle 觸發（cheat code）─────────────────────────────

@@ -201,7 +201,7 @@ agumon-cli/                              ← Git 管理範圍
 寫入後，statusline 下次 render 會強制切換 / 啟動戰鬥並清相關 state。
 Battle flag 是一次性消耗，啟動後 statusline 會把這幾個欄位從 force 檔刪掉。
 
-**持久開關**（非一次性，持續到關閉）：`forceSleep`（`vpet sleep`/`wake`）、`freezeEvolve`（`vpet freeze`/`unfreeze`，凍結時跳過自動 `checkEvolution`，手動 evolve 不受影響）。
+**持久開關**（非一次性，持續到關閉）：`forceSleep`（`vpet sleep`/`wake`）、`freezeEvolve`（`vpet freeze`/`unfreeze`，凍結時跳過自動 `checkEvolution`，手動 evolve 不受影響）、`autoBattleOff`（`vpet battle off`/`on`，停用 prompt 後自動戰鬥，手動 `vpet battle` 不受影響）。
 
 **CLI 入口 `vpet`**：所有作弊碼透過 `vpet <cmd>` 操作（`~/bin/vpet` 薄殼 → 部署後的 `statusline-cheat.js`；`install-runtime` 自動安裝）。指令可省略 `--`。完整清單跑 `vpet` 無參數，使用者向用法見 [README](README.md#vpet-指令切角色--戰鬥--進化--pvp)。
 **PvP（幽靈對戰）**：`vpet pvp` 把對手卡的結算結果寫進 `forceBattleEnemy`/`forceBattleWin`（沿用同一套 battle 渲染），詳見 [server/pvp/README.md](server/pvp/README.md)。
@@ -296,7 +296,8 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 > 每個表演有 `frames`、`hold`（偶數）、觸發條件、是否凍結位置。
 
 - ✅ **a. 戰鬥（Battle）**（2026-05-13 完成骨架）
-  - ✅ 觸發：Thinking mode 偵測（`param_summary` 含 thinking）、ROAR 結束後啟動；亦可由 `--battle` cheat 立即觸發
+  - ✅ 觸發：**時間制**——prompt（UserPromptSubmit hook）後經過 `BATTLE_DELAY_MS`（預設 5s）仍在本回合 → 觸發一次（用 hook ts 當識別，每 prompt 最多一次），ROAR 結束後啟動；可用 `vpet battle off` 停用（`force.autoBattleOff` → `st._noAutoBattle`）。亦可由 `vpet battle` cheat 立即觸發（不受停用影響）。
+    - 註：舊版靠 `param_summary` 含 `"thinking"` 偵測，但該欄實務上不含此字串 → 從未觸發，2026-06-01 改為時間制。
   - ✅ 13 step 分鏡（見 §1.7）：encounter → approach → attack → boom → result
   - ✅ 雙角色並排合成（48 cells 場景）、子彈飛行插值、共用 sprite 居中
   - ✅ 寬度不足（< status + 4 + 48）fallback：取消 battle、退回單角色

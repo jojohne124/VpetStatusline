@@ -21,6 +21,6 @@
   ],
   "rightOffset": 12,
   "evolvesTo": [
-    { "character": "g-wargreymon", "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 65, "minBattles": 12 }] }
+    { "character": "g-wargreymon", "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 85, "minBattles": 12 }] }
   ]
 }

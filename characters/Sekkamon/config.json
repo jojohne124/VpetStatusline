@@ -20,6 +20,6 @@
     {"frames": [8]}
   ],
   "evolvesTo": [
-    { "character": "yukinamon", "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 65, "minBattles": 12 }] }
+    { "character": "yukinamon", "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 60, "minBattles": 12 }] }
   ]
 }

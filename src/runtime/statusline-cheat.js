@@ -175,11 +175,11 @@ if (args[0] === '--pvp') {
                 process.exit(1);
             }
 
-            // 戰力加權隨機：winProb = 我戰力 / (我+敵戰力)，戰力 = min(power+train, 階級 cap)
+            // 差距制線性：勝率% = 50 + (我戰 - 敵戰)，戰力 = min(power+train, 階級 cap)
+            // 跟單機共用 core.winProbFromStr；PvP 體驗補正 0 → 零和對稱（A勝率 + B勝率 = 100）
             const myStr  = Math.min(me.power  + (me.train  || 0), core.getTierCap(me.stage));
             const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.stage));
-            const denom  = myStr + oppStr;
-            const winProb = denom > 0 ? myStr / denom : 0.5;
+            const winProb = core.winProbFromStr(myStr, oppStr, 0);
 
             // seed：雙方 code + 當下時間 → 每次挑戰結果會變，但用 core 的決定性擲骰
             const seedStr = `${me.code}:${opp.code}:${Date.now()}`;

@@ -20,6 +20,6 @@
     {"frames": [8]}
   ],
   "evolvesTo": [
-    { "character": "godzilla_1954", "conditions": [{ "type": "cost_threshold", "usd": 15 }, { "type": "win_rate", "pct": 60, "minBattles": 8 }] }
+    { "character": "godzilla_1954", "conditions": [{ "type": "cost_threshold", "usd": 15 }, { "type": "win_rate", "pct": 70, "minBattles": 8 }] }
   ]
 }

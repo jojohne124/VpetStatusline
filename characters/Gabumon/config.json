@@ -21,6 +21,6 @@
   "directSample": true,
   "transparentColor": [244, 45, 255],
   "evolvesTo": [
-    { "character": "garurumon", "conditions": [{ "type": "cost_threshold", "usd": 10 }, { "type": "win_rate", "pct": 50, "minBattles": 5 }] }
+    { "character": "garurumon", "conditions": [{ "type": "cost_threshold", "usd": 10 }, { "type": "win_rate", "pct": 60, "minBattles": 5 }] }
   ]
 }

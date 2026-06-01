@@ -114,24 +114,29 @@ function checkEvolution(st, input, config) {
     if (!config.evolvesTo || config.evolvesTo.length === 0) return null;
     const nowSec = Math.floor(Date.now() / 1000);
 
+    // 每 tick 評估「所有」進化路線（不在第一條達成時就 return），
+    // 讓各路線的 latch 狀態（_ready/_peaked）都保持更新，再決定走哪條。
+    const ready = [];
     for (const evo of config.evolvesTo) {
         // 支援 conditions 陣列或舊格式的單一 condition
         const conditions = evo.conditions ?? (evo.condition ? [evo.condition] : []);
         if (!conditions.length) continue;
         const op = evo.operator ?? 'and';
 
-        const ready = conditions.map((cond, idx) =>
+        const flags = conditions.map((cond, idx) =>
             evalCondition(cond, `_evo_${evo.character}_c${idx}`, st, input, nowSec)
         );
-
-        const triggered = op === 'or' ? ready.some(Boolean) : ready.every(Boolean);
-        if (triggered) {
-            conditions.forEach((_, idx) => { delete st[`_evo_${evo.character}_c${idx}_ready`]; });
-            st._evoCostBase = input.cost?.total_cost_usd ?? 0; // 進化後重設差值基準
-            return evo.character;
-        }
+        const ok = op === 'or' ? flags.some(Boolean) : flags.every(Boolean);
+        if (ok) ready.push({ evo, conditions });
     }
-    return null;
+    if (!ready.length) return null;
+
+    // 分歧進化：多條路線同時達成時，以「進化目標戰力（power）強者」為優先。
+    ready.sort((a, b) => getCharacterPower(b.evo.character) - getCharacterPower(a.evo.character));
+    const { evo, conditions } = ready[0];
+    conditions.forEach((_, idx) => { delete st[`_evo_${evo.character}_c${idx}_ready`]; });
+    st._evoCostBase = input.cost?.total_cost_usd ?? 0; // 進化後重設差值基準
+    return evo.character;
 }
 
 // ── 核心狀態機 ───────────────────────────────────────────────────
@@ -220,16 +225,22 @@ function seedRand01(seed) {
 
 // 戰力與勝率計算
 // 我戰力 = min(我power + trainingBonus, 我階段 cap)；敵戰力 = 敵power
-// 差距制 logistic：固定戰力差 → 固定勝率擺幅，不受絕對值稀釋（每階段戰力影響一致）。
-// S 越大越平（戰力影響小）；+EXP_BONUS 給玩家體驗補正。練滿(差~30)約 80%。
-const WIN_SENSITIVITY = 25;
-const WIN_EXP_BONUS   = 0.05;
+// 差距制線性：勝率% = 50 + (我戰 - 敵戰) + 體驗補正，clamp [5,95]。
+// 每 1 點戰力差 = 1% 勝率，直觀好算；clamp 留 ±5% 爆冷空間。
+// 體驗補正：單機 +5（玩家小優勢）；PvP 0 → 零和對稱（A勝率 + B勝率 = 100）。
+const WIN_EXP_BONUS = 5;      // 單機體驗補正（百分點）
+const WIN_FLOOR = 0.05;
+const WIN_CEIL  = 0.95;
+// 共用勝率核心：給已算好的雙方戰力 + 體驗補正 → 勝率機率。單機與 PvP 共用同一條公式。
+function winProbFromStr(myStr, eStr, expBonus = WIN_EXP_BONUS) {
+    const pct = 50 + (myStr - eStr) + expBonus;
+    return Math.max(WIN_FLOOR, Math.min(WIN_CEIL, pct / 100));
+}
 function computeWinProb(myId, st, enemyId) {
     const myCap = getTierCap(getCharacterStage(myId));
     const myStr = Math.min(getCharacterPower(myId) + (st.trainingBonus ?? 0), myCap);
     const eStr  = getCharacterPower(enemyId);
-    const p = 1 / (1 + Math.exp(-(myStr - eStr) / WIN_SENSITIVITY)) + WIN_EXP_BONUS;
-    return Math.max(0, Math.min(1, p));
+    return winProbFromStr(myStr, eStr);
 }
 
 function _hashSeed(seed) {
@@ -1000,6 +1011,7 @@ module.exports = {
     getCharacterPower,
     getTierCap,
     computeWinProb,
+    winProbFromStr,
     seedRand01,
     chooseBattleEnemy,
     loadShared,

@@ -63,7 +63,7 @@
   "evolvesTo": [
     {
       "character": "gatomon",
-      "conditions": [{ "type": "cost_threshold", "usd": 10 }, { "type": "win_rate", "pct": 50, "minBattles": 5 }]
+      "conditions": [{ "type": "cost_threshold", "usd": 10 }, { "type": "win_rate", "pct": 45, "minBattles": 5 }]
     }
   ]
 }

@@ -22,17 +22,21 @@ const starters = Array.isArray(rosterData) ? rosterData : (rosterData.starters |
 
 const args = process.argv.slice(2);
 
+// 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
+// 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset'];
+if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
+
 if (!args.length) {
-    console.log('用法:');
-    console.log('  node statusline-cheat.js <index|name>      切換角色');
-    console.log('  node statusline-cheat.js --reset           reset 到隨機 starter');
-    console.log('  node statusline-cheat.js --battle [enemy]  立即觸發戰鬥');
-    console.log('    --win / --lose 強制勝負');
-    console.log('  node statusline-cheat.js --evolve <next>   立即播進化表演');
-    console.log('  node statusline-cheat.js --pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
-    console.log('  node statusline-cheat.js --pvp [code]      幽靈對戰（隨機 / 指名 friend code）');
-    console.log('  node statusline-cheat.js --code [name]     查看 / 設定 friend code 與名稱');
-    console.log('  node statusline-cheat.js --pvp-server <url> [key]  只設後端（進階）');
+    console.log('用法（指令可省略 --，例 vpet pvp）:');
+    console.log('  vpet <index|name>           切換角色');
+    console.log('  vpet reset                  reset 到隨機 starter');
+    console.log('  vpet battle [enemy]         立即觸發戰鬥（可加 win / lose 強制勝負）');
+    console.log('  vpet evolve <next>          立即播進化表演');
+    console.log('  vpet pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
+    console.log('  vpet pvp [code]             幽靈對戰（隨機 / 指名 friend code）');
+    console.log('  vpet code [name]            查看 / 設定 friend code 與名稱');
+    console.log('  vpet pvp-server <url> [key] 只設後端（進階）');
     console.log('\n目前角色列表:');
     roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
     console.log('Starters:', starters.join(', '));
@@ -85,7 +89,7 @@ function myCard() {
 }
 async function pvpFetch(method, urlPath, body) {
     const p = readPvp();
-    if (!p.endpoint) throw new Error('尚未設定 server，請先：ac --pvp-server <url> [key]');
+    if (!p.endpoint) throw new Error('尚未設定 server，請先：vpet pvp-setup <url> <key> [名字]');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
@@ -105,7 +109,7 @@ async function pvpFetch(method, urlPath, body) {
 if (args[0] === '--pvp-setup') {
     const url = args[1], key = args[2];
     if (!url || !key) {
-        console.log('用法：ac --pvp-setup <url> <key> [name]');
+        console.log('用法：vpet pvp-setup <url> <key> [name]');
         console.log('  url / key 由 PvP server 架設者(host)提供');
         process.exit(1);
     }
@@ -119,14 +123,14 @@ if (args[0] === '--pvp-setup') {
     console.log(`  server     ：${p.endpoint}`);
     console.log(`  friend code：${p.code}  ← 貼給朋友讓他指名你`);
     console.log(`  顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
-    console.log('  開打：ac --pvp（隨機同階） / ac --pvp <code>（指名）');
+    console.log('  開打：vpet pvp（隨機同階） / vpet pvp <code>（指名）');
     process.exit(0);
 }
 
 // ── --pvp-server <url> [key]：設定後端 ───────────────────────────
 if (args[0] === '--pvp-server') {
     const url = args[1];
-    if (!url) { console.log('用法：ac --pvp-server <url> [key]'); process.exit(1); }
+    if (!url) { console.log('用法：vpet pvp-server <url> [key]'); process.exit(1); }
     const p = readPvp();
     p.endpoint = url;
     if (args[2]) p.key = args[2];
@@ -147,7 +151,7 @@ if (args[0] === '--code') {
     } else {
         console.log(`friend code：${p.code}`);
         console.log(`顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
-        console.log(`server     ：${p.endpoint || '(未設定，ac --pvp-server <url> [key])'}`);
+        console.log(`server     ：${p.endpoint || '(未設定，vpet pvp-setup <url> <key>)'}`);
     }
     process.exit(0);
 }
@@ -204,9 +208,9 @@ if (args[0] === '--battle') {
     let win   = null;  // null = 隨機
     for (let i = 1; i < args.length; i++) {
         const a = args[i];
-        if (a === '--win')       win = true;
-        else if (a === '--lose') win = false;
-        else if (!a.startsWith('--') && !enemy) enemy = a;
+        if (a === '--win' || a === 'win')        win = true;
+        else if (a === '--lose' || a === 'lose') win = false;
+        else if (!a.startsWith('--') && a !== 'win' && a !== 'lose' && !enemy) enemy = a;
     }
     if (enemy && !roster.includes(enemy)) {
         console.log(`找不到敵人：${enemy}`);
@@ -241,7 +245,7 @@ if (args[0] === '--sleep' || args[0] === '--wake') {
     if (args[0] === '--sleep') {
         force.forceSleep = true;
         writeForce(force);
-        console.log('✓ 已強制睡覺（持續到 ac --wake；發訊息不會喚醒）');
+        console.log('✓ 已強制睡覺（持續到 vpet wake；發訊息不會喚醒）');
     } else {
         delete force.forceSleep;
         writeForce(force);
@@ -254,7 +258,7 @@ if (args[0] === '--sleep' || args[0] === '--wake') {
 if (args[0] === '--evolve') {
     const target = args[1];
     if (!target) {
-        console.log('用法：node statusline-cheat.js --evolve <next-char>');
+        console.log('用法：vpet evolve <next-char>');
         roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
         process.exit(1);
     }

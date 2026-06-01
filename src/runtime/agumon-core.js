@@ -184,7 +184,7 @@ const safeF = (F, name, fallback = 0) => F[name] ?? fallback;
 function getCharacterStage(name) {
     try {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
-        return config.stage ?? config.rank ?? 'UnStage';   // config.rank：舊資料相容
+        return config.stage ?? 'UnStage';
     } catch(e) { return 'UnStage'; }
 }
 

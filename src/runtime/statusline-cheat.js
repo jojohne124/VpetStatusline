@@ -177,7 +177,7 @@ if (args[0] === '--pvp') {
 
             // 戰力加權隨機：winProb = 我戰力 / (我+敵戰力)，戰力 = min(power+train, 階級 cap)
             const myStr  = Math.min(me.power  + (me.train  || 0), core.getTierCap(me.stage));
-            const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.stage ?? opp.rank));
+            const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.stage));
             const denom  = myStr + oppStr;
             const winProb = denom > 0 ? myStr / denom : 0.5;
 

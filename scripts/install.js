@@ -76,7 +76,7 @@ function copyFile(src, dst, label) {
 }
 
 function installRuntime() {
-    console.log('\n[1/7] 安裝 runtime js -> ~/.claude/agumon-statusline/');
+    console.log('\n[1/8] 安裝 runtime js -> ~/.claude/agumon-statusline/');
     const srcDir = path.join(REPO_ROOT, 'src', 'runtime');
     let ok = 0;
     for (const fn of RUNTIME_FILES) {
@@ -86,7 +86,7 @@ function installRuntime() {
 }
 
 function installCharacters() {
-    console.log('\n[2/7] 安裝角色資產 -> ~/.claude/agumon-statusline/assets/');
+    console.log('\n[2/8] 安裝角色資產 -> ~/.claude/agumon-statusline/assets/');
     const charsDir = path.join(REPO_ROOT, 'characters');
     if (!fs.existsSync(charsDir)) { console.warn(`  [skip] 找不到 characters/`); return; }
     const installed = [];
@@ -117,12 +117,12 @@ function installCharacters() {
 }
 
 function installRoster() {
-    console.log('\n[3/7] 安裝 roster.json');
+    console.log('\n[3/8] 安裝 roster.json');
     copyFile(path.join(REPO_ROOT, 'characters', 'roster.json'), path.join(ASSETS_DIR, 'roster.json'));
 }
 
 function installShared() {
-    console.log('\n[4/7] 安裝共用 sprite -> ~/.claude/agumon-statusline/assets/shared/');
+    console.log('\n[4/8] 安裝共用 sprite -> ~/.claude/agumon-statusline/assets/shared/');
     const srcDir = path.join(REPO_ROOT, 'shared');
     const dstDir = path.join(ASSETS_DIR, 'shared');
     const files = ['manifest.json', 'art.json'];
@@ -139,14 +139,14 @@ function installShared() {
 }
 
 function installV4Art() {
-    console.log('\n[5/7] 安裝 v4（黑白）art');
+    console.log('\n[5/8] 安裝 v4（黑白）art');
     const src = path.join(REPO_ROOT, 'legacy', 'agumon-source', 'agumon_art.json');
     if (!fs.existsSync(src)) { console.warn('  [skip] 找不到 legacy/agumon-source/agumon_art.json'); return; }
     copyFile(src, path.join(INSTALL_DIR, 'agumon-art.json'));
 }
 
 function migrateLegacyState() {
-    console.log('\n[6/7] 遷移舊版散落檔');
+    console.log('\n[6/8] 遷移舊版散落檔');
     ensureDir(STATE_DIR);
 
     let migrated = 0;
@@ -182,7 +182,7 @@ function migrateLegacyState() {
 }
 
 function updateSettings() {
-    console.log('\n[7/7] 更新 ~/.claude/settings.json');
+    console.log('\n[7/8] 更新 ~/.claude/settings.json');
     const settingsPath = path.join(CLAUDE_HOME, 'settings.json');
 
     const newCmd  = `node ${path.join(INSTALL_DIR, 'statusline-agumon-color.js').replace(/\\/g, '/')}`;
@@ -254,6 +254,39 @@ function updateSettings() {
     }
 }
 
+function installLauncher() {
+    console.log('\n[8/8] 安裝 vpet 啟動器 -> ~/bin/');
+    const binDir = path.join(os.homedir(), 'bin');
+    ensureDir(binDir);
+    let ok = 0;
+    for (const fn of ['vpet', 'vpet.bat']) {
+        const src = path.join(REPO_ROOT, 'bin', fn);
+        const dst = path.join(binDir, fn);
+        if (copyFile(src, dst)) {
+            ok++;
+            if (fn === 'vpet') { try { fs.chmodSync(dst, 0o755); } catch(_) {} }  // bash 薄殼需可執行（unix）
+        }
+    }
+    if (ok === 0) { console.warn('  [skip] 找不到 repo bin/ 的 vpet 啟動器'); return; }
+
+    // PATH 檢查：~/bin 不在 PATH 就提示加入
+    const sep = process.platform === 'win32' ? ';' : ':';
+    const onPath = (process.env.PATH || '').split(sep).some(p => {
+        try { return p && path.resolve(p) === path.resolve(binDir); } catch(_) { return false; }
+    });
+    if (onPath) {
+        console.log('  -> ~/bin 已在 PATH，重開終端後即可用 vpet（或 Claude Code 內 ! vpet ...）');
+    } else {
+        console.log('  ⚠ ~/bin 不在 PATH，請加入後重開終端：');
+        if (process.platform === 'win32') {
+            console.log(`     PowerShell: [Environment]::SetEnvironmentVariable('PATH', "$env:PATH;${binDir}", 'User')`);
+            console.log(`     或把 ${binDir} 加進「使用者環境變數 PATH」`);
+        } else {
+            console.log(`     echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc`);
+        }
+    }
+}
+
 function reportStateFiles() {
     console.log('\n— state 檔現況 —');
     if (!fs.existsSync(STATE_DIR)) { console.log('  state/ 尚未建立（執行 statusline 後會自動產生）'); return; }
@@ -280,6 +313,7 @@ function main() {
     installV4Art();
     migrateLegacyState();
     updateSettings();
+    installLauncher();
     reportStateFiles();
 
     console.log('\n安裝完成。重新整理 Claude CLI（送一個訊息或重開）即可生效。');

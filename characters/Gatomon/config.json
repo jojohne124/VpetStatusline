@@ -1,6 +1,6 @@
 {
   "name": "gatomon",
-  "rank": "Adult",
+  "stage": "Adult",
   "power": 55,
   "frameCount": 12,
   "targetSize": 16,

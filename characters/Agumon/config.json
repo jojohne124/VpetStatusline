@@ -1,6 +1,6 @@
 {
   "name": "agumon",
-  "rank": "Child",
+  "stage": "Child",
   "power": 20,
   "frameCount": 12,
   "targetSize": 16,

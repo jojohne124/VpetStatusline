@@ -1,6 +1,6 @@
 {
   "name": "palmon",
-  "rank": "Child",
+  "stage": "Child",
   "power": 10,
   "frameCount": 12,
   "targetSize": 16,

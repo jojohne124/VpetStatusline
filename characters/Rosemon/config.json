@@ -1,6 +1,6 @@
 {
   "name": "rosemon",
-  "rank": "Ultimate",
+  "stage": "Ultimate",
   "power": 160,
   "frameCount": 12,
   "targetSize": 16,

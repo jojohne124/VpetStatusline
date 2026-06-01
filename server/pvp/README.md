@@ -78,8 +78,8 @@ ac --pvp
 |---|---|---|
 | PUT | `/card/:code` | 上傳/更新我的卡（body = card JSON），TTL 30 天 |
 | GET | `/card/:code` | 指名取卡，找不到回 404 `not_found` |
-| GET | `/random?rank=&exclude=` | 隨機取一張同階卡（排除自己），無對手回 404 `no_opponent` |
+| GET | `/random?stage=&exclude=` | 隨機取一張同階卡（排除自己），無對手回 404 `no_opponent` |
 
 所有請求需帶 `X-Pvp-Key`（若 server 有設 PVP_KEY）。
 
-卡片格式：`{ code, name, character, power, train, rank, ts }`
+卡片格式：`{ code, name, character, power, train, stage, ts }`

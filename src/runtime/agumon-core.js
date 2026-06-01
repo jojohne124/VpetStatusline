@@ -181,16 +181,16 @@ const BATTLE_SAFETY    = 30;                                           // 殘留
 
 const safeF = (F, name, fallback = 0) => F[name] ?? fallback;
 
-function getCharacterRank(name) {
+function getCharacterStage(name) {
     try {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
-        return config.rank || 'UnRank';
-    } catch(e) { return 'UnRank'; }
+        return config.stage ?? config.rank ?? 'UnStage';   // config.rank：舊資料相容
+    } catch(e) { return 'UnStage'; }
 }
 
-// 各階級戰力上限（UnRank 無上限）
-const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnRank: Infinity };
-function getTierCap(rank) { return TIER_CAP[rank] ?? Infinity; }
+// 各階段戰力上限（UnStage 無上限）
+const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnStage: Infinity };
+function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 
 // 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
 function getCharacterPower(name) {
@@ -215,7 +215,7 @@ function seedRand01(seed) {
 // winProb = 我/(我+敵) + expBonus + otherBonus，clamp [0,1]
 function computeWinProb(myId, st, enemyId) {
     const myPower = getCharacterPower(myId);
-    const myCap   = getTierCap(getCharacterRank(myId));
+    const myCap   = getTierCap(getCharacterStage(myId));
     const train   = st.trainingBonus ?? 0;
     const myStr   = Math.min(myPower + train, myCap);
     const eStr    = getCharacterPower(enemyId);
@@ -242,8 +242,8 @@ function chooseBattleEnemy(myId, seed, lastEnemyId) {
     try {
         const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
         const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
-        const myRank = getCharacterRank(myId);
-        const candidates = roster.filter(n => n !== myId && getCharacterRank(n) === myRank);
+        const myStage = getCharacterStage(myId);
+        const candidates = roster.filter(n => n !== myId && getCharacterStage(n) === myStage);
         if (candidates.length === 0) return 'godzilla_1999';
         let pick;
         if (seed != null) {
@@ -384,9 +384,9 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                 st.roarStartStep  = step;
                 st.lastActivityAt = now;
                 hookFired         = true;
-                // 訓練補正：每則新訊息 +1，受階段上限約束（UnRank 無上限）
+                // 訓練補正：每則新訊息 +1，受階段上限約束（UnStage 無上限）
                 // 多視窗 race-safe：每個視窗讀同一 disk 狀態都得到 train+1，最後一個寫的 wins，淨增 +1
-                const cap   = getTierCap(getCharacterRank(st.characterId));
+                const cap   = getTierCap(getCharacterStage(st.characterId));
                 const base  = getCharacterPower(st.characterId);
                 const train = st.trainingBonus ?? 0;
                 if (base + train < cap) st.trainingBonus = train + 1;
@@ -927,10 +927,10 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
 
     // 顯示用 power = my power + trainingBonus，受階段 cap 約束（與戰力公式一致）
     const myPower      = getCharacterPower(charId);
-    const myCap        = getTierCap(getCharacterRank(charId));
+    const myCap        = getTierCap(getCharacterStage(charId));
     const train        = (st && st.trainingBonus) || 0;
     const displayPower = Math.min(myPower + train, myCap);
-    const rank         = getCharacterRank(charId);
+    const stage        = getCharacterStage(charId);
 
     // CutIn 32×8 cell（無 CutIn 留空）
     let cutInRows = cutInArt?.frames?.[0]
@@ -949,7 +949,7 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
         '',
         `Name: ${displayName}`,
         `power: ${displayPower}`,
-        `Rank: ${rank}`,
+        `Stage: ${stage}`,
         `Win Rate: ${winRate}%`,
     ];
     while (textRaw.length < H) textRaw.push('');
@@ -991,7 +991,7 @@ module.exports = {
     composeOutput,
     visLen,
     loadCharacter,
-    getCharacterRank,
+    getCharacterStage,
     getCharacterPower,
     getTierCap,
     computeWinProb,

@@ -1,6 +1,6 @@
 {
   "name": "kabuterimon",
-  "rank": "Adult",
+  "stage": "Adult",
   "power": 65,
   "frameCount": 12,
   "targetSize": 16,

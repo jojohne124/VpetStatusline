@@ -1,6 +1,6 @@
 {
   "name": "phoenixmon",
-  "rank": "Ultimate",
+  "stage": "Ultimate",
   "power": 165,
   "frameCount": 12,
   "targetSize": 16,

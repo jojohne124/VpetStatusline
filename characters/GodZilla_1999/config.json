@@ -1,6 +1,6 @@
 {
   "name": "godzilla_1999",
-  "rank": "Ultimate",
+  "stage": "Ultimate",
   "power": 180,
   "frameCount": 12,
   "targetSize": 16,

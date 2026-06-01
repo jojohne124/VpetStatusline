@@ -1,6 +1,6 @@
 {
   "name": "wargreymon",
-  "rank": "Ultimate",
+  "stage": "Ultimate",
   "power": 170,
   "frameCount": 12,
   "targetSize": 16,

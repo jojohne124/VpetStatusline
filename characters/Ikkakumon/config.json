@@ -1,6 +1,6 @@
 {
   "name": "ikkakumon",
-  "rank": "Adult",
+  "stage": "Adult",
   "power": 60,
   "frameCount": 12,
   "targetSize": 16,

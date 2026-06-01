@@ -5,7 +5,7 @@
 // 路由：
 //   PUT  /card/:code                 上傳/更新我的卡（body = card JSON）
 //   GET  /card/:code                 指名：取某人的卡
-//   GET  /random?rank=&exclude=      隨機：取一張同階卡（排除自己）
+//   GET  /random?stage=&exclude=     隨機：取一張同階卡（排除自己）
 //
 // 認證：若設了 PVP_KEY secret，所有請求須帶 header  X-Pvp-Key: <key>
 // 綁定：KV namespace binding = CARDS
@@ -41,7 +41,7 @@ export default {
         character: String(body.character || ''),
         power: Number(body.power) || 0,
         train: Number(body.train) || 0,
-        rank: String(body.rank || ''),
+        stage: String(body.stage || ''),
         ts: Date.now(),
       };
       await env.CARDS.put('c:' + parts[1], JSON.stringify(card), { expirationTtl: CARD_TTL });
@@ -55,9 +55,9 @@ export default {
       return json(JSON.parse(v));
     }
 
-    // GET /random?rank=&exclude=  —— 隨機同階
+    // GET /random?stage=&exclude=  —— 隨機同階
     if (req.method === 'GET' && parts[0] === 'random') {
-      const rank = url.searchParams.get('rank');
+      const stage = url.searchParams.get('stage');
       const exclude = url.searchParams.get('exclude');
       const list = await env.CARDS.list({ prefix: 'c:' });
       let keys = list.keys
@@ -72,7 +72,7 @@ export default {
         const v = await env.CARDS.get(k);
         if (!v) continue;
         const c = JSON.parse(v);
-        if (!rank || c.rank === rank) return json(c);
+        if (!stage || c.stage === stage) return json(c);
       }
       return json({ error: 'no_opponent' }, 404);
     }

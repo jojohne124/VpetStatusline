@@ -1,6 +1,6 @@
 {
   "name": "renamon",
-  "rank": "Child",
+  "stage": "Child",
   "power": 15,
   "frameCount": 12,
   "targetSize": 16,

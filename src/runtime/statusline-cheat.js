@@ -86,7 +86,7 @@ function myCard() {
         character: char,
         power: core.getCharacterPower(char),
         train: st.trainingBonus || 0,
-        rank:  core.getCharacterRank(char),
+        stage: core.getCharacterStage(char),
     };
 }
 async function pvpFetch(method, urlPath, body) {
@@ -168,7 +168,7 @@ if (args[0] === '--pvp') {
             const target = args[1];
             const opp = target
                 ? await pvpFetch('GET', `/card/${encodeURIComponent(target)}`)
-                : await pvpFetch('GET', `/random?rank=${encodeURIComponent(me.rank)}&exclude=${me.code}`);
+                : await pvpFetch('GET', `/random?stage=${encodeURIComponent(me.stage)}&exclude=${me.code}`);
 
             if (!roster.includes(opp.character)) {
                 console.log(`✗ 對手角色「${opp.character}」本機沒有資產，無法演出（雙方需同一套角色）`);
@@ -176,8 +176,8 @@ if (args[0] === '--pvp') {
             }
 
             // 戰力加權隨機：winProb = 我戰力 / (我+敵戰力)，戰力 = min(power+train, 階級 cap)
-            const myStr  = Math.min(me.power  + (me.train  || 0), core.getTierCap(me.rank));
-            const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.rank));
+            const myStr  = Math.min(me.power  + (me.train  || 0), core.getTierCap(me.stage));
+            const oppStr = Math.min(opp.power + (opp.train || 0), core.getTierCap(opp.stage ?? opp.rank));
             const denom  = myStr + oppStr;
             const winProb = denom > 0 ? myStr / denom : 0.5;
 

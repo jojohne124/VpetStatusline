@@ -1,6 +1,6 @@
 {
   "name": "angemon",
-  "rank": "Adult",
+  "stage": "Adult",
   "power": 80,
   "frameCount": 12,
   "targetSize": 16,

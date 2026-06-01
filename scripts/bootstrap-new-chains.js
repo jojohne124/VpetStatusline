@@ -3,7 +3,7 @@
 // 一次性 scaffold：六條新進化鏈的 config.json + 跑 prepare/build/cutin
 //   用法：node scripts/bootstrap-new-chains.js
 // 流程：
-//   1. 寫 24 個 config.json（rank/power/evolvesTo 串好）
+//   1. 寫 24 個 config.json（stage/power/evolvesTo 串好）
 //   2. 對每隻跑 process（prepare→build） + cutin
 //   3. 把 24 個 id 加進 characters/roster.json（不動 starters）
 
@@ -26,47 +26,47 @@ const FRAMES_MAP = {
 // folderName 對應磁碟上的資料夾；id 是 roster / runtime 使用的小寫名（與 install.js 一致）
 const CHAINS = [
   [
-    { folder: 'Patamon',             rank: 'Child',    power: 10 },
-    { folder: 'Angemon',             rank: 'Adult',    power: 80 },
-    { folder: 'MagnaAngemon',        rank: 'Perfect',  power: 130 },
-    { folder: 'Dominimon',           rank: 'Ultimate', power: 175 },
+    { folder: 'Patamon',             stage: 'Child',    power: 10 },
+    { folder: 'Angemon',             stage: 'Adult',    power: 80 },
+    { folder: 'MagnaAngemon',        stage: 'Perfect',  power: 130 },
+    { folder: 'Dominimon',           stage: 'Ultimate', power: 175 },
   ],
   [
-    { folder: 'Salamon',             rank: 'Child',    power: 10 },
-    { folder: 'Gatomon',             rank: 'Adult',    power: 55 },
-    { folder: 'Angewomon',           rank: 'Perfect',  power: 130 },
-    { folder: 'Magnadramon',         rank: 'Ultimate', power: 175 },
+    { folder: 'Salamon',             stage: 'Child',    power: 10 },
+    { folder: 'Gatomon',             stage: 'Adult',    power: 55 },
+    { folder: 'Angewomon',           stage: 'Perfect',  power: 130 },
+    { folder: 'Magnadramon',         stage: 'Ultimate', power: 175 },
   ],
   [
-    { folder: 'Gomamon',             rank: 'Child',    power: 10 },
-    { folder: 'Ikkakumon',           rank: 'Adult',    power: 60 },
-    { folder: 'Zudomon',             rank: 'Perfect',  power: 110 },
-    { folder: 'Vikemon',             rank: 'Ultimate', power: 160 },
+    { folder: 'Gomamon',             stage: 'Child',    power: 10 },
+    { folder: 'Ikkakumon',           stage: 'Adult',    power: 60 },
+    { folder: 'Zudomon',             stage: 'Perfect',  power: 110 },
+    { folder: 'Vikemon',             stage: 'Ultimate', power: 160 },
   ],
   [
-    { folder: 'Tentomon',            rank: 'Child',    power: 15 },
-    { folder: 'Kabuterimon',         rank: 'Adult',    power: 65 },
-    { folder: 'MegaKabuterimon',     rank: 'Perfect',  power: 115 },
-    { folder: 'HerculesKabuterimon', rank: 'Ultimate', power: 165 },
+    { folder: 'Tentomon',            stage: 'Child',    power: 15 },
+    { folder: 'Kabuterimon',         stage: 'Adult',    power: 65 },
+    { folder: 'MegaKabuterimon',     stage: 'Perfect',  power: 115 },
+    { folder: 'HerculesKabuterimon', stage: 'Ultimate', power: 165 },
   ],
   [
-    { folder: 'Palmon',              rank: 'Child',    power: 10 },
-    { folder: 'Togemon',             rank: 'Adult',    power: 60 },
-    { folder: 'Lillymon',            rank: 'Perfect',  power: 110 },
-    { folder: 'Rosemon',             rank: 'Ultimate', power: 160 },
+    { folder: 'Palmon',              stage: 'Child',    power: 10 },
+    { folder: 'Togemon',             stage: 'Adult',    power: 60 },
+    { folder: 'Lillymon',            stage: 'Perfect',  power: 110 },
+    { folder: 'Rosemon',             stage: 'Ultimate', power: 160 },
   ],
   [
-    { folder: 'Biyomon',             rank: 'Child',    power: 15 },
-    { folder: 'Birdramon',           rank: 'Adult',    power: 65 },
-    { folder: 'Garudamon',           rank: 'Perfect',  power: 115 },
-    { folder: 'Phoenixmon',          rank: 'Ultimate', power: 165 },
+    { folder: 'Biyomon',             stage: 'Child',    power: 15 },
+    { folder: 'Birdramon',           stage: 'Adult',    power: 65 },
+    { folder: 'Garudamon',           stage: 'Perfect',  power: 115 },
+    { folder: 'Phoenixmon',          stage: 'Ultimate', power: 165 },
   ],
 ];
 
 function buildConfig(node, nextNode) {
   return {
     name: node.folder.toLowerCase(),
-    rank: node.rank,
+    stage: node.stage,
     power: node.power,
     frameCount: 12,
     targetSize: 16,
@@ -94,7 +94,7 @@ function writeConfigs() {
       if (!fs.existsSync(dir)) { console.warn(`  [skip] 找不到資料夾 ${dir}`); continue; }
       const cfg      = buildConfig(node, nextNode);
       fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2));
-      console.log(`  ✓ ${node.folder}/config.json  (rank=${node.rank}, power=${node.power}${nextNode ? `, → ${nextNode.folder.toLowerCase()}` : ' (末代)'})`);
+      console.log(`  ✓ ${node.folder}/config.json  (stage=${node.stage}, power=${node.power}${nextNode ? `, → ${nextNode.folder.toLowerCase()}` : ' (末代)'})`);
     }
   }
 }

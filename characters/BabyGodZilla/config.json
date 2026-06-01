@@ -1,6 +1,6 @@
 {
   "name": "babygodzilla",
-  "rank": "Child",
+  "stage": "Child",
   "power": 30,
   "frameCount": 12,
   "targetSize": 16,

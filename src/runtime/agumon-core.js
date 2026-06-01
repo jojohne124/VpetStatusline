@@ -948,7 +948,7 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     const textRaw = [
         '',
         `Name: ${displayName}`,
-        `power: ${displayPower}`,
+        `Power: ${displayPower}`,
         `Stage: ${stage}`,
         `Win Rate: ${winRate}%`,
     ];

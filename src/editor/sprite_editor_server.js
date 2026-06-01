@@ -27,13 +27,36 @@ const SHARED_DIR     = path.join(REPO_ROOT, 'shared');
 const SHARED_ART_DST = path.join(ASSETS_DIR, 'shared', 'art.json');
 const SHARED_SRC_DST = path.join(ASSETS_DIR, 'shared', 'sprites.json');
 
+// ── 角色解析（支援 UI 內切換，不重啟）─────────────────────────────
+const CHARS_ROOT = path.join(REPO_ROOT, 'characters');
+// query.char 合法且存在 → 用它；否則回退啟動角色
+function resolveChar(query) {
+    const c = query.char;
+    if (c && /^[A-Za-z0-9_-]+$/.test(c) && fs.existsSync(path.join(CHARS_ROOT, c, 'config.json'))) return c;
+    return name;
+}
+function listChars() {
+    try {
+        return fs.readdirSync(CHARS_ROOT, { withFileTypes: true })
+            .filter(d => d.isDirectory() && fs.existsSync(path.join(CHARS_ROOT, d.name, 'config.json')))
+            .map(d => d.name)
+            .sort((a, b) => a.localeCompare(b));
+    } catch(e) { return []; }
+}
+// 啟動參數可能是小寫（gatomon），對應到正規資料夾名（Gatomon），下拉才選得中
+function canonicalChar(n) {
+    return listChars().find(c => c.toLowerCase() === String(n).toLowerCase()) || n;
+}
+
 // ── mode 對應：character vs bullet vs shared vs cutin ─────────────
-function modePaths(mode) {
+function modePaths(mode, charName) {
+    const charDir = path.join(CHARS_ROOT, charName);
+    const lc      = charName.toLowerCase();
     if (mode === 'bullet') {
         return {
-            src:  path.join(CHAR_DIR, 'bullet.json'),
-            art:  path.join(CHAR_DIR, 'bullet-art.json'),
-            dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'bullet-art.json'),
+            src:  path.join(charDir, 'bullet.json'),
+            art:  path.join(charDir, 'bullet-art.json'),
+            dstArt: path.join(ASSETS_DIR, lc, 'bullet-art.json'),
         };
     }
     if (mode === 'shared') {
@@ -48,15 +71,15 @@ function modePaths(mode) {
     if (mode === 'cutin') {
         // cutin 沒有 pixels.json 中介檔；art.json 是唯一 source of truth
         return {
-            art:    path.join(CHAR_DIR, 'cutin-art.json'),
-            dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'cutin-art.json'),
+            art:    path.join(charDir, 'cutin-art.json'),
+            dstArt: path.join(ASSETS_DIR, lc, 'cutin-art.json'),
             isCutin: true,
         };
     }
     return {
-        src:  path.join(CHAR_DIR, 'pixels.json'),
-        art:  path.join(CHAR_DIR, 'art.json'),
-        dstArt: path.join(ASSETS_DIR, name.toLowerCase(), 'art.json'),
+        src:  path.join(charDir, 'pixels.json'),
+        art:  path.join(charDir, 'art.json'),
+        dstArt: path.join(ASSETS_DIR, lc, 'art.json'),
     };
 }
 
@@ -135,14 +158,19 @@ const server = http.createServer((req, res) => {
                    : query.mode === 'shared' ? 'shared'
                    : query.mode === 'cutin'  ? 'cutin'
                    : 'character';
+    const charName = resolveChar(query);   // ?char= 指定，否則啟動角色
 
     if (req.method === 'GET' && urlPath === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(fs.readFileSync(HTML_PATH));
     }
+    else if (req.method === 'GET' && urlPath === '/chars') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ chars: listChars(), current: canonicalChar(charName) }));
+    }
     else if (req.method === 'GET' && urlPath === '/meta') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        let frameNames = null, rightOffset = null, displayName = name;
+        let frameNames = null, rightOffset = null, displayName = charName;
         if (mode === 'shared') {
             frameNames = sharedFrameNames();
             displayName = 'shared';
@@ -150,13 +178,13 @@ const server = http.createServer((req, res) => {
             // 第 0 幀左向、第 1 幀右向（若有）；用 rightOffset 讓 label 自動加 →
             frameNames = ['CutIn'];
             try {
-                const { art } = modePaths(mode);
+                const { art } = modePaths(mode, charName);
                 const a = JSON.parse(fs.readFileSync(art, 'utf8'));
                 if (a.frames && a.frames.length >= 2) rightOffset = 1;
             } catch(e) {}
         } else {
             try {
-                const cfg = JSON.parse(fs.readFileSync(path.join(CHAR_DIR, 'config.json'), 'utf8'));
+                const cfg = JSON.parse(fs.readFileSync(path.join(CHARS_ROOT, charName, 'config.json'), 'utf8'));
                 frameNames = cfg.frameNames || null;
                 rightOffset = cfg.rightOffset ?? null;
             } catch(e) {}
@@ -165,10 +193,10 @@ const server = http.createServer((req, res) => {
     }
     else if (req.method === 'GET' && urlPath === '/data') {
         if (mode === 'cutin') {
-            const { art } = modePaths(mode);
+            const { art } = modePaths(mode, charName);
             if (!fs.existsSync(art)) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `cutin-art.json not found。請先放 CutIn.png 進 characters/${name}/ 並執行：node src/tools/char-cli.js cutin ${name}` }));
+                res.end(JSON.stringify({ error: `cutin-art.json not found。請先放 CutIn.png 進 characters/${charName}/ 並執行：node src/tools/char-cli.js cutin ${charName}` }));
                 return;
             }
             const a = JSON.parse(fs.readFileSync(art, 'utf8'));
@@ -176,7 +204,7 @@ const server = http.createServer((req, res) => {
             res.end(JSON.stringify({ width: a.width, height: a.height * 2, frames: artToPixels(a) }));
             return;
         }
-        const { src } = modePaths(mode);
+        const { src } = modePaths(mode, charName);
         if (!fs.existsSync(src)) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: `${path.basename(src)} not found` }));
@@ -190,7 +218,7 @@ const server = http.createServer((req, res) => {
         req.on('data', c => body += c);
         req.on('end', () => {
             try {
-                const { src, art, dstArt } = modePaths(mode);
+                const { src, art, dstArt } = modePaths(mode, charName);
 
                 // cutin 沒有 src（直接編 art.json）
                 if (src && fs.existsSync(src)) fs.copyFileSync(src, src + '.bak');
@@ -210,7 +238,7 @@ const server = http.createServer((req, res) => {
                     } catch(e) { convertOut = mode + ' compile error: ' + e.message; }
                 } else {
                     try {
-                        convertOut = execFileSync('node', [CHAR_CLI, 'build', name], { encoding: 'utf8' });
+                        convertOut = execFileSync('node', [CHAR_CLI, 'build', charName], { encoding: 'utf8' });
                     } catch(e) { convertOut = 'build error: ' + e.message; }
                 }
 
@@ -220,7 +248,7 @@ const server = http.createServer((req, res) => {
                     if (!fs.existsSync(assetDir)) fs.mkdirSync(assetDir, { recursive: true });
                     fs.copyFileSync(art, dstArt);
                     // shared 模式還要同步 sprites.json（pixels）
-                    const { dstSrc } = modePaths(mode);
+                    const { dstSrc } = modePaths(mode, charName);
                     if (dstSrc && src) fs.copyFileSync(src, dstSrc);
                 } catch(e) { convertOut += '\ncopy error: ' + e.message; }
 

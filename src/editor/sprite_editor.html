@@ -210,6 +210,7 @@ h1 { margin: 0 0 16px; font-size: 18px; }
     <button id="mode-shared" onclick="switchMode('shared')">🌐 共用</button>
     <button id="mode-cutin" onclick="switchMode('cutin')">✨ CutIn</button>
   </span>
+  <span class="char-select-wrap" title="切換角色（不需重啟）">🎭 <select id="char-select"></select></span>
   <span class="tool-toggle">
     <button id="tool-paint" class="active" onclick="setTool('paint')">✏️ 畫筆</button>
     <button id="tool-select" onclick="setTool('select')">⬚ 選取</button>
@@ -292,6 +293,8 @@ let palette = [];
 let history = []; // 復原堆疊
 let isDragging = false;
 let currentMode = 'character'; // 'character' | 'bullet' | 'shared' | 'cutin'
+let currentChar = '';          // 目前編輯角色（空=啟動角色；UI 下拉即時切換，不需重啟）
+const charParam = () => currentChar ? '&char=' + encodeURIComponent(currentChar) : '';
 let currentTool = 'paint';     // 'paint' | 'select'
 let sel = null;                // { x0, y0, x1, y1 } 包含上下界
 let dragState = null;          // { mode: 'define', x0, y0 } | { mode: 'move', lifted, baseSel, anchorX, anchorY, dx, dy }
@@ -338,7 +341,7 @@ async function load() {
     let charName = '';
     RIGHT_OFFSET = null;
     try {
-        const metaRes = await fetch('/meta?mode=' + currentMode);
+        const metaRes = await fetch('/meta?mode=' + currentMode + charParam());
         if (metaRes.ok) {
             const meta = await metaRes.json();
             charName = meta.name;
@@ -347,7 +350,7 @@ async function load() {
         }
     } catch(e) {}
 
-    const dataRes = await fetch('/data?mode=' + currentMode);
+    const dataRes = await fetch('/data?mode=' + currentMode + charParam());
     if (!dataRes.ok) {
         document.getElementById('status').className = 'err';
         document.getElementById('status').textContent = '✗ 載入失敗：' + currentMode;
@@ -777,7 +780,7 @@ async function save() {
     status.textContent = '儲存中...';
     status.style.display = 'block';
     try {
-        const res = await fetch('/save?mode=' + currentMode, { method: 'POST', body: JSON.stringify(data) });
+        const res = await fetch('/save?mode=' + currentMode + charParam(), { method: 'POST', body: JSON.stringify(data) });
         const r = await res.json();
         if (r.ok) {
             status.className = 'ok';
@@ -849,7 +852,27 @@ document.addEventListener('mousedown', (e) => {
     if (menu.classList.contains('open') && !menu.contains(e.target)) closeReplaceMenu();
 });
 
-load();
+// ── 角色下拉（UI 內切換，不需重啟 server）────────────────
+async function loadChars() {
+    try {
+        const res = await fetch('/chars');
+        if (!res.ok) return;
+        const { chars, current } = await res.json();
+        if (!currentChar) currentChar = current;
+        const sel = document.getElementById('char-select');
+        sel.innerHTML = chars.map(c =>
+            `<option value="${c}"${c === currentChar ? ' selected' : ''}>${c}</option>`).join('');
+        sel.onchange = async () => {
+            if (history.length > 0 && !confirm('切換角色會清空 undo 堆疊（已儲存的不影響），確定？')) {
+                sel.value = currentChar; return;
+            }
+            currentChar = sel.value;
+            await load();
+        };
+    } catch(e) {}
+}
+
+(async () => { await loadChars(); await load(); })();
 </script>
 </body>
 </html>

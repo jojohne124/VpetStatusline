@@ -98,6 +98,15 @@ function evalCondition(cond, ns, st, input, nowSec) {
         return !!st[ns + '_ready'];
     }
 
+    if (cond.type === 'win_rate') {
+        // 即時累積勝率（本階段戰績；不 latch，與狀態卡顯示的勝率一致 = 所見即所得）。
+        // minBattles 保證樣本/節奏，場數不足不觸發。
+        const total = st.battleTotalCount || 0;
+        const wins  = st.battleWinCount  || 0;
+        if (total < (cond.minBattles ?? 0)) return false;
+        return (wins / total) * 100 >= (cond.pct ?? 100);
+    }
+
     return false;
 }
 
@@ -210,21 +219,17 @@ function seedRand01(seed) {
 }
 
 // 戰力與勝率計算
-// 我戰力 = min(我power + trainingBonus, 我階段 cap)
-// 敵戰力 = 敵power
-// winProb = 我/(我+敵) + expBonus + otherBonus，clamp [0,1]
+// 我戰力 = min(我power + trainingBonus, 我階段 cap)；敵戰力 = 敵power
+// 差距制 logistic：固定戰力差 → 固定勝率擺幅，不受絕對值稀釋（每階段戰力影響一致）。
+// S 越大越平（戰力影響小）；+EXP_BONUS 給玩家體驗補正。練滿(差~30)約 80%。
+const WIN_SENSITIVITY = 25;
+const WIN_EXP_BONUS   = 0.05;
 function computeWinProb(myId, st, enemyId) {
-    const myPower = getCharacterPower(myId);
-    const myCap   = getTierCap(getCharacterStage(myId));
-    const train   = st.trainingBonus ?? 0;
-    const myStr   = Math.min(myPower + train, myCap);
-    const eStr    = getCharacterPower(enemyId);
-    const expBonus   = 0.10;
-    const otherBonus = 0;
-    const denom = myStr + eStr;
-    if (denom <= 0) return 0.5 + expBonus + otherBonus;  // 兩邊都 0 → 給體驗補正後預設
-    const raw = myStr / denom + expBonus + otherBonus;
-    return Math.max(0, Math.min(1, raw));
+    const myCap = getTierCap(getCharacterStage(myId));
+    const myStr = Math.min(getCharacterPower(myId) + (st.trainingBonus ?? 0), myCap);
+    const eStr  = getCharacterPower(enemyId);
+    const p = 1 / (1 + Math.exp(-(myStr - eStr) / WIN_SENSITIVITY)) + WIN_EXP_BONUS;
+    return Math.max(0, Math.min(1, p));
 }
 
 function _hashSeed(seed) {

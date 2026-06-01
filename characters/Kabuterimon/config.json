@@ -63,12 +63,7 @@
   "evolvesTo": [
     {
       "character": "megakabuterimon",
-      "conditions": [
-        {
-          "type": "cost_threshold",
-          "usd": 10
-        }
-      ]
+      "conditions": [{ "type": "cost_threshold", "usd": 15 }, { "type": "win_rate", "pct": 60, "minBattles": 8 }]
     }
   ]
 }

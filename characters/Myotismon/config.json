@@ -20,6 +20,6 @@
     {"frames": [8]}
   ],
   "evolvesTo": [
-    { "character": "venommyotismon", "conditions": [{ "type": "cost_threshold", "usd": 10 }] }
+    { "character": "venommyotismon", "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 65, "minBattles": 12 }] }
   ]
 }

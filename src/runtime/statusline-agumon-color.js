@@ -93,6 +93,8 @@ process.stdin.on('end', () => {
             }
             // Sleep 開關（cheat）：持續到 --wake 才解除，發訊息不會喚醒
             st._forceSleep = !!force.forceSleep;
+            // Freeze 開關（cheat）：凍結自動進化，持續到 --unfreeze（手動 evolve 不受影響）
+            st._freezeEvolve = !!force.freezeEvolve;
             // Card token：cheat 顯示狀態卡（不排隊：trigger 當下若被長動畫擋住直接丟；睡覺不算阻擋）
             if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
                 const age = Date.now() - force.cardTriggerTs;
@@ -162,8 +164,8 @@ process.stdin.on('end', () => {
             st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
             delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
         }
-        // 3. 自然觸發：checkEvolution 命中
-        if (!(st.evoStartStep >= 0)) {
+        // 3. 自然觸發：checkEvolution 命中（freeze 凍結時跳過，cost 仍累積，解除後達標即進化）
+        if (!(st.evoStartStep >= 0) && !st._freezeEvolve) {
             const nextChar = checkEvolution(st, i, config);
             if (nextChar) {
                 st.evoStartStep = step;

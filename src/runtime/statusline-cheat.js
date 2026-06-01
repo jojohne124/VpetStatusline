@@ -24,7 +24,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 if (!args.length) {
@@ -33,6 +33,7 @@ if (!args.length) {
     console.log('  vpet reset                  reset 到隨機 starter');
     console.log('  vpet battle [enemy]         立即觸發戰鬥（可加 win / lose 強制勝負）');
     console.log('  vpet evolve <next>          立即播進化表演');
+    console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
     console.log('  vpet pvp [code]             幽靈對戰（隨機 / 指名 friend code）');
     console.log('  vpet code [name]            查看 / 設定 friend code 與名稱');
@@ -250,6 +251,26 @@ if (args[0] === '--sleep' || args[0] === '--wake') {
         delete force.forceSleep;
         writeForce(force);
         console.log('✓ 已喚醒（解除強制睡覺）');
+    }
+    process.exit(0);
+}
+
+// ── --freeze / --unfreeze：凍結進化開關 ──────────────────────────
+// 凍結後即使滿足進化條件也不會自動進化（手動 vpet evolve 仍可）。持續到 unfreeze。
+if (args[0] === '--freeze' || args[0] === '--unfreeze') {
+    const force = readForce();
+    let on;
+    if (args[0] === '--unfreeze' || args[1] === 'off') on = false;
+    else if (args[1] === 'on')                          on = true;
+    else                                                on = !force.freezeEvolve;   // 無參數 → 切換
+    if (on) {
+        force.freezeEvolve = true;
+        writeForce(force);
+        console.log('🧊 已凍結進化（滿足條件也不會自動進化；vpet evolve 仍可手動、vpet unfreeze 解除）');
+    } else {
+        delete force.freezeEvolve;
+        writeForce(force);
+        console.log('☀ 已解除進化凍結');
     }
     process.exit(0);
 }

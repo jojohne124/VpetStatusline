@@ -222,23 +222,21 @@ if (args[0] === '--pvp') {
             const target = args[1] ? normId(args[1]) : null;   // 指名不分大小寫
             const wantBot = target === PVP_BOT_CODE;
 
-            let opp, usingBot = false;
+            let opp;
             if (wantBot) {
                 // 指名固定練習對手：純本機，不上傳、不連線
                 opp = makeBot(me.stage);
-                usingBot = true;
             } else {
-                await pvpFetch('PUT', `/card/${me.code}`, me);   // 順手更新自己的卡
+                await pvpFetch('PUT', `/card/${encodeURIComponent(me.code)}`, me);   // 順手更新自己的卡
                 if (target) {
                     opp = await pvpFetch('GET', `/card/${encodeURIComponent(target)}`);
                 } else {
                     try {
-                        opp = await pvpFetch('GET', `/random?stage=${encodeURIComponent(me.stage)}&exclude=${me.code}`);
+                        opp = await pvpFetch('GET', `/random?stage=${encodeURIComponent(me.stage)}&exclude=${encodeURIComponent(me.code)}`);
                     } catch (e) {
                         // 配不到同階真人（no_opponent / 404）→ 退回固定練習對手；其他錯誤（403 等）照常拋出
                         if (/no_opponent|HTTP 404/.test(e.message)) {
                             opp = makeBot(me.stage);
-                            usingBot = true;
                         } else throw e;
                     }
                 }
@@ -272,8 +270,8 @@ if (args[0] === '--pvp') {
             force.pvpMeLabel       = String(me.code).slice(0, 22);    // 我方腳下名牌
             writeForce(force);
 
-            const tag = usingBot ? '（固定練習對手）' : '';
-            console.log(`✓ 幽靈對戰${tag}：vs ${oppLabel} (${opp.character}) → ${win ? '勝利 🏆' : '失敗'}　勝率 ${Math.round(winProb * 100)}%（下次 refresh 演出）`);
+            // 不印勝負與勝率（避免暴雷）；MAJAJA(bot) 視為一般玩家，log 不透露是練習對手
+            console.log(`✓ 幽靈對戰：vs ${oppLabel} (${opp.character}) — 開打！（下次 refresh 演出）`);
             process.exitCode = 0;   // 不用 process.exit()：fetch keep-alive socket 還在關閉時硬退會觸發
                                     // Windows libuv UV_HANDLE_CLOSING assertion。設 exitCode 讓事件迴圈自然排空。
         } catch (e) {

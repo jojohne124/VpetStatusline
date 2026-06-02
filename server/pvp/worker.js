@@ -22,6 +22,9 @@ const json = (obj, status = 200) =>
 const CARD_TTL = 60 * 60 * 24 * 30; // 30 天
 const RANDOM_SCAN = 20;             // 隨機模式最多取樣幾張來找同階
 
+// path segment 一律解碼，讓中文名牌的 key 與 query string 的 exclude（已自動解碼）一致
+const dec = s => { try { return decodeURIComponent(s); } catch { return s; } };
+
 export default {
   async fetch(req, env) {
     // 認證
@@ -34,31 +37,32 @@ export default {
 
     // PUT /card/:code  —— upsert
     if (req.method === 'PUT' && parts[0] === 'card' && parts[1]) {
+      const code = dec(parts[1]);
       let body;
       try { body = await req.json(); } catch { return json({ error: 'bad_json' }, 400); }
       const card = {
-        code: parts[1],
-        name: String(body.name || parts[1]).slice(0, 24),
+        code,
+        name: String(body.name || code).slice(0, 24),
         character: String(body.character || ''),
         power: Number(body.power) || 0,
         train: Number(body.train) || 0,
         stage: String(body.stage || ''),
         ts: Date.now(),
       };
-      await env.CARDS.put('c:' + parts[1], JSON.stringify(card), { expirationTtl: CARD_TTL });
+      await env.CARDS.put('c:' + code, JSON.stringify(card), { expirationTtl: CARD_TTL });
       return json({ ok: true, card });
     }
 
     // GET /card/:code  —— 指名
     if (req.method === 'GET' && parts[0] === 'card' && parts[1]) {
-      const v = await env.CARDS.get('c:' + parts[1]);
+      const v = await env.CARDS.get('c:' + dec(parts[1]));
       if (!v) return json({ error: 'not_found' }, 404);
       return json(JSON.parse(v));
     }
 
     // DELETE /card/:code  —— 刪卡（改名時清掉舊卡；冪等，不存在也回 ok）
     if (req.method === 'DELETE' && parts[0] === 'card' && parts[1]) {
-      await env.CARDS.delete('c:' + parts[1]);
+      await env.CARDS.delete('c:' + dec(parts[1]));
       return json({ ok: true });
     }
 

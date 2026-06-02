@@ -83,6 +83,8 @@ process.stdin.on('end', () => {
                     // PvP 名牌（戰鬥演出腳下）；非 PvP 戰鬥 force 無此欄 → 清空
                     st._pvpOppLabel = (typeof force.pvpOppLabel === 'string') ? force.pvpOppLabel : null;
                     st._pvpMeLabel  = (typeof force.pvpMeLabel  === 'string') ? force.pvpMeLabel  : null;
+                    // 跨階對戰不計勝率旗標（同階/手動/自動戰鬥皆 false → 照常計入）
+                    st._battleNoCount = (force.battleNoCount === true);
                 }
                 st.lastBattleTriggerTs = force.battleTriggerTs;   // 不論是否觸發都記下，避免日後 stale 重觸發
             }

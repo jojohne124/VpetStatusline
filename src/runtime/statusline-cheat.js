@@ -261,6 +261,9 @@ if (args[0] === '--pvp') {
             // 對手 ID label（戰鬥演出時顯示）：合併後名牌＝code
             const oppLabel = opp.code;
 
+            // 跨階對戰不計勝率（指名可跨階，但只有同階戰績影響勝率/進化，防刷）
+            const crossStage = opp.stage !== me.stage;
+
             // 寫進跟 --battle 完全一樣的 force 欄位 → statusline 照原流程演出
             const force = readForce();
             force.battleTriggerTs  = Date.now();
@@ -268,10 +271,13 @@ if (args[0] === '--pvp') {
             force.forceBattleWin   = win;
             force.pvpOppLabel      = String(oppLabel).slice(0, 22);   // 敵方腳下名牌
             force.pvpMeLabel       = String(me.code).slice(0, 22);    // 我方腳下名牌
+            if (crossStage) force.battleNoCount = true;               // 跨階 → 這場不計勝率
+            else            delete force.battleNoCount;
             writeForce(force);
 
             // 不印勝負與勝率（避免暴雷）；MAJAJA(bot) 視為一般玩家，log 不透露是練習對手
-            console.log(`✓ 幽靈對戰：vs ${oppLabel} (${opp.character}) — 開打！（下次 refresh 演出）`);
+            const xtag = crossStage ? '（跨階，不計勝率）' : '';
+            console.log(`✓ 幽靈對戰：vs ${oppLabel} (${opp.character})${xtag} — 開打！（下次 refresh 演出）`);
             process.exitCode = 0;   // 不用 process.exit()：fetch keep-alive socket 還在關閉時硬退會觸發
                                     // Windows libuv UV_HANDLE_CLOSING assertion。設 exitCode 讓事件迴圈自然排空。
         } catch (e) {
@@ -319,6 +325,7 @@ if (args[0] === '--battle') {
     else                  delete force.forceBattleWin;
     delete force.pvpOppLabel;             // 手動戰鬥非 PvP，清掉殘留名牌
     delete force.pvpMeLabel;
+    delete force.battleNoCount;           // 手動戰鬥照常計入勝率
     writeForce(force);
     const enemyLabel = enemy || '同階隨機敵人';
     const winLabel   = win === null ? '依 trigger 決定' : (win ? '勝利' : '失敗');

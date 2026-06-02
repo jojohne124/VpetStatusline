@@ -395,7 +395,8 @@ function startBattle(st, step, myId, seed) {
     // PvP 名牌 label：來自 _pvpOppLabel/_pvpMeLabel（statusline 從 force 帶入）；非 PvP 戰鬥則清空
     st.pvpOppLabel        = st._pvpOppLabel || null;
     st.pvpMeLabel         = st._pvpMeLabel || null;
-    delete st._pvpOppLabel; delete st._pvpMeLabel;
+    st.battleNoCount      = st._battleNoCount || false;   // 跨階 PvP → 這場不計勝率
+    delete st._pvpOppLabel; delete st._pvpMeLabel; delete st._battleNoCount;
 }
 
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
@@ -500,6 +501,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.battleShownElapsed = -1;
             st.pvpOppLabel        = null;
             st.pvpMeLabel         = null;
+            st.battleNoCount      = false;
         } else if (shownElapsed < length) {
             st.battleShownElapsed = shownElapsed;
             return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
@@ -507,7 +509,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
             // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
             // 「結束」而重複加計（同 lastBattleTriggerTs 的思路）。
-            if (st.lastBattleCountedStartStep !== st.battleStartStep) {
+            // 跨階 PvP（st.battleNoCount）不計勝率；同階/自動/手動戰鬥照常計入
+            if (!st.battleNoCount && st.lastBattleCountedStartStep !== st.battleStartStep) {
                 st.lastBattleCountedStartStep = st.battleStartStep;
                 st.battleTotalCount = (st.battleTotalCount || 0) + 1;
                 if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
@@ -519,6 +522,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.battleShownElapsed = -1;
             st.pvpOppLabel        = null;
             st.pvpMeLabel         = null;
+            st.battleNoCount      = false;
             st.lastStepSeen       = step;
             const PERIOD     = MAX_POS * 2;                            // 40
             const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'

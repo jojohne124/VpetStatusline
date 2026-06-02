@@ -158,6 +158,11 @@ const evenHold = n => n % 2 === 0 ? n : n + 1;
 // ── 進化（Evolution）─────────────────────────────────────────────
 const EVO_LENGTH = 12;                                                 // 0-5 dna1/2/3 ×2 / 6-7 dna_end1 隱形 / 8 dna_end2 光繭破裂 / 9-11 新角色 IDLE-HAPPY 交替
 
+// Reset 掉落表演：新 starter 從上方掉進畫面（超出上緣裁掉，不加高），落地腳下左右噴煙塵
+const DROP_FALL   = 3;                                                 // 掉落幀數（0..DROP_FALL 從上滑到定位）
+const DROP_LAND   = 2;                                                 // 落地停留 + 煙塵幀數
+const DROP_LENGTH = DROP_FALL + DROP_LAND;
+
 function decideEvoFrame(elapsed, oldF, newF, pos) {
     const base = {
         kind: 'evo',
@@ -454,6 +459,27 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.battleVersion = pickBattleVersion(st.characterId, st.battleEnemy);
         }
         delete st._forceBattle; delete st._forceBattleWin; delete st._forceBattleEnemy;
+    }
+
+    // ── Reset 掉落表演（新 starter 空降；優先於 walk/roar，與 evo/battle 互斥）─────────
+    if (st.dropStartStep != null && st.dropStartStep >= 0) {
+        const targetElapsed = step - st.dropStartStep;
+        const prevShown     = st.dropShownElapsed ?? -1;
+        const shownElapsed  = Math.min(targetElapsed, prevShown + 1);   // 每拍最多 +1
+        if (targetElapsed < 0 || targetElapsed >= DROP_LENGTH + 8) {
+            // 殘留清理（跨機/跨重啟）
+            st.dropStartStep = -1; st.dropShownElapsed = -1;
+        } else if (shownElapsed >= 0 && shownElapsed < DROP_LENGTH) {
+            st.dropShownElapsed = shownElapsed;
+            return { kind: 'drop', elapsed: shownElapsed };
+        } else {
+            // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
+            st.dropStartStep = -1; st.dropShownElapsed = -1;
+            st.lastStepSeen = step;
+            const PERIOD    = MAX_POS * 2;
+            const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
+            st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+        }
     }
 
     // ── 進化表演（最高優先；超越 battle、roar）─────────
@@ -1044,15 +1070,75 @@ function composeEvoScene({ frame, charArt, shared, charRightOffset = null }) {
     return renderCells(buffer);
 }
 
+// 把 cell rows 畫到 buffer 的 (row0, col0)，上下左右都裁切（paintCells 只裁 column、固定 row 0）
+function paintCellsAt(buffer, rows, row0, col0) {
+    if (!rows) return;
+    const H = buffer.length, W = buffer[0].length;
+    for (let r = 0; r < rows.length; r++) {
+        const y = row0 + r;
+        if (y < 0 || y >= H) continue;
+        for (let c = 0; c < rows[r].length; c++) {
+            const x = col0 + c;
+            if (x < 0 || x >= W || !rows[r][c]) continue;
+            buffer[y][x] = rows[r][c];
+        }
+    }
+}
+
+// 裁出 cell rows 的非空 bounding box（去掉四周空白），回傳 {rows,w,h} 或 null
+function trimCells(rows) {
+    if (!rows) return null;
+    let minR = Infinity, maxR = -1, minC = Infinity, maxC = -1;
+    for (let r = 0; r < rows.length; r++)
+        for (let c = 0; c < rows[r].length; c++)
+            if (rows[r][c]) { if (r < minR) minR = r; if (r > maxR) maxR = r; if (c < minC) minC = c; if (c > maxC) maxC = c; }
+    if (maxR < 0) return null;
+    const out = [];
+    for (let r = minR; r <= maxR; r++) {
+        const row = [];
+        for (let c = minC; c <= maxC; c++) row.push(rows[r][c] || null);
+        out.push(row);
+    }
+    return { rows: out, w: maxC - minC + 1, h: maxR - minR + 1 };
+}
+
+// ── Reset 掉落場景：角色從上方掉入（超出上緣裁切），落地腳下左右噴煙塵 ──
+// 煙塵自動裁出 bounding box，貼在角色「輪廓外側」左右腳邊（同一張圖、右側鏡射），
+// 否則畫在角色同欄位會被身體蓋住。使用者只要畫一撮煙、放哪都行。
+function composeDropScene({ charRows, dustRows, elapsed }) {
+    if (!charRows || !charRows.length) return [''];
+    const H    = charRows.length;
+    const CW   = charRows[0].length;          // 角色寬（通常 16）
+    const W    = BATTLE_SCENE_WIDTH;          // 與戰鬥同寬，角色置中（避免靠左）
+    const charCol = BATTLE_CENTER_COL;        // 置中欄位（18）
+    const buffer  = Array.from({ length: H }, () => Array(W).fill(null));
+
+    // 掉落 y 位移：elapsed 0 → 只露出底部一條（其餘在上緣外被裁）；DROP_FALL → 落定 row 0
+    const fall = Math.min(elapsed, DROP_FALL);
+    const yOff = -Math.round((H - 1) * (1 - fall / DROP_FALL));   // -(H-1) .. 0
+    paintCellsAt(buffer, charRows, yOff, charCol);
+
+    // 落地後（含當拍）噴煙塵：貼角色腳下、左右輪廓外側（左=鏡射、右=原圖）
+    const puff = trimCells(dustRows);
+    if (elapsed >= DROP_FALL && puff) {
+        const top = H - puff.h;                              // 貼底（腳下）
+        paintCellsAt(buffer, flipRows(puff.rows), top, charCol - puff.w);  // 左腳（鏡射）
+        paintCellsAt(buffer, puff.rows,           top, charCol + CW);      // 右腳（原圖）
+    }
+    return renderCells(buffer);
+}
+
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     ANCHOR_GAP,
     BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT,
     hasCutIn, pickBattleVersion, battleLength,
     EVO_LENGTH,
+    DROP_LENGTH,
     decideBattleFrame,
     decideEvoFrame,
     composeEvoScene,
+    composeDropScene,
     loadState, saveState, atomicWrite,
     decideAgumon,
     checkEvolution,

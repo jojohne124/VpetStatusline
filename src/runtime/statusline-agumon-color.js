@@ -9,7 +9,7 @@ const {
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame,
-    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene,
+    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
 } = require('./agumon-core');
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
@@ -96,6 +96,12 @@ process.stdin.on('end', () => {
                 }
                 st.lastEvolveTriggerTs = force.evolveTriggerTs;
             }
+            // Reset 掉落 token：reset 抽到新 starter → 播空降表演（10 秒內有效，不 consume）
+            if (force.dropTriggerTs && force.dropTriggerTs !== st.lastDropTriggerTs) {
+                const age = Date.now() - force.dropTriggerTs;
+                if (age >= 0 && age < 10000 && !(st.dropStartStep >= 0)) st._forceDrop = true;
+                st.lastDropTriggerTs = force.dropTriggerTs;
+            }
             // Sleep 開關（cheat）：持續到 --wake 才解除，發訊息不會喚醒
             st._forceSleep = !!force.forceSleep;
             // Freeze 開關（cheat）：凍結自動進化，持續到 --unfreeze（手動 evolve 不受影響）
@@ -161,6 +167,15 @@ process.stdin.on('end', () => {
         }
 
         const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
+
+        // 1.5 cheat trigger：reset 掉落表演（角色已切換成新 starter，演出空降）
+        if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
+            st.dropStartStep = step;
+            st.dropShownElapsed = -1;
+            delete st._forceDrop;
+            st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;  // 互斥
+            delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
+        }
 
         // 2. cheat trigger：強制進化
         if (st._forceEvolve && !(st.evoStartStep >= 0)) {
@@ -244,6 +259,14 @@ process.stdin.on('end', () => {
                 shared,
                 charRightOffset: evoChar?.charDef?.RIGHT_OFFSET ?? null,
             });
+        }
+
+        if (result.kind === 'drop' && !outputLines) {
+            const art      = tryLoadArt(artFile);
+            const idle     = charDef.F?.IDLE_1 ?? 0;
+            const charRows = art ? getFacingRows(art, idle, 'left', charDef.RIGHT_OFFSET) : null;
+            const dustRows = getSharedFrame(loadShared(), 'dust', 0);   // 未畫時為空白 → 不顯示煙塵
+            outputLines = composeDropScene({ charRows, dustRows, elapsed: result.elapsed });
         }
 
         if (result.kind === 'card' && !outputLines) {

@@ -310,7 +310,7 @@ if (args[0] === '--battle') {
         const a = args[i];
         if (a === '--win' || a === 'win')        win = true;
         else if (a === '--lose' || a === 'lose') win = false;
-        else if (!a.startsWith('--') && a !== 'win' && a !== 'lose' && !enemy) enemy = a;
+        else if (!a.startsWith('--') && a !== 'win' && a !== 'lose' && !enemy) enemy = a.toLowerCase();  // 角色名不分大小寫
     }
     if (enemy && !roster.includes(enemy)) {
         console.log(`找不到敵人：${enemy}`);
@@ -379,7 +379,7 @@ if (args[0] === '--freeze' || args[0] === '--unfreeze') {
 
 // ── --evolve 模式 ────────────────────────────────────────────────
 if (args[0] === '--evolve') {
-    const target = args[1];
+    const target = args[1] ? args[1].toLowerCase() : args[1];   // 角色名不分大小寫
     if (!target) {
         console.log('用法：vpet evolve <next-char>');
         roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
@@ -409,7 +409,7 @@ if (arg === '--reset') {
     console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);
-    target = isNaN(idx) ? arg : roster[idx - 1];
+    target = isNaN(idx) ? arg.toLowerCase() : roster[idx - 1];   // 角色名不分大小寫
 }
 
 if (!target || !roster.includes(target)) {
@@ -424,5 +424,6 @@ force.resetCostBase = true;
 // 清掉殘留的進化 trigger，避免「切角色 + 之前還沒消費掉的 --evolve」同次 refresh 一起觸發
 delete force.evolveTriggerTs;
 delete force.evolveTarget;
+if (arg === '--reset') force.dropTriggerTs = Date.now();   // reset 抽 starter → 播空降表演
 writeForce(force);
 console.log(`✓ 已切換至 ${target}（下次 refresh 生效）`);

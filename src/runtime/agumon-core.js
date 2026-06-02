@@ -32,6 +32,16 @@ const SEP     = ` ${DIM}│${R} `;
 const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 const visLen    = s => [...stripAnsi(s)].length;
 
+// 終端顯示寬度（東亞全形/CJK 算 2 格），用於把文字對齊到指定 cell 欄位
+function isWideChar(ch) {
+    const c = ch.codePointAt(0);
+    return (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0xA4CF) ||
+           (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) ||
+           (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60) ||
+           (c >= 0xFFE0 && c <= 0xFFE6) || (c >= 0x20000 && c <= 0x3FFFD);
+}
+const dispWidth = s => [...stripAnsi(s)].reduce((w, ch) => w + (isWideChar(ch) ? 2 : 1), 0);
+
 // ── 狀態 ─────────────────────────────────────────────────────────
 // 清掃孤兒 tmp：process 在 write→rename 之間被 kill 時 catch 來不及執行，會留下 tmp 殘骸。
 // 掃同目錄、刪掉超過 30 秒未被 rename 掉的 <file>.*.tmp（在途的更年輕，不碰）。
@@ -382,6 +392,10 @@ function startBattle(st, step, myId, seed) {
     st.battlePending      = false;
     st.battleVersion      = pickBattleVersion(myId, st.battleEnemy);
     st.battleShownElapsed = -1;
+    // PvP 名牌 label：來自 _pvpOppLabel/_pvpMeLabel（statusline 從 force 帶入）；非 PvP 戰鬥則清空
+    st.pvpOppLabel        = st._pvpOppLabel || null;
+    st.pvpMeLabel         = st._pvpMeLabel || null;
+    delete st._pvpOppLabel; delete st._pvpMeLabel;
 }
 
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
@@ -484,6 +498,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.battleEnemy        = null;
             st.battleVersion      = 1;
             st.battleShownElapsed = -1;
+            st.pvpOppLabel        = null;
+            st.pvpMeLabel         = null;
         } else if (shownElapsed < length) {
             st.battleShownElapsed = shownElapsed;
             return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
@@ -501,6 +517,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.battleEnemy        = null;
             st.battleVersion      = 1;
             st.battleShownElapsed = -1;
+            st.pvpOppLabel        = null;
+            st.pvpMeLabel         = null;
             st.lastStepSeen       = step;
             const PERIOD     = MAX_POS * 2;                            // 40
             const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
@@ -932,7 +950,38 @@ function composeBattleScene(opts) {
         if (wRows) paintCells(buffer, wRows, BATTLE_SCENE_WIDTH - 16);  // col 36，sprite 內容靠上 → 右上角
     }
 
-    return renderCells(buffer);
+    const lines = renderCells(buffer);
+
+    // PvP 名牌：白字、置於各自角色腳底下（場景最底加一列）。
+    // 我方角色固定 col 0-15、敵方 col 36-51，各置中對齊自己的 16-cell 區塊。
+    // result（勝負結算）階段收起名牌 → 敵方已離場、我方移到中央，標籤已無對應位置。
+    if (frame.phase !== 'result') {
+        const cap = captionRow([
+            { col: BATTLE_ME_LEFT_COL    + footCenter(opts.meLabel),  label: opts.meLabel  },
+            { col: BATTLE_ENEMY_RIGHT_COL + footCenter(opts.oppLabel), label: opts.oppLabel },
+        ]);
+        if (cap) lines.push(cap);
+    }
+
+    return lines;
+}
+
+// 名牌置中於 16-cell 角色區塊的左偏移
+function footCenter(label) {
+    return label ? Math.max(0, Math.floor((16 - dispWidth(label)) / 2)) : 0;
+}
+
+// 在場景最底組一列：把多個名牌放到各自欄位（依 col 排序、依顯示寬度避免重疊）
+function captionRow(items) {
+    const list = items.filter(x => x.label).sort((a, b) => a.col - b.col);
+    if (!list.length) return null;
+    let line = '', cur = 0;
+    for (const { col, label } of list) {
+        if (col > cur) { line += '⠀'.repeat(col - cur); cur = col; }
+        line += `${WHITE}${label}${R}`;
+        cur += dispWidth(label);
+    }
+    return line;
 }
 
 // ── 狀態卡合成（左 3 行文字 + 右 CutIn 32 寬，總 52 寬 × 8 高）─────

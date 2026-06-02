@@ -35,9 +35,11 @@ if (!args.length) {
     console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
     console.log('  vpet evolve <next>          立即播進化表演');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
-    console.log('  vpet pvp-setup <url> <key> [name]  一鍵設定 PvP（首次用這個）');
-    console.log('  vpet pvp [code]             幽靈對戰（隨機 / 指名 friend code）');
-    console.log('  vpet code [name]            查看 / 設定 friend code 與名稱');
+    console.log('  vpet pvp-setup <url> <key> [名牌]  一鍵設定 PvP（首次用這個）');
+    console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名名牌；配不到真人自動派固定對手）');
+    console.log('  vpet pvp MAJAJA             指名固定練習對手（依你的階級，純本機免連線）');
+    console.log('  vpet code                   查看名牌 / server');
+    console.log('  vpet code <名牌>            設定名牌（顯示名＝指名 ID，中文或英數，例 vpet code 阿張）');
     console.log('  vpet pvp-server <url> [key] 只設後端（進階）');
     console.log('\n目前角色列表:');
     roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
@@ -72,6 +74,9 @@ function genCode() {
     let s = ''; for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)];
     return s;
 }
+// 名牌（顯示名＝指名 ID 合一）：1-16 字、中文或英數、不可空白/符號；ASCII 自動轉大寫（指名不分大小寫）
+function normId(raw) { return String(raw || '').trim().toUpperCase(); }
+function validId(s)  { return /^[\p{L}\p{N}]{1,16}$/u.test(s); }
 function ensureIdentity() {
     const p = readPvp();
     if (!p.code) { p.code = genCode(); writePvp(p); }
@@ -82,16 +87,31 @@ function myCard() {
     const char = st.characterId || 'agumon';
     const p    = ensureIdentity();
     return {
-        code: p.code, name: p.name || p.code,
+        code: p.code, name: p.code,   // 合併：顯示名＝名牌（=code）
         character: char,
         power: core.getCharacterPower(char),
         train: st.trainingBonus || 0,
         stage: core.getCharacterStage(char),
     };
 }
+
+// ── 固定練習對手（bot）：配不到真人時 fallback，或 `vpet pvp MAJAJA` 指名測試 ──
+// ID 一律 MAJAJA，依玩家階級派出對應角色（純本機、不需 server）。
+const PVP_BOT_CODE = 'MAJAJA';
+const PVP_BOTS = { Child: 'babygodzilla', Adult: 'biollante', Perfect: 'kiryu', Ultimate: 'destoroyah' };
+function makeBot(stage) {
+    const character = PVP_BOTS[stage] || PVP_BOTS.Child;   // UnStage 等未知 → 退 Child
+    return {
+        code: PVP_BOT_CODE, name: PVP_BOT_CODE,
+        character,
+        power: core.getCharacterPower(character),
+        train: 0,
+        stage,                                             // 用玩家階級，保證同階對戰
+    };
+}
 async function pvpFetch(method, urlPath, body) {
     const p = readPvp();
-    if (!p.endpoint) throw new Error('尚未設定 server，請先：vpet pvp-setup <url> <key> [名字]');
+    if (!p.endpoint) throw new Error('尚未設定 server，請先：vpet pvp-setup <url> <key> [名牌]');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
@@ -107,25 +127,32 @@ async function pvpFetch(method, urlPath, body) {
     } finally { clearTimeout(timer); }
 }
 
-// ── --pvp-setup <url> <key> [name]：一鍵上手（server + 密鑰 + 名稱，並印出 friend code）──
+// ── --pvp-setup <url> <key> [名牌]：一鍵上手（server + 密鑰 + 名牌）──
 if (args[0] === '--pvp-setup') {
     const url = args[1], key = args[2];
     if (!url || !key) {
-        console.log('用法：vpet pvp-setup <url> <key> [name]');
-        console.log('  url / key 由 PvP server 架設者(host)提供');
+        console.log('用法：vpet pvp-setup <url> <key> [名牌]');
+        console.log('  url / key 由 PvP server 架設者(host)提供；名牌＝顯示名＝指名 ID');
         process.exit(1);
     }
     const p = readPvp();
     p.endpoint = url;
     p.key      = key;
-    if (args[3]) p.name = args.slice(3).join(' ').slice(0, 24);
+    if (args[3]) {
+        const id = normId(args[3]);
+        if (!validId(id) || id === PVP_BOT_CODE) {
+            console.log('✗ 名牌格式：1-16 字、中文或英數、不可空白/符號，且不可為 MAJAJA');
+            process.exit(1);
+        }
+        p.code = id;
+    }
     if (!p.code) p.code = genCode();
+    delete p.name;
     writePvp(p);
     console.log('✓ PvP 設定完成');
-    console.log(`  server     ：${p.endpoint}`);
-    console.log(`  friend code：${p.code}  ← 貼給朋友讓他指名你`);
-    console.log(`  顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
-    console.log('  開打：vpet pvp（隨機同階） / vpet pvp <code>（指名）');
+    console.log(`  server：${p.endpoint}`);
+    console.log(`  名牌  ：${p.code}  ← 貼給朋友讓他指名你（＝顯示名＝指名 ID）`);
+    console.log('  開打：vpet pvp（隨機同階） / vpet pvp <名牌>（指名）');
     process.exit(0);
 }
 
@@ -139,22 +166,51 @@ if (args[0] === '--pvp-server') {
     if (!p.code) p.code = genCode();
     writePvp(p);
     console.log(`✓ PvP server 已設定：${url}${args[2] ? '（含密鑰）' : ''}`);
-    console.log(`  你的 friend code：${p.code}`);
+    console.log(`  你的名牌：${p.code}`);
     process.exit(0);
 }
 
-// ── --code [name]：查看 / 設定身分 ──────────────────────────────
+// ── --code [名牌]：查看 / 設定名牌（顯示名＝指名 ID 合一）──────────
 if (args[0] === '--code') {
     const p = ensureIdentity();
-    if (args[1]) {
-        p.name = args.slice(1).join(' ').slice(0, 24);
+    // 取值：vpet code <名牌>；相容舊寫法 vpet code id <名牌>
+    const val = (args[1] === 'id') ? args[2] : args[1];
+    if (val != null) {
+        const id = normId(val);
+        if (!validId(id)) {
+            console.log('✗ 名牌格式：1-16 字、中文或英數、不可有空白與符號。例：vpet code 阿張 / vpet code KAI123');
+            process.exit(1);
+        }
+        if (id === PVP_BOT_CODE) {
+            console.log(`✗「${PVP_BOT_CODE}」是內建練習對手保留字，請換一個。`);
+            process.exit(1);
+        }
+        const old = p.code;
+        if (old === id) { console.log(`名牌已是 ${id}，未變更。`); process.exit(0); }
+        p.code = id;
+        delete p.name;            // 合併：不再有獨立顯示名
         writePvp(p);
-        console.log(`✓ 顯示名稱已設定：${p.name}`);
-    } else {
-        console.log(`friend code：${p.code}`);
-        console.log(`顯示名稱   ：${p.name || '(未設定，預設用 code)'}`);
-        console.log(`server     ：${p.endpoint || '(未設定，vpet pvp-setup <url> <key>)'}`);
+        console.log(`✓ 名牌已設為：${id}（原 ${old}）`);
+        console.log('  這同時是你的顯示名與指名 ID；下次 vpet pvp 會把卡上傳到新名牌。');
+        console.log('  ⚠ 同群朋友間別跟人撞名牌（上傳會覆蓋對方卡片）。');
+        // 改名 → 順手刪掉 server 上的舊卡（非致命：沒設 server 或刪除失敗都不影響改名）
+        if (p.endpoint) {
+            (async () => {
+                try {
+                    await pvpFetch('DELETE', `/card/${encodeURIComponent(old)}`);
+                    console.log(`  🧹 已刪除 server 上的舊卡：${old}`);
+                } catch (e) {
+                    console.log(`  （舊卡 ${old} 未刪除：${e.message}；30 天 TTL 仍會自動過期）`);
+                }
+                process.exitCode = 0;   // 不用 process.exit()：fetch socket 關閉中硬退會觸發 Windows UV assertion
+            })();
+            return;
+        }
+        process.exit(0);
     }
+    console.log(`名牌  ：${p.code}　（＝顯示名＝指名 ID）`);
+    console.log(`server：${p.endpoint || '(未設定，vpet pvp-setup <url> <key>)'}`);
+    console.log(`改名牌：vpet code <新名牌>（中文或英數，例 vpet code 阿張）`);
     process.exit(0);
 }
 
@@ -163,12 +219,30 @@ if (args[0] === '--pvp') {
     (async () => {
         try {
             const me = myCard();
-            await pvpFetch('PUT', `/card/${me.code}`, me);   // 順手更新自己的卡
+            const target = args[1] ? normId(args[1]) : null;   // 指名不分大小寫
+            const wantBot = target === PVP_BOT_CODE;
 
-            const target = args[1];
-            const opp = target
-                ? await pvpFetch('GET', `/card/${encodeURIComponent(target)}`)
-                : await pvpFetch('GET', `/random?stage=${encodeURIComponent(me.stage)}&exclude=${me.code}`);
+            let opp, usingBot = false;
+            if (wantBot) {
+                // 指名固定練習對手：純本機，不上傳、不連線
+                opp = makeBot(me.stage);
+                usingBot = true;
+            } else {
+                await pvpFetch('PUT', `/card/${me.code}`, me);   // 順手更新自己的卡
+                if (target) {
+                    opp = await pvpFetch('GET', `/card/${encodeURIComponent(target)}`);
+                } else {
+                    try {
+                        opp = await pvpFetch('GET', `/random?stage=${encodeURIComponent(me.stage)}&exclude=${me.code}`);
+                    } catch (e) {
+                        // 配不到同階真人（no_opponent / 404）→ 退回固定練習對手；其他錯誤（403 等）照常拋出
+                        if (/no_opponent|HTTP 404/.test(e.message)) {
+                            opp = makeBot(me.stage);
+                            usingBot = true;
+                        } else throw e;
+                    }
+                }
+            }
 
             if (!roster.includes(opp.character)) {
                 console.log(`✗ 對手角色「${opp.character}」本機沒有資產，無法演出（雙方需同一套角色）`);
@@ -186,14 +260,20 @@ if (args[0] === '--pvp') {
             let h = 0; for (const ch of seedStr) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
             const win = core.seedRand01(h) < winProb;
 
+            // 對手 ID label（戰鬥演出時顯示）：合併後名牌＝code
+            const oppLabel = opp.code;
+
             // 寫進跟 --battle 完全一樣的 force 欄位 → statusline 照原流程演出
             const force = readForce();
             force.battleTriggerTs  = Date.now();
             force.forceBattleEnemy = opp.character;
             force.forceBattleWin   = win;
+            force.pvpOppLabel      = String(oppLabel).slice(0, 22);   // 敵方腳下名牌
+            force.pvpMeLabel       = String(me.code).slice(0, 22);    // 我方腳下名牌
             writeForce(force);
 
-            console.log(`✓ 幽靈對戰：vs ${opp.name || opp.code} (${opp.character}) → ${win ? '勝利 🏆' : '失敗'}　勝率 ${Math.round(winProb * 100)}%（下次 refresh 演出）`);
+            const tag = usingBot ? '（固定練習對手）' : '';
+            console.log(`✓ 幽靈對戰${tag}：vs ${oppLabel} (${opp.character}) → ${win ? '勝利 🏆' : '失敗'}　勝率 ${Math.round(winProb * 100)}%（下次 refresh 演出）`);
             process.exitCode = 0;   // 不用 process.exit()：fetch keep-alive socket 還在關閉時硬退會觸發
                                     // Windows libuv UV_HANDLE_CLOSING assertion。設 exitCode 讓事件迴圈自然排空。
         } catch (e) {
@@ -239,6 +319,8 @@ if (args[0] === '--battle') {
     else                  delete force.forceBattleEnemy;
     if (win !== null)     force.forceBattleWin   = win;
     else                  delete force.forceBattleWin;
+    delete force.pvpOppLabel;             // 手動戰鬥非 PvP，清掉殘留名牌
+    delete force.pvpMeLabel;
     writeForce(force);
     const enemyLabel = enemy || '同階隨機敵人';
     const winLabel   = win === null ? '依 trigger 決定' : (win ? '勝利' : '失敗');

@@ -3,9 +3,10 @@
 // 角色定位：純笨儲存。只存/取「戰鬥卡」，不做任何結算（勝負由 client 端決定性計算）。
 //
 // 路由：
-//   PUT  /card/:code                 上傳/更新我的卡（body = card JSON）
-//   GET  /card/:code                 指名：取某人的卡
-//   GET  /random?stage=&exclude=     隨機：取一張同階卡（排除自己）
+//   PUT    /card/:code               上傳/更新我的卡（body = card JSON）
+//   GET    /card/:code               指名：取某人的卡
+//   DELETE /card/:code               刪卡（改名時清掉舊卡；冪等）
+//   GET    /random?stage=&exclude=   隨機：取一張同階卡（排除自己）
 //
 // 認證：若設了 PVP_KEY secret，所有請求須帶 header  X-Pvp-Key: <key>
 // 綁定：KV namespace binding = CARDS
@@ -53,6 +54,12 @@ export default {
       const v = await env.CARDS.get('c:' + parts[1]);
       if (!v) return json({ error: 'not_found' }, 404);
       return json(JSON.parse(v));
+    }
+
+    // DELETE /card/:code  —— 刪卡（改名時清掉舊卡；冪等，不存在也回 ok）
+    if (req.method === 'DELETE' && parts[0] === 'card' && parts[1]) {
+      await env.CARDS.delete('c:' + parts[1]);
+      return json({ ok: true });
     }
 
     // GET /random?stage=&exclude=  —— 隨機同階

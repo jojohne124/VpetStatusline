@@ -80,6 +80,9 @@ process.stdin.on('end', () => {
                     st._forceBattle = true;
                     if (typeof force.forceBattleWin === 'boolean')   st._forceBattleWin   = force.forceBattleWin;
                     if (typeof force.forceBattleEnemy === 'string')  st._forceBattleEnemy = force.forceBattleEnemy;
+                    // PvP 名牌（戰鬥演出腳下）；非 PvP 戰鬥 force 無此欄 → 清空
+                    st._pvpOppLabel = (typeof force.pvpOppLabel === 'string') ? force.pvpOppLabel : null;
+                    st._pvpMeLabel  = (typeof force.pvpMeLabel  === 'string') ? force.pvpMeLabel  : null;
                 }
                 st.lastBattleTriggerTs = force.battleTriggerTs;   // 不論是否觸發都記下，避免日後 stale 重觸發
             }
@@ -221,6 +224,8 @@ process.stdin.on('end', () => {
                     shared,
                     meRightOffset:    charDef.RIGHT_OFFSET,
                     enemyRightOffset: enemyChar?.charDef?.RIGHT_OFFSET ?? null,
+                    oppLabel:         st.pvpOppLabel || null,   // PvP 對手名牌：白字置敵方腳下
+                    meLabel:          st.pvpMeLabel  || null,   // PvP 我方名牌：白字置我方腳下
                 });
             }
         }

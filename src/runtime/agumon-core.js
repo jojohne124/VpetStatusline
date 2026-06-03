@@ -86,6 +86,39 @@ function computeWalk(step, offset = 0) {
     return { pos, facing: phase < MAX_POS ? 'right' : 'left' };
 }
 
+// ── 進化花費累積（cost_threshold 用）──────────────────────────────
+// 改良差額制：i.cost.total_cost_usd 是「本 session」累計，關視窗→新 session 會歸 0。
+// 舊的「base 相減」在跨 session 時會進度歸零、甚至 delta 變負卡住。
+// 改為 per-session 高水位 + 加總：每個 session_id 記其最高 cost，總和 = 累積花費。
+// 進化/reset 時清空。max() 冪等 → 多視窗共用 state 也 race-safe（不會被交替灌爆）。
+// 每個 session 記 { s: 起算基準 cost, p: 高水位 cost }；貢獻 = max(0, p - s)。
+// 首見該 session 時 s=p=當前 cost → 從這一刻起算（清空後當前 session 貢獻自然歸 0，
+// 不會把已花的 cost 重新算進來）。跨 session 各記各的、加總 → 關視窗不丟進度。
+const EVO_SPEND_CAP = 200;   // 防 state 膨脹：session 數上限（超過丟貢獻最小的；正常進化前不會到）
+function updateEvoSpend(st, i) {
+    const cost = i?.cost?.total_cost_usd;
+    const sid  = i?.session_id;
+    if (typeof cost !== 'number' || cost < 0 || !sid) return;
+    let m = st._evoSpendBySession;
+    if (!m || typeof m !== 'object') m = st._evoSpendBySession = {};
+    const e = m[sid];
+    if (!e || typeof e !== 'object') m[sid] = { s: cost, p: cost };   // 首見：以當前 cost 為基準
+    else if (cost > e.p) e.p = cost;                                  // 高水位（max 冪等 → race-safe）
+    const keys = Object.keys(m);
+    if (keys.length > EVO_SPEND_CAP) {
+        const contrib = k => Math.max(0, (m[k].p || 0) - (m[k].s || 0));
+        keys.sort((a, b) => contrib(a) - contrib(b));
+        for (const k of keys.slice(0, keys.length - EVO_SPEND_CAP)) delete m[k];
+    }
+}
+function evoSpendTotal(st) {
+    const m = st._evoSpendBySession;
+    if (!m) return 0;
+    let sum = 0;
+    for (const k in m) { const e = m[k]; if (e) sum += Math.max(0, (e.p || 0) - (e.s || 0)); }
+    return sum;
+}
+
 // ── 進化檢查 ─────────────────────────────────────────────────────
 // Returns new characterId if evolution triggered, else null
 // 單一條件評估，回傳 ready 狀態（true = 此條件已達成）
@@ -102,7 +135,7 @@ function evalCondition(cond, ns, st, input, nowSec) {
     }
 
     if (cond.type === 'cost_threshold') {
-        const delta = (input.cost?.total_cost_usd ?? 0) - (st._evoCostBase ?? 0);
+        const delta = evoSpendTotal(st);   // 跨 session 累積花費（高水位加總）
         if (delta >= (cond.usd ?? 10))
             st[ns + '_ready'] = true;
         return !!st[ns + '_ready'];
@@ -145,7 +178,7 @@ function checkEvolution(st, input, config) {
     ready.sort((a, b) => getCharacterPower(b.evo.character) - getCharacterPower(a.evo.character));
     const { evo, conditions } = ready[0];
     conditions.forEach((_, idx) => { delete st[`_evo_${evo.character}_c${idx}_ready`]; });
-    st._evoCostBase = input.cost?.total_cost_usd ?? 0; // 進化後重設差值基準
+    st._evoSpendBySession = {};   // 進化後清空累積花費，下一階重新累積
     return evo.character;
 }
 
@@ -409,6 +442,9 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     const { F, EXPRS, ROAR_FRAMES, TOKEN_RESET_FRAMES, sleepFrames, SLEEP_PERIOD } = charDef;
     const step = Math.floor(now / STEP_MS);
     const allowBattle = !!opts.allowBattle;
+
+    // 每 tick 累積本 session 花費（即使凍結/表演中也累積，避免漏記 cost 高水位）
+    updateEvoSpend(st, i);
 
     let hookFired = false;
     try {

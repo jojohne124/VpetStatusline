@@ -150,6 +150,14 @@ function evalCondition(cond, ns, st, input, nowSec) {
         return (wins / total) * 100 >= (cond.pct ?? 100);
     }
 
+    if (cond.type === 'time_of_day') {
+        // 日夜分歧：06:00–18:00 為日，其餘為夜。即時 gate（不 latch，同 win_rate），
+        // 用當地時間 getHours()。多視窗同一時刻判定一致 → 無 race。
+        const hour  = new Date().getHours();
+        const isDay = hour >= 6 && hour < 18;
+        return cond.period === 'night' ? !isDay : isDay;
+    }
+
     return false;
 }
 

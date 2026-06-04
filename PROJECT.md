@@ -149,12 +149,16 @@ agumon-cli/                              ← Git 管理範圍
 
 #### 1.3.2 進化條件類型
 
-| type | 行為 |
-|------|------|
-| `cost_threshold` | `cost.total_cost_usd` 比 `_evoCostBase` 多了 N 美金後 ready |
-| `r5h_peak` | 五小時用量達 threshold（預設 95%）後又跨過 reset 即 ready |
+| type | 欄位 | 行為 |
+|------|------|------|
+| `cost_threshold` | `usd` | 跨 session 累積花費（`_evoSpendBySession` 高水位加總）達 `usd` 後 latch ready |
+| `win_rate` | `pct`, `minBattles` | 即時累積勝率 `wins/total*100 >= pct` 且 `total >= minBattles`（**不 latch**，所見即所得） |
+| `r5h_peak` | `threshold` | 五小時用量達 threshold（預設 95%）後又跨過 reset 即 ready |
+| `time_of_day` | `period` | `period:"day"` → 06:00–18:00 為真；`"night"` → 反之（**不 latch**，即時 gate；給日夜分歧用，如 Gatomon→angewomon(day)/LadyDevimon(night)） |
 
 支援多條件 + `operator: "and"`/`"or"`。
+
+**分歧選擇**（`checkEvolution`）：每 tick 評估所有 `evolvesTo`、收集條件全達標者，**取進化目標 `power` 最強的那條**（= 勝率練越高、解鎖越強分支的獎勵機制；強分支因 gain 大、win% 門檻本來就較高）。日夜這類互斥條件天然分流，不會撞 power 平手。
 
 #### 1.3.3 狀態檔 `color-state.json`
 

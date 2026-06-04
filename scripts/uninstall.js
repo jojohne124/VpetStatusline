@@ -11,6 +11,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 const INSTALL_DIR = path.join(CLAUDE_HOME, 'agumon-statusline');
@@ -57,6 +58,18 @@ function main() {
             fs.renameSync(tmpStateBackup, STATE_DIR);
             console.log(`  [keep]  state/（已保留：${fs.readdirSync(STATE_DIR).join(', ') || '空'}）`);
         }
+    }
+
+    // 移除全域 vpet 指令（npm link 註冊的）；後備 ~/bin 薄殼一併清掉
+    console.log('\n— 移除 vpet 全域指令 —');
+    const unlinked = spawnSync('npm', ['unlink', '-g', 'agumon-cli'], { stdio: 'inherit', shell: true });
+    if (!unlinked.error && unlinked.status === 0) {
+        console.log('  [npm unlink] 已移除全域 vpet');
+    } else {
+        console.log('  [skip] npm unlink 未成功（可能本來就沒 link）');
+    }
+    for (const fn of ['vpet', 'vpet.bat']) {
+        rmIfExists(path.join(os.homedir(), 'bin', fn));
     }
 
     console.log('\n— settings.json 提醒（uninstall 不動它）—');

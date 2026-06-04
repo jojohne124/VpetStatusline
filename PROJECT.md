@@ -203,7 +203,7 @@ Battle flag 是一次性消耗，啟動後 statusline 會把這幾個欄位從 f
 
 **持久開關**（非一次性，持續到關閉）：`forceSleep`（`vpet sleep`/`wake`）、`freezeEvolve`（`vpet freeze`/`unfreeze`，凍結時跳過自動 `checkEvolution`，手動 evolve 不受影響）、`autoBattleOff`（`vpet battle off`/`on`，停用 prompt 後自動戰鬥，手動 `vpet battle` 不受影響）。
 
-**CLI 入口 `vpet`**：所有作弊碼透過 `vpet <cmd>` 操作（`~/bin/vpet` 薄殼 → 部署後的 `statusline-cheat.js`；`install-runtime` 自動安裝）。指令可省略 `--`。完整清單跑 `vpet` 無參數，使用者向用法見 [README](README.md#vpet-指令切角色--戰鬥--進化--pvp)。
+**CLI 入口 `vpet`**：所有作弊碼透過 `vpet <cmd>` 操作（npm bin：`bin/vpet.js` 跨平台薄殼 spawn → 部署後的 `statusline-cheat.js`；`install-runtime` 以 `npm link` 註冊到全域，失敗才退回 `~/bin` 複製）。指令可省略 `--`。完整清單跑 `vpet` 無參數，使用者向用法見 [README](README.md#vpet-指令切角色--戰鬥--進化--pvp)。
 **PvP（幽靈對戰）**：`vpet pvp` 把對手卡的結算結果寫進 `forceBattleEnemy`/`forceBattleWin`（沿用同一套 battle 渲染），詳見 [server/pvp/README.md](server/pvp/README.md)。
 
 ### 1.4 渲染管線（`statusline-agumon-color.js`）

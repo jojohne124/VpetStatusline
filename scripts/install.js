@@ -30,6 +30,7 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const REPO_ROOT   = path.resolve(__dirname, '..');
 const CLAUDE_HOME = path.join(os.homedir(), '.claude');
@@ -255,7 +256,21 @@ function updateSettings() {
 }
 
 function installLauncher() {
-    console.log('\n[8/8] 安裝 vpet 啟動器 -> ~/bin/');
+    console.log('\n[8/8] 註冊 vpet 全域指令');
+    // 首選：npm link —— npm 會把 vpet shim 放進它在 PATH 上的 global bin
+    // （Windows 自動產生 vpet.cmd / vpet.ps1），不需碰使用者 PATH，可攜到任何電腦。
+    const linked = spawnSync('npm', ['link'], { cwd: REPO_ROOT, stdio: 'inherit', shell: true });
+    if (!linked.error && linked.status === 0) {
+        console.log('  -> 已透過 npm link 註冊 vpet 到全域（npm 自動處理 PATH 與 Windows shim）');
+        console.log('     重開終端後即可用 vpet（或 Claude Code 內 ! vpet ...）');
+        return;
+    }
+    console.warn(`  [npm link 失敗${linked.error ? '：' + linked.error.message : '，exit ' + linked.status}] → 改用 ~/bin 後備方案`);
+    installLauncherFallback();
+}
+
+// 後備：npm link 不可用時，複製薄殼到 ~/bin（需使用者自行確保 ~/bin 在 PATH）
+function installLauncherFallback() {
     const binDir = path.join(os.homedir(), 'bin');
     ensureDir(binDir);
     let ok = 0;

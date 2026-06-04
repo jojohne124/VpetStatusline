@@ -3,6 +3,9 @@
   "version": "2.0.0",
   "description": "Animated pixel-art character (Agumon, etc.) for Claude CLI / Cursor CLI statusline.",
   "main": "src/runtime/statusline-agumon-color.js",
+  "bin": {
+    "vpet": "bin/vpet.js"
+  },
   "scripts": {
     "install-runtime": "node scripts/install.js",
     "uninstall-runtime": "node scripts/uninstall.js",

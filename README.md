@@ -48,7 +48,7 @@ npm run install-runtime
 - 把舊版散落在 `~/.claude/` 的 state 檔遷移到 `agumon-statusline/state/`
 - 清除舊版散落在 `~/.claude/` 的 runtime js 與 `agumon-assets/`
 - 更新 `~/.claude/settings.json` 的 `statusLine.command` 與 `UserPromptSubmit` hook 路徑（**會備份原檔**到 `settings.json.before-agumon-statusline.bak`）
-- 安裝 `vpet` 啟動器（`vpet` + `vpet.bat`）到 `~/bin/`，並檢查 `~/bin` 是否在 PATH（不在會提示加入）→ 之後可直接用 `vpet`（見下方 [`vpet` 指令](#vpet-指令切角色--戰鬥--進化--pvp)）
+- 透過 `npm link` 把 `vpet` 指令註冊到全域（npm 自動處理 PATH，並在 Windows 產生 `vpet.cmd` / `vpet.ps1`）→ 重開終端後任何電腦都能直接用 `vpet`（見下方 [`vpet` 指令](#vpet-指令切角色--戰鬥--進化--pvp)）。`npm link` 不可用時自動退回複製薄殼到 `~/bin/`（需自行確保 `~/bin` 在 PATH）
 
 **不會動到**：`state/` 內的任何使用者資料（即使重 install）、`settings.json` 內其他欄位。
 
@@ -172,7 +172,7 @@ node src/editor/sprite_editor_server.js <Name>
 
 ## `vpet` 指令（切角色 / 戰鬥 / 進化 / PvP）
 
-`npm run install-runtime` 會把 `vpet` 啟動器裝到 `~/bin/`（install 會檢查 `~/bin` 是否在 PATH，不在會提示加入）。之後即可直接用 `vpet`，在 Claude Code 內用 `! vpet ...`。**指令可省略 `--`**（`vpet pvp` == `vpet --pvp`，舊寫法仍相容）。
+`npm run install-runtime` 會透過 `npm link` 把 `vpet` 註冊到全域（npm 把 shim 放進它在 PATH 上的 global bin，跨平台可攜，不需手動改 PATH）。重開終端後即可直接用 `vpet`，在 Claude Code 內用 `! vpet ...`。**指令可省略 `--`**（`vpet pvp` == `vpet --pvp`，舊寫法仍相容）。
 
 ```bash
 # 角色

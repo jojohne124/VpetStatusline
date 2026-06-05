@@ -276,10 +276,18 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 ### 1.8 黑影 fallback（未知對手角色）
 
 PvP / 戰鬥對到**本機沒有的角色**（新版才加 / 別人客製 / 資料異常）時，戰鬥渲染
-（`statusline-agumon-color.js` 載入敵方 art 那段）會以 **agumon 幀染成單色剪影**
-（`silhouetteArt()`，shade `[54,54,66]` 深藍灰）當佔位，畫面不破、又切「幽靈對戰」主題。
-- 名牌照常顯示對手名字、勝負由 PvP 卡片預先決定（與敵方本機 power 無關）→ 只影響外觀、不影響公平。
-- 黑影不演 cut-in 大頭特寫（`enemyCutInArt = null`）。
+（`statusline-agumon-color.js` 載入敵方 art 那段）以 **Shadow 黑影角色**演出，畫面不破、
+又切「幽靈對戰」主題。
+- **Shadow 角色**（`characters/Shadow/`）：由 `npm run gen-shadow` 把 agumon 各檔塗黑生成
+  （shade `[54,54,66]` 深藍灰）。含 `pixels.json`（body 可在 editor 角色模式編輯）、
+  `art.json`、`cutin-art.json`（cut-in 可編）、`bullet*`、`config.json`（name=shadow、
+  不進化、**不進 roster** → 不會被當隨機/自動對手抽到）。戰鬥只用 IDLE_1/ANGRY/ATTACK
+  三幀 + cut-in，其餘幀用不到（要自訂造型編這 4 幀即可）。
+- **有 cut-in + 走 v2**：`pickBattleVersion` 對「本機沒有的對手」視為有 cut-in
+  （因 Shadow 有），我方也有 cut-in 就走 v2，黑影也能演 cut-in 大頭特寫。
+- **降級鏈**：Shadow 未安裝 → 退而即時染黑 agumon（`silhouetteArt()`，無 cut-in → 該場退 v1）。
+- 名牌照常顯示對手名字、勝負由 PvP 卡片數據（`opp.power + opp.train`）決定（與敵方本機
+  資產無關）→ 只影響外觀、不影響公平。
 - 版號／「更新後可看真正外觀」提示為未來選配，非必需（fallback 已能優雅降級）。
 
 ---

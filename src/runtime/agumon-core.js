@@ -343,9 +343,19 @@ function hasCutIn(charId) {
     catch(e) { return false; }
 }
 
-// v2 vs v1 分鏡選擇：只在「我方與敵方都有 cut-in art」時啟用 v2
+// 角色是否已安裝（config.json 存在）。給黑影 fallback 判斷「對手本機沒有」用。
+function characterExists(charId) {
+    if (!charId) return false;
+    try { return fs.existsSync(path.join(ASSETS_DIR, charId, 'config.json')); }
+    catch(e) { return false; }
+}
+
+// v2 vs v1 分鏡選擇：只在「我方與敵方都有 cut-in art」時啟用 v2。
+// 敵方角色本機沒有（→ 以 Shadow 黑影演出）時：若 Shadow 有 cut-in，視為敵方有 cut-in，
+// 我方也有就走 v2（黑影也能演 cut-in）。Shadow 未安裝 → 退回即時染黑 agumon（無 cut-in）→ v1。
 function pickBattleVersion(myId, enemyId) {
-    return (hasCutIn(myId) && hasCutIn(enemyId)) ? 2 : 1;
+    const enemyCut = hasCutIn(enemyId) || (!characterExists(enemyId) && hasCutIn('shadow'));
+    return (hasCutIn(myId) && enemyCut) ? 2 : 1;
 }
 
 function battleLength(version) { return version === 2 ? BATTLE_LENGTH_V2 : BATTLE_LENGTH; }
@@ -886,6 +896,13 @@ function silhouetteArt(art, shade = SILHOUETTE_SHADE) {
     if (!art || !Array.isArray(art.frames)) return art;
     return { ...art, frames: art.frames.map(f => silhouetteCellRows(f, shade)) };
 }
+// pixels.json 格式（每幀 flat [r,g,b]|null 陣列）的剪影；給 gen-shadow 從 agumon 產
+// Shadow 的可編輯中介檔（editor 角色模式吃 pixels.json）。
+function silhouettePixels(pixelsData, shade = SILHOUETTE_SHADE) {
+    if (!pixelsData || !Array.isArray(pixelsData.frames)) return pixelsData;
+    const [R, G, B] = shade;
+    return { ...pixelsData, frames: pixelsData.frames.map(frame => frame.map(px => px ? [R, G, B] : null)) };
+}
 
 // 整張 cell rows 做 dim（RGB × factor），用於卡片淡入淡出
 function dimCellRows(rows, factor = 0.5) {
@@ -1224,6 +1241,8 @@ module.exports = {
     dimCellRows,
     silhouetteCellRows,
     silhouetteArt,
+    silhouettePixels,
+    characterExists,
     composeSleepScene,
     composeStatusCard,
     composeBattleScene,

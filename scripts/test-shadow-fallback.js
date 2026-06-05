@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const core = require('../src/runtime/agumon-core.js');
-const { silhouetteCellRows, silhouetteArt } = core;
+const { silhouetteCellRows, silhouetteArt, silhouettePixels } = core;
 
 let pass = 0, fail = 0;
 const ok = (c, msg) => { if (c) pass++; else { fail++; console.log('  ✗ ' + msg); } };
@@ -57,6 +57,31 @@ let nonEmpty = 0;
 for (const row of aguSil.frames[0]) for (const c of row) if (c) nonEmpty++;
 ok(nonEmpty > 0, `agumon 第 0 幀有 ${nonEmpty} 個剪影像素`);
 console.log(`  agumon ${aguArt.frames.length} 幀、第 0 幀 ${nonEmpty} 個剪影像素`);
+
+// ── 4. silhouettePixels（pixels.json 格式：flat [r,g,b]|null）──────────
+console.log('\n— silhouettePixels —');
+const pix = { width: 2, height: 2, frames: [[ [10,20,30], null, [200,100,50], null ]] };
+const sp = silhouettePixels(pix);
+ok(sp.width === 2 && sp.height === 2, '尺寸欄位應保留');
+ok(JSON.stringify(sp.frames[0][0]) === JSON.stringify(SHADE), '有色像素應變 shade');
+ok(sp.frames[0][1] === null && sp.frames[0][3] === null, 'null 像素應維持 null');
+ok(sp !== pix && sp.frames[0] !== pix.frames[0], '應回傳新物件');
+
+// ── 5. Shadow 角色資產（gen-shadow 產出）──────────────────────────
+console.log('\n— Shadow 角色檔案 —');
+const shadowDir = path.join(__dirname, '..', 'characters', 'Shadow');
+for (const f of ['pixels.json', 'art.json', 'cutin-art.json', 'config.json']) {
+    ok(fs.existsSync(path.join(shadowDir, f)), `Shadow/${f} 應存在`);
+}
+if (fs.existsSync(path.join(shadowDir, 'art.json'))) {
+    const sArt = JSON.parse(fs.readFileSync(path.join(shadowDir, 'art.json'), 'utf8'));
+    let allShade = true;
+    for (const fr of sArt.frames) for (const row of fr) for (const c of row) if (!cellOkShade(c)) { allShade = false; break; }
+    ok(allShade, 'Shadow art 全為 shade 或透明');
+    console.log(`  Shadow art ${sArt.frames.length} 幀，全 shade ✓`);
+}
+const sCfg = JSON.parse(fs.readFileSync(path.join(shadowDir, 'config.json'), 'utf8'));
+ok(sCfg.name === 'shadow' && Array.isArray(sCfg.evolvesTo) && sCfg.evolvesTo.length === 0, 'config name=shadow 且不進化');
 
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

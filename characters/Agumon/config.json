@@ -4,6 +4,7 @@
   "power": 20,
   "frameCount": 12,
   "targetSize": 16,
+  "layout": "individual",
   "frameNames": ["Idle_1","Idle_2","Eat_1","Eat_2","Sleep_1","Sleep_2","Refuse","Happy","Angry","Hurt","Sad","Attack"],
   "frames": {
     "IDLE_1": 0, "IDLE_2": 1, "EAT_1": 2, "EAT_2": 3,

@@ -358,6 +358,54 @@ function pickBattleVersion(myId, enemyId) {
     return (hasCutIn(myId) && enemyCut) ? 2 : 1;
 }
 
+// ── 進化歷史（evoHistory）─────────────────────────────────────────
+// 記錄桌寵「真正走過」的進化鏈（Child→…→當前），給 vpet tree 展示用。
+function _readConfig(charId) {
+    try { return JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, charId, 'config.json'), 'utf8')); }
+    catch(e) { return null; }
+}
+// from 的 evolvesTo 是否包含 to（= from 自然進化得到 to）
+function isEvolutionTarget(from, to) {
+    const c = _readConfig(from);
+    return !!(c && Array.isArray(c.evolvesTo) && c.evolvesTo.some(e => e.character === to));
+}
+// 找 charId 的 parent（誰的 evolvesTo 指向它）
+function parentsOf(charId) {
+    const out = [];
+    let names = [];
+    try { names = fs.readdirSync(ASSETS_DIR).filter(n => fs.existsSync(path.join(ASSETS_DIR, n, 'config.json'))); }
+    catch(e) { return out; }
+    for (const n of names) {
+        const c = _readConfig(n);
+        if (c && Array.isArray(c.evolvesTo) && c.evolvesTo.some(e => e.character === charId)) out.push(n);
+    }
+    return out;
+}
+// 補種用：從 cur 往回推祖先（多 parent 取 power 最強），回 [root…cur]。只在沒有歷史時用一次。
+function buildLineageBackward(cur) {
+    const chain = [cur];
+    for (let guard = 0; guard < 8; guard++) {
+        const ps = parentsOf(chain[0]);
+        if (!ps.length) break;
+        ps.sort((a, b) => getCharacterPower(b) - getCharacterPower(a));
+        if (chain.includes(ps[0])) break;   // 防環
+        chain.unshift(ps[0]);
+    }
+    return chain;
+}
+// 每 tick 在 characterId 定案後呼叫：維護 st.evoHistory。
+// last===cur 直接返回（O(1)）；自然進化 append；斷點(reset/cheat 跳轉)重設；空則補種。
+function updateEvoHistory(st) {
+    const cur = st.characterId;
+    if (!cur) return;
+    const h = Array.isArray(st.evoHistory) ? st.evoHistory : null;
+    if (!h || h.length === 0) { st.evoHistory = buildLineageBackward(cur); return; }
+    const last = h[h.length - 1];
+    if (last === cur) return;
+    if (isEvolutionTarget(last, cur)) h.push(cur);   // 自然進化
+    else st.evoHistory = [cur];                       // 斷點 → 重設
+}
+
 function battleLength(version) { return version === 2 ? BATTLE_LENGTH_V2 : BATTLE_LENGTH; }
 
 function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
@@ -1229,6 +1277,10 @@ module.exports = {
     getCharacterStage,
     getCharacterPower,
     getTierCap,
+    characterExists,
+    isEvolutionTarget,
+    buildLineageBackward,
+    updateEvoHistory,
     computeWinProb,
     winProbFromStr,
     seedRand01,

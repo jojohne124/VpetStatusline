@@ -10,6 +10,7 @@ const {
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
+    updateEvoHistory,
 } = require('./agumon-core');
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
@@ -142,6 +143,9 @@ process.stdin.on('end', () => {
         }
 
         const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
+
+        // characterId 此刻已定案 → 維護進化歷史（給 vpet tree 用；自然進化 append、斷點重設、空補種）
+        updateEvoHistory(st);
 
         // 1.5 cheat trigger：reset 掉落表演（角色已切換成新 starter，演出空降）
         if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {

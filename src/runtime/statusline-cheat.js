@@ -406,13 +406,14 @@ if (args[0] === '--tree') {
         const sep = (r === 3) ? ' → ' : '   ';
         console.log(slots.map(s => s.rows[r] || '⠀'.repeat(16)).join(sep));
     }
-    // 名字置中對齊到 16 格寬（sprite 在區塊裡是置中的，靠左對齊會偏左）
+    // 名字字首大寫（資產 id 是小寫）後置中對齊到 16 格寬（sprite 在區塊裡是置中的）
+    const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
     const center16 = s => {
         s = String(s).slice(0, 16);
         const left = Math.floor((16 - s.length) / 2);
         return ' '.repeat(left) + s + ' '.repeat(16 - s.length - left);
     };
-    console.log(slots.map(s => center16(s.name)).join('   '));
+    console.log(slots.map(s => center16(cap(s.name))).join('   '));
     if (stageIdx < 0) console.log(`（${cur} 無四階進化鏈）`);
     process.exit(0);
 }

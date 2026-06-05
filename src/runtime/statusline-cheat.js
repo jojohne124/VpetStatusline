@@ -242,10 +242,9 @@ if (args[0] === '--pvp') {
                 }
             }
 
-            if (!roster.includes(opp.character)) {
-                console.log(`✗ 對手角色「${opp.character}」本機沒有資產，無法演出（雙方需同一套角色）`);
-                process.exit(1);
-            }
+            // 對手角色本機沒有資產（對方新版才加 / 客製角色）→ 不硬擋：
+            // 勝負用對手卡片數據（power+train）算，與本機資產無關；渲染端會自動以黑影佔位演出。
+            const oppMissing = !roster.includes(opp.character);
 
             // 差距制線性：勝率% = 50 + (我戰 - 敵戰)，戰力 = min(power+train, 階級 cap)
             // 跟單機共用 core.winProbFromStr；PvP 體驗補正 0 → 零和對稱（A勝率 + B勝率 = 100）
@@ -277,7 +276,8 @@ if (args[0] === '--pvp') {
 
             // 不印勝負與勝率（避免暴雷）；MAJAJA(bot) 視為一般玩家，log 不透露是練習對手
             const xtag = crossStage ? '（跨階，不計勝率）' : '';
-            console.log(`✓ 幽靈對戰：vs ${oppLabel} (${opp.character})${xtag} — 開打！（下次 refresh 演出）`);
+            const shadowTag = oppMissing ? '（本機無此角色資產，以黑影演出）' : '';
+            console.log(`✓ 幽靈對戰：vs ${oppLabel} (${opp.character})${xtag}${shadowTag} — 開打！（下次 refresh 演出）`);
             process.exitCode = 0;   // 不用 process.exit()：fetch keep-alive socket 還在關閉時硬退會觸發
                                     // Windows libuv UV_HANDLE_CLOSING assertion。設 exitCode 讓事件迴圈自然排空。
         } catch (e) {

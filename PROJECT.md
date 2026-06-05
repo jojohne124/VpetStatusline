@@ -273,6 +273,15 @@ standalone: godzilla_1999, soulseer_mizutsune, majaja
 - Claude CLI 子程序拿不到真實 terminal 寬度 → 採「錨定左側資訊右方」策略，不靠右對齊
 - v4 (braille 黑白) 與 v5/v7 (彩色 half-block) **共存但路徑分離**，v4 沒接 `agumon-core.js`
 
+### 1.8 黑影 fallback（未知對手角色）
+
+PvP / 戰鬥對到**本機沒有的角色**（新版才加 / 別人客製 / 資料異常）時，戰鬥渲染
+（`statusline-agumon-color.js` 載入敵方 art 那段）會以 **agumon 幀染成單色剪影**
+（`silhouetteArt()`，shade `[54,54,66]` 深藍灰）當佔位，畫面不破、又切「幽靈對戰」主題。
+- 名牌照常顯示對手名字、勝負由 PvP 卡片預先決定（與敵方本機 power 無關）→ 只影響外觀、不影響公平。
+- 黑影不演 cut-in 大頭特寫（`enemyCutInArt = null`）。
+- 版號／「更新後可看真正外觀」提示為未來選配，非必需（fallback 已能優雅降級）。
+
 ---
 
 ## 2. TODO 清單

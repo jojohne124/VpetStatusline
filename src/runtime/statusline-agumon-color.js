@@ -9,7 +9,7 @@ const {
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame,
-    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
+    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
 } = require('./agumon-core');
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
@@ -198,11 +198,25 @@ process.stdin.on('end', () => {
                 let enemyChar   = null;
                 try { enemyChar = loadCharacter(enemyId); } catch(e) {}
                 const meArt           = tryLoadArt(artFile);
-                const enemyArt        = enemyChar ? tryLoadArt(enemyChar.artFile) : null;
+                let enemyArt          = enemyChar ? tryLoadArt(enemyChar.artFile) : null;
                 const meBulletArt     = tryLoadArt(bulletArtFile);
-                const enemyBulletArt  = enemyChar ? tryLoadArt(enemyChar.bulletArtFile) : null;
+                let enemyBulletArt    = enemyChar ? tryLoadArt(enemyChar.bulletArtFile) : null;
                 const meCutInArt      = tryLoadArt(cutinArtFile);
-                const enemyCutInArt   = enemyChar ? tryLoadArt(enemyChar.cutinArtFile) : null;
+                let enemyCutInArt     = enemyChar ? tryLoadArt(enemyChar.cutinArtFile) : null;
+                let enemyRightOffset  = enemyChar?.charDef?.RIGHT_OFFSET ?? null;
+
+                // 黑影亞古獸 fallback：本機沒有對手角色（新版才加 / 客製 / 資料異常）→
+                // 用 agumon 幀染成剪影佔位，畫面不破、又切幽靈對戰主題。名牌照常顯示對手名字、
+                // 勝負由 PvP 卡片預先決定（與敵方本機 power 無關），所以只影響外觀、不影響公平。
+                if (!enemyArt) {
+                    try {
+                        const shadow = loadCharacter('agumon');
+                        enemyArt         = silhouetteArt(tryLoadArt(shadow.artFile));
+                        enemyBulletArt   = silhouetteArt(tryLoadArt(shadow.bulletArtFile));
+                        enemyCutInArt    = null;   // 黑影不演 cut-in 大頭特寫
+                        enemyRightOffset = shadow?.charDef?.RIGHT_OFFSET ?? null;
+                    } catch(e) {}
+                }
                 const shared          = loadShared();
 
                 outputLines = composeBattleScene({
@@ -215,7 +229,7 @@ process.stdin.on('end', () => {
                     enemyCutInArt,
                     shared,
                     meRightOffset:    charDef.RIGHT_OFFSET,
-                    enemyRightOffset: enemyChar?.charDef?.RIGHT_OFFSET ?? null,
+                    enemyRightOffset: enemyRightOffset,
                     oppLabel:         st.pvpOppLabel || null,   // PvP 對手名牌：白字置敵方腳下
                     meLabel:          st.pvpMeLabel  || null,   // PvP 我方名牌：白字置我方腳下
                 });

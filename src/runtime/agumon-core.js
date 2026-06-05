@@ -868,6 +868,25 @@ function renderCells(rows) {
 
 const flipRows = rows => rows.map(r => [...r].reverse());
 
+// 黑影 fallback：對手角色本機沒有時（新版才加的角色 / 客製角色 / 資料異常）→
+// 用一張現成的幀（通常是 agumon）染成單色剪影當佔位，畫面不破、又切「幽靈對戰」主題。
+// 保留透明/半透明結構（-1 維持），存在的像素一律改成 shade 色。
+const SILHOUETTE_SHADE = [54, 54, 66];   // 深藍灰
+function silhouetteCellRows(rows, shade = SILHOUETTE_SHADE) {
+    const [R, G, B] = shade;
+    return rows.map(row => row.map(c => {
+        if (!c) return null;
+        const upOk = c[0] >= 0, loOk = c[3] >= 0;
+        return [upOk ? R : -1, upOk ? G : -1, upOk ? B : -1,
+                loOk ? R : -1, loOk ? G : -1, loOk ? B : -1];
+    }));
+}
+// 把整張 art（{frames:[...]}）轉成剪影 art，frame 索引維持不變（戰鬥用同一套 IDLE/ATTACK 索引）。
+function silhouetteArt(art, shade = SILHOUETTE_SHADE) {
+    if (!art || !Array.isArray(art.frames)) return art;
+    return { ...art, frames: art.frames.map(f => silhouetteCellRows(f, shade)) };
+}
+
 // 整張 cell rows 做 dim（RGB × factor），用於卡片淡入淡出
 function dimCellRows(rows, factor = 0.5) {
     return rows.map(row => row.map(c => {
@@ -1203,6 +1222,8 @@ module.exports = {
     flipRows,
     overlayCells,
     dimCellRows,
+    silhouetteCellRows,
+    silhouetteArt,
     composeSleepScene,
     composeStatusCard,
     composeBattleScene,

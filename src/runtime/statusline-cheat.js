@@ -24,7 +24,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 if (!args.length) {
@@ -343,78 +343,20 @@ if (args[0] === '--card') {
     process.exit(0);
 }
 
+if (args[0] === '--pin' || args[0] === '--unpin') {
+    const force = readForce();
+    if (args[0] === '--pin') { force.pinIdle = true;  console.log('📌 statusline 已 pin 成 IDLE_1 朝左(對照用)；vpet unpin 解除'); }
+    else                     { delete force.pinIdle;   console.log('已解除 pin'); }
+    writeForce(force);
+    process.exit(0);
+}
+
 if (args[0] === '--tree') {
-    // 進化歷程：走過的階段彩色 Idle_1、未到的階段黑影 + 白問號。固定 4 階。
-    const STAGE_ORDER = ['Child', 'Adult', 'Perfect', 'Ultimate'];
-    const st  = core.loadState(STATE_FILE);
-    const cur = st.characterId || 'agumon';
-    const stageIdx = STAGE_ORDER.indexOf(core.getCharacterStage(cur));
-
-    // 走過的鏈（真實）：用 evoHistory；缺則補種，並確保以當前角色結尾
-    let reached = (Array.isArray(st.evoHistory) && st.evoHistory.length)
-        ? st.evoHistory.slice() : core.buildLineageBackward(cur);
-    if (reached[reached.length - 1] !== cur) reached.push(cur);
-
-    // 黑影 + 白問號 16x16 佔位圖
-    const Q_D = [54, 54, 66], Q_W = [235, 235, 245];
-    const Q_PAT = [
-        '................','....DDDDDDDD....','..DDDDDDDDDDDD..','.DDDWWWWWWWDDDD.',
-        '.DDWWDDDDDWWDDD.','.DDDDDDDDDWWDDD.','.DDDDDDDDWWDDDD.','.DDDDDDDWWDDDDD.',
-        '.DDDDDDWWDDDDDD.','.DDDDDDWWDDDDDD.','.DDDDDDDDDDDDDD.','.DDDDDDWWDDDDDD.',
-        '.DDDDDDWWDDDDDD.','..DDDDDDDDDDDD..','....DDDDDDDD....','................',
-    ];
-    const patToCells = pat => {
-        const px = pat.map(r => [...r].map(c => c === 'D' ? Q_D : c === 'W' ? Q_W : null));
-        const rows = [];
-        for (let y = 0; y < 16; y += 2) {
-            const row = [];
-            for (let x = 0; x < 16; x++) {
-                const up = px[y][x], lo = px[y + 1][x];
-                row.push((!up && !lo) ? null
-                    : [up ? up[0] : -1, up ? up[1] : -1, up ? up[2] : -1,
-                       lo ? lo[0] : -1, lo ? lo[1] : -1, lo ? lo[2] : -1]);
-            }
-            rows.push(row);
-        }
-        return rows;
-    };
-    const UNKNOWN_ROWS = core.renderCells(patToCells(Q_PAT));
-
-    const idleRows = name => {
-        try {
-            const ch  = core.loadCharacter(name);
-            const art = JSON.parse(fs.readFileSync(ch.artFile, 'utf8'));
-            const idx = ch.charDef?.F?.IDLE_1 ?? 0;
-            return core.renderCells(art.frames[idx] || art.frames[0]);
-        } catch (e) { return UNKNOWN_ROWS; }
-    };
-
-    // 防呆：獨立 / Boss（不在四階）→ 只顯示單格
-    let slots;
-    if (stageIdx < 0) {
-        slots = [{ name: cur, rows: idleRows(cur) }];
-    } else {
-        slots = [];
-        for (let i = 0; i < 4; i++) {
-            if (i <= stageIdx && reached[i]) slots.push({ name: reached[i], rows: idleRows(reached[i]) });
-            else slots.push({ name: '???', rows: UNKNOWN_ROWS });
-        }
-    }
-
-    console.log(`\n進化歷程  ${cur}（${core.getCharacterStage(cur)}）\n`);
-    for (let r = 0; r < 8; r++) {
-        const sep = (r === 3) ? ' → ' : '   ';
-        console.log(slots.map(s => s.rows[r] || '⠀'.repeat(16)).join(sep));
-    }
-    // 名字字首大寫（資產 id 是小寫）後置中對齊到 16 格寬（sprite 在區塊裡是置中的）
-    const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-    const center16 = s => {
-        s = String(s).slice(0, 16);
-        const left = Math.floor((16 - s.length) / 2);
-        return ' '.repeat(left) + s + ' '.repeat(16 - s.length - left);
-    };
-    console.log(slots.map(s => center16(cap(s.name))).join('   '));
-    if (stageIdx < 0) console.log(`（${cur} 無四階進化鏈）`);
+    // 進化歷程改在 statusline 顯示(終端 raw 輸出會劣化 truecolor，statusline 渲染正確)。
+    const force = readForce();
+    force.treeTriggerTs = Date.now();
+    writeForce(force);
+    console.log('🌳 進化歷程已排入 statusline(下次 refresh 顯示約 9 秒，淡入淡出)');
     process.exit(0);
 }
 

@@ -9,7 +9,7 @@ const {
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame,
-    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
+    renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
     updateEvoHistory,
 } = require('./agumon-core');
 
@@ -92,6 +92,13 @@ process.stdin.on('end', () => {
                     st._forceCard = true;
                 }
                 st.lastCardTriggerTs = force.cardTriggerTs;
+            }
+            // 進化歷程 tree（vpet tree）：同 card，trigger 當下若被長動畫擋住直接丟
+            if (force.treeTriggerTs && force.treeTriggerTs !== st.lastTreeTriggerTs) {
+                const age = Date.now() - force.treeTriggerTs;
+                const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0);
+                if (age >= 0 && age < 10000 && !blocked) st._forceTree = true;
+                st.lastTreeTriggerTs = force.treeTriggerTs;
             }
         } catch(e) {}
 
@@ -278,8 +285,14 @@ process.stdin.on('end', () => {
             outputLines = composeStatusCard({ charId: st.characterId, st, cutInArt, dim: result.dim });
         }
 
+        if (result.kind === 'tree' && !outputLines) {
+            outputLines = composeTreeScene(st, { dim: result.dim });
+        }
+
         if (result.kind === 'single' && !outputLines) {
-            const { frameIdx, facing } = result;
+            let { frameIdx, facing } = result;
+            // debug pin（vpet pin）：固定顯示 IDLE_1 朝左，與 tree 印出的同一張，供對照
+            try { if (JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8')).pinIdle) { frameIdx = charDef.F?.IDLE_1 ?? 0; facing = 'left'; } } catch(e) {}
             const art = tryLoadArt(artFile);
             if (art) {
                 const rows = getFacingRows(art, frameIdx, facing, charDef.RIGHT_OFFSET);
@@ -297,6 +310,12 @@ process.stdin.on('end', () => {
 
         if (!outputLines) {
             process.stdout.write(statusLines.join('\n'));
+            return;
+        }
+
+        // 進化歷程：直接輸出(從第 0 欄起，不接狀態列)→ 67 寬可放進一般終端，狀態列暫時讓位
+        if (result.kind === 'tree') {
+            process.stdout.write(outputLines.join('\n'));
             return;
         }
 

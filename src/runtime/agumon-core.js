@@ -242,6 +242,7 @@ function decideEvoFrame(elapsed, oldF, newF, pos) {
 // ── 狀態卡（Card）─────────────────────────────────────────────────
 // 5 拍：elapsed 0 = fade-in dim，1-3 = 全亮，4 = fade-out dim，>=5 隱藏
 const CARD_LENGTH = 5;
+const TREE_LENGTH = 6;   // 進化歷程顯示拍數（約 6 秒）：0 fade-in、1-4 全亮、5 fade-out
 const CARD_SCENE_WIDTH = 52;  // 對齊 BATTLE_SCENE_WIDTH，足以蓋住整個走路範圍
 
 // ── 戰鬥（Battle）─────────────────────────────────────────────────
@@ -731,6 +732,21 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         }
     }
 
+    // 進化歷程 tree（vpet tree → statusline 顯示；同 card，不阻擋 roar/battle/evo）
+    if (st._forceTree) {
+        st.treeStartStep = step;
+        delete st._forceTree;
+    }
+    if (st.treeStartStep != null && st.treeStartStep >= 0) {
+        const elapsed = step - st.treeStartStep;
+        if (elapsed < 0 || elapsed >= TREE_LENGTH) {
+            st.treeStartStep = -1;
+        } else {
+            const dim = (elapsed === 0 || elapsed === TREE_LENGTH - 1);
+            return { kind: 'tree', dim, pos: 0 };
+        }
+    }
+
     // 強制睡覺（cheat ac --sleep）：持續到 --wake；卡片可在 5 秒內蓋過但 sleep state 不受影響
     if (st._forceSleep) {
         st.wasSleeping = true;
@@ -1142,6 +1158,68 @@ function captionRow(items) {
     return line;
 }
 
+// ── 進化歷程 tree 場景（vpet tree → statusline 顯示）─────────────────
+// 1×4 橫排：走過的階段彩色 Idle_1、未到的黑影問號，中間箭頭、下方名字。dim 用於 fade。
+const _TREE_STAGE_ORDER = ['Child', 'Adult', 'Perfect', 'Ultimate'];
+const _TREE_Q_PAT = [
+    '................','....DDDDDDDD....','..DDDDDDDDDDDD..','.DDDWWWWWWWDDDD.',
+    '.DDWWDDDDDWWDDD.','.DDDDDDDDDWWDDD.','.DDDDDDDDWWDDDD.','.DDDDDDDWWDDDDD.',
+    '.DDDDDDWWDDDDDD.','.DDDDDDWWDDDDDD.','.DDDDDDDDDDDDDD.','.DDDDDDWWDDDDDD.',
+    '.DDDDDDWWDDDDDD.','..DDDDDDDDDDDD..','....DDDDDDDD....','................',
+];
+function _treeQCells() {
+    const D = [54, 54, 66], W = [235, 235, 245];
+    const px = _TREE_Q_PAT.map(r => [...r].map(c => c === 'D' ? D : c === 'W' ? W : null));
+    const rows = [];
+    for (let y = 0; y < 16; y += 2) {
+        const row = [];
+        for (let x = 0; x < 16; x++) {
+            const u = px[y][x], l = px[y + 1][x];
+            row.push((!u && !l) ? null : [u ? u[0] : -1, u ? u[1] : -1, u ? u[2] : -1, l ? l[0] : -1, l ? l[1] : -1, l ? l[2] : -1]);
+        }
+        rows.push(row);
+    }
+    return rows;
+}
+function _treeIdleCells(name) {
+    try {
+        const ch  = loadCharacter(name);
+        const art = JSON.parse(fs.readFileSync(ch.artFile, 'utf8'));
+        const idx = ch.charDef?.F?.IDLE_1 ?? 0;
+        return art.frames[idx] || art.frames[0] || null;
+    } catch (e) { return null; }
+}
+function composeTreeScene(st, opts = {}) {
+    const dim = !!opts.dim;
+    const cur = st.characterId || 'agumon';
+    const stageIdx = _TREE_STAGE_ORDER.indexOf(getCharacterStage(cur));
+    let reached = (Array.isArray(st.evoHistory) && st.evoHistory.length) ? st.evoHistory.slice() : buildLineageBackward(cur);
+    if (reached[reached.length - 1] !== cur) reached.push(cur);
+    const qCells = _treeQCells();
+
+    let slots;
+    if (stageIdx < 0) slots = [{ name: cur, cells: _treeIdleCells(cur) }];
+    else {
+        slots = [];
+        for (let i = 0; i < 4; i++) {
+            if (i <= stageIdx && reached[i]) slots.push({ name: reached[i], cells: _treeIdleCells(reached[i]) });
+            else slots.push({ name: '???', cells: qCells });
+        }
+    }
+
+    const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+    const center16 = s => { s = String(s).slice(0, 16); const l = Math.floor((16 - s.length) / 2); return ' '.repeat(l) + s + ' '.repeat(16 - s.length - l); };
+    const blocks = slots.map(sl => renderCells(dim ? dimCellRows(sl.cells || qCells, 0.5) : (sl.cells || qCells)));
+
+    const lines = [];
+    for (let r = 0; r < 8; r++) {
+        const sep = (r === 3) ? ' → ' : '   ';
+        lines.push(blocks.map(b => b[r] || '⠀'.repeat(16)).join(sep));
+    }
+    lines.push(slots.map(sl => center16(cap(sl.name))).join('   '));
+    return lines;
+}
+
 // ── 狀態卡合成（左 3 行文字 + 右 CutIn 32 寬，總 52 寬 × 8 高）─────
 // dim=true 時整張淡化（RGB×0.5 + 文字 ANSI dim），用於 fade-in/out
 function composeStatusCard({ charId, st, cutInArt, dim = false }) {
@@ -1297,6 +1375,7 @@ module.exports = {
     characterExists,
     composeSleepScene,
     composeStatusCard,
+    composeTreeScene,
     composeBattleScene,
     getFacingRows,
 };

@@ -21,10 +21,24 @@ const CHARS_DIR = path.join(__dirname, '..', 'characters');
 const WRITE     = process.argv.includes('--write');
 const NO_ROSTER = process.argv.includes('--no-roster');
 
+// ── 分波實裝（--wave）：只接「資產（含真子彈）已完成」這批的鏈，其餘設計保留不接。 ──
+// 邊只在「兩端都屬本波」時納入；既有角色當交叉/下位端點時列入 WAVE_BASE。
+const WAVE = process.argv.includes('--wave');
+const WAVE_NEW = new Set([
+  'greymon_2010','metalgreymon_2010','zekegreymon',   // 亞古獸 2010 線
+  'leomon','loaderleomon','saberleomon',              // 獅子線（loaderleomon 取代 shishimamon）
+  'blitzgreymon','cresgarurumon',                     // Perfect→Ultimate 上位旁支
+  'commandramon','hi-commandramon','cargodramon','brigadramon',  // 突擊獸線
+  'loogamon','loogarmon','soloogarmon','fenriloogamon',          // 狼獸線
+]);
+const WAVE_BASE = new Set(['agumon','gabumon','greymon','garurumon','metalgreymon','weregarurumon']);
+const inWave = id => WAVE_NEW.has(id) || WAVE_BASE.has(id);
+const WAVE_STARTERS = new Set(['commandramon','loogamon']);
+
 // ── 1) power 覆寫（小寫 id → power）。已存在且相同者為 no-op。 ──────────────
 const POWER = {
   agumon:20, greymon:70, greymon_2010:65, metalgreymon_2010:115, zekegreymon:170, metalgreymon:120, blitzgreymon:173,
-  gabumon:20, leomon:65, shishimamon:115, saberleomon:165, garurumon:70, weregarurumon:120, cresgarurumon:173,
+  gabumon:20, leomon:65, loaderleomon:115, saberleomon:165, garurumon:70, weregarurumon:120, cresgarurumon:173,
   tentomon:15, kuwagamon:60, okuwamon:110, grankuwagamon:165,
   gomamon:10, dolphmon:65, whamon:115, plesiomon:165,
   biyomon:15, xiquemon:70, crowmon:120, tengumon:170,
@@ -47,8 +61,8 @@ const POWER = {
 const NEW_EDGES = [
   // 亞古獸 2010 線（前期弱、後期持平）+ greymon 交叉
   ['agumon','greymon_2010'], ['greymon_2010','metalgreymon_2010'], ['metalgreymon_2010','zekegreymon'], ['greymon','metalgreymon_2010'],
-  // 加布獸獅子線（下位）+ garurumon 交叉
-  ['gabumon','leomon'], ['leomon','shishimamon'], ['shishimamon','saberleomon'], ['garurumon','shishimamon'],
+  // 加布獸獅子線（下位）+ garurumon 交叉（loaderleomon 取代 shishimamon，2026-06-15）
+  ['gabumon','leomon'], ['leomon','loaderleomon'], ['loaderleomon','saberleomon'], ['garurumon','loaderleomon'],
   // 甲蟲鍬形蟲線（前期弱、後期持平）+ kabuterimon 交叉
   ['tentomon','kuwagamon'], ['kuwagamon','okuwamon'], ['okuwamon','grankuwagamon'], ['kabuterimon','okuwamon'],
   // 海獸海豚線（上位）+ ikkakumon 交叉
@@ -78,7 +92,7 @@ const NEW_EDGES = [
   ['commandramon','hi-commandramon'], ['commandramon','greymon'], ['hi-commandramon','cargodramon'], ['hi-commandramon','metalgreymon'], ['cargodramon','brigadramon'],
   ['loogamon','loogarmon'], ['loogamon','garurumon'], ['loogarmon','soloogarmon'], ['loogarmon','weregarurumon'], ['soloogarmon','fenriloogamon'],
   ['pteromon','galemon'], ['pteromon','birdramon'], ['galemon','grandgalemon'], ['galemon','garudamon'], ['grandgalemon','zephagamon'],
-  ['angoramon','symbareangoramon'], ['angoramon','leomon'], ['symbareangoramon','lamortmon'], ['symbareangoramon','shishimamon'], ['lamortmon','diarbbitmon'],
+  ['angoramon','symbareangoramon'], ['angoramon','leomon'], ['symbareangoramon','lamortmon'], ['symbareangoramon','loaderleomon'], ['lamortmon','diarbbitmon'],
   ['jellymon','teslajellymon'], ['jellymon','shellmon'], ['teslajellymon','thetismon'], ['teslajellymon','marinbullmon'], ['thetismon','amphimon'],
 ];
 
@@ -120,8 +134,11 @@ const isExisting = (src,tgt) => !!(CFG[src] && CFG[src].evolvesTo && CFG[src].ev
 
 // ── 組合每個 parent 的 children（既有 + 新），算 pct + tie-break ─────────────
 const children = {};  // src → [{tgt, isNew, time}]
+const waveParents = new Set();   // --wave：本波實際接到新邊的 parent
 for (const id in CFG) (CFG[id].evolvesTo||[]).forEach(e => { (children[id]=children[id]||[]).push({tgt:e.character, isNew:false, time:null}); });
 for (const [from,to,time] of NEW_EDGES) {
+  if (WAVE && !(inWave(from) && inWave(to))) continue;   // 分波：只接兩端都屬本波的邊
+  if (WAVE) waveParents.add(from);
   children[from]=children[from]||[];
   if (!children[from].some(k=>k.tgt===to)) children[from].push({tgt:to, isNew:true, time:time||null});
 }
@@ -183,7 +200,9 @@ function buildEvolvesTo(src) {
 }
 
 // ── 輸出計畫 / 寫檔 ─────────────────────────────────────────────────────────
-const touched = new Set([...Object.keys(POWER), ...Object.keys(children)]);
+const touched = WAVE
+  ? new Set([...waveParents, ...WAVE_NEW])                       // 分波：只動本波 parent + 本波新角色
+  : new Set([...Object.keys(POWER), ...Object.keys(children)]);
 const plan = [];
 for (const id of [...touched].sort()) {
   if (!CFG[id]) { plan.push(`  ! 缺 config: ${id}`); continue; }
@@ -202,7 +221,7 @@ for (const id of [...touched].sort()) {
   }
 }
 
-console.log(`\n=== 進化路線套用計畫 (${WRITE?'WRITE':'DRY-RUN'}) — 死路風險: ${dead} ===\n`);
+console.log(`\n=== 進化路線套用計畫 (${WRITE?'WRITE':'DRY-RUN'}${WAVE?' / WAVE':''}) — 死路風險: ${dead} ===\n`);
 console.log(plan.join('\n'));
 
 // roster
@@ -213,7 +232,7 @@ if (fs.existsSync(rosterPath)) {
   const wiredIds = new Set();
   for (const src in children) { wiredIds.add(src); children[src].forEach(k=>wiredIds.add(k.tgt)); }
   const addRoster = [...wiredIds].filter(id=>CFG[id] && !r.roster.includes(id)).sort();
-  const addStart  = NEW_STARTERS.filter(id=>!r.starters.includes(id));
+  const addStart  = NEW_STARTERS.filter(id=>(!WAVE || WAVE_STARTERS.has(id)) && !r.starters.includes(id));
   console.log(`\n=== roster.json ===`);
   console.log(`  新增 roster (${addRoster.length}): ${addRoster.join(', ')}`);
   console.log(`  新增 starters (${addStart.length}): ${addStart.join(', ')}`);

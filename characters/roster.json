@@ -53,7 +53,23 @@
     "biyomon",
     "birdramon",
     "garudamon",
-    "phoenixmon"
+    "phoenixmon",
+    "blitzgreymon",
+    "brigadramon",
+    "cargodramon",
+    "commandramon",
+    "cresgarurumon",
+    "fenriloogamon",
+    "greymon_2010",
+    "hi-commandramon",
+    "leomon",
+    "loaderleomon",
+    "loogamon",
+    "loogarmon",
+    "metalgreymon_2010",
+    "saberleomon",
+    "soloogarmon",
+    "zekegreymon"
   ],
   "starters": [
     "agumon",
@@ -66,6 +82,8 @@
     "gomamon",
     "tentomon",
     "palmon",
-    "biyomon"
+    "biyomon",
+    "commandramon",
+    "loogamon"
   ]
 }

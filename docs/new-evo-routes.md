@@ -1,8 +1,16 @@
 # 新進化分歧 + 新 starter 路線對照表
 
-> 來源：使用者 2026-06-11 設計。win% 依 [`evo-winrate-default.md`](agent-memory/evo-winrate-default.md) 公式（目標 power 決定門檻）+ 本文件補的 **tie-break 規則**。
+> 來源：使用者 2026-06-11 設計，2026-06-15 調整（見下方「2026-06-15 調整摘要」）。win% 依 [`evo-winrate-default.md`](agent-memory/evo-winrate-default.md) 公式（目標 power 決定門檻）+ 本文件補的 **tie-break 規則**。
 > 套用腳本：[`scripts/apply-new-routes.js`](../scripts/apply-new-routes.js)（純資料，預設 dry-run，`--write` 才寫檔，**不部署**）。
 > 驗證：所有分歧點 win% 嚴格遞增 → 死路風險 0；既有主線門檻 0 改動。
+> ⚠️ **本文件僅為設計記錄；2026-06-15 的調整尚未同步進 `apply-new-routes.js`（未實裝）。**
+
+## 2026-06-15 調整摘要（僅記錄、未實裝）
+
+1. **獅子線完全体 shishimamon → `loaderleomon`(115)〔NEW〕**：`leomon` / `garurumon`(交叉) / `symbareangoramon`(高階兔下位) 三個入口全改指 `loaderleomon`。⇒ `shishimamon` 變孤立（無 parent 無 child），實裝時一併退役/移除。
+2. **海豚線終點 plesiomon → `leviamon`(170)〔NEW〕**；`plesiomon`(165) 改掛為 `zudomon` 的上位旁支（與既有 `vikemon`(160) 並列）。
+3. **新增 7 條 Perfect→Ultimate 旁支**（掛在既有完全体上的第二條究極体分支）：megakabuterimon→ancientbeetmon、zudomon→plesiomon、garudamon→gryphonmon、lillymon→rafflesimon、magnaangemon→goddramon、angewomon→ophanimon、sekkamon→sakuyamon。各與其既有究極体 gate 差 5%（目標 power 差 5），照 `evo-winrate-default.md` 公式即相異、弱邊可達，**不需** tie-break。
+4. **拼字定案**：`ancientbeetmon`（Beet 非 Beat）、`ophanimon`（非 Ofanimon）、`loaderleomon`（原暫定 Liomon，改回 Leomon 與家族 leomon 一致）。
 
 ## 機制與 tie-break（重要）
 
@@ -21,13 +29,13 @@
 | 亞古獸（2010 線，前弱後持平） | agumon(20) —45%→ greymon_2010(65) —55%→ metalgreymon_2010(115) —65%→ zekegreymon(170) |
 | └ 主線[既有] | agumon —50%→ greymon(70) —65%→ metalgreymon(120) —…→ wargreymon |
 | └ 交叉 | greymon —55%→ metalgreymon_2010 |
-| 加布獸（獅子下位線） | gabumon(20) —45%→ leomon(65) —55%→ shishimamon(115) —65%→ saberleomon(165) |
+| 加布獸（獅子下位線） | gabumon(20) —45%→ leomon(65) —55%→ **loaderleomon(115)〔NEW〕** —65%→ saberleomon(165) |
 | └ 主線[既有] | gabumon —50%→ garurumon(70) —60%→ weregarurumon(120) |
-| └ 交叉 | garurumon —55%→ shishimamon |
+| └ 交叉 | garurumon —55%→ loaderleomon |
 | 甲蟲（鍬形蟲，前弱後持平） | tentomon(15) —50%→ kuwagamon(60) —55%→ okuwamon(110) —65%→ grankuwagamon(165) |
 | └ 主線[既有] | tentomon —55%→ kabuterimon(65) —60%→ megakabuterimon(115) |
 | └ 交叉 | kabuterimon —55%→ okuwamon |
-| 海獸（海豚上位線） | gomamon(10) —55%→ dolphmon(65) —55%→ whamon(115) —65%→ plesiomon(165) |
+| 海獸（海豚上位線） | gomamon(10) —55%→ dolphmon(65) —55%→ whamon(115) —70%→ **leviamon(170)〔NEW〕** |
 | └ 主線[既有] | gomamon —50%→ ikkakumon(60) —55%→ zudomon(110) |
 | └ 交叉 | ikkakumon —60%→ whamon |
 | 鳥（喜鵲上位線） | biyomon(15) —60%→ xiquemon(70) —60%→ crowmon(120) —65%→ tengumon(170) |
@@ -46,6 +54,13 @@
 | └ 主線[既有] | godzillasaurus —60%→ godzilla_1954(130) —70%→ godzilla_1999(180) |
 | 上位旁支 | metalgreymon —70%→ blitzgreymon(173)（+ —65%→ wargreymon 既有） |
 | 上位旁支 | weregarurumon —70%→ cresgarurumon(173)（+ —65%→ metalgarurumon 既有） |
+| 上位旁支〔NEW〕 | megakabuterimon —70%→ **ancientbeetmon(170)**（+ —65%→ herculeskabuterimon(165) 既有） |
+| 上位旁支〔NEW〕 | zudomon —65%→ **plesiomon(165)**（+ —60%→ vikemon(160) 既有）※plesiomon 由海豚線改掛此處 |
+| 下位旁支〔NEW〕 | garudamon —60%→ **gryphonmon(160)**（+ —65%→ phoenixmon(165) 既有） |
+| 上位旁支〔NEW〕 | lillymon —65%→ **rafflesimon(165)**（+ —60%→ rosemon(160) 既有） |
+| 下位旁支〔NEW〕 | magnaangemon —70%→ **goddramon(170)**（+ —75%→ dominimon(175) 既有） |
+| 下位旁支〔NEW〕 | angewomon —70%→ **ophanimon(170)**（+ —75%→ magnadramon(175) 既有） |
+| 下位旁支〔NEW〕 | sekkamon —65%→ **sakuyamon(165)**（+ —70%→ yukinamon(170) 既有） |
 | 鬼族（南瓜上位線） | bakemon —60%→ pumpkinmon(120) —70%→ noblepumpkinmon(175)（+ —55%→ phantomon 既有） |
 
 ## 新 starter
@@ -61,7 +76,7 @@
 | 高階 — 翼龍 | pteromon(25) —55%→ galemon(75) —60%→ grandgalemon(125) —65%→ zephagamon(175) |
 | └ 下位掉共通 | pteromon —50%→ birdramon(65)；galemon —55%→ garudamon(115) |
 | 高階 — 兔獸 | angoramon(25) —55%→ symbareangoramon(75) —60%→ lamortmon(125) —65%→ diarbbitmon(175) |
-| └ 下位掉共通 | angoramon —50%→ leomon(65)；symbareangoramon —55%→ shishimamon(115) |
+| └ 下位掉共通 | angoramon —50%→ leomon(65)；symbareangoramon —55%→ loaderleomon(115) |
 | 高階 — 水母 | jellymon(25) —55%→ teslajellymon(75) —60%→ thetismon(125) —65%→ amphimon(175) |
 | └ 下位掉共通 | jellymon —50%→ shellmon(62)；teslajellymon —55%→ marinbullmon(120) |
 
@@ -73,6 +88,7 @@
 
 - ✅ 已完成：**Agumon-2010 線**、**Leomon 線**、**BlitzGreymon**、**CresGarurumon**、**Commandramon 線**、**Loogamon 線**
 - ❌ 暫代待補：Kuwagamon / Dolphmon / Xiquemon / Woodmon / Turuiemon / LadyDevimon / Musyamon / Godzilla_Jr / Blossomon / Pumpkinmon / **Syakomon 整組（含 Seadramon 雙線）** / Pteromon / Angoramon / Jellymon 各線
+- 🆕 **2026-06-15 新增、連 source config 都還沒有**（實裝前需先建角色 config + 美術 + 子彈）：`loaderleomon`、`leviamon`、`ancientbeetmon`、`gryphonmon`、`rafflesimon`、`goddramon`、`ophanimon`、`sakuyamon`
 
 ## 套用方式
 

@@ -1,7 +1,7 @@
 {
   "name": "metalgreymon_2010",
   "stage": "Perfect",
-  "power": 125,
+  "power": 115,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "grid",
@@ -60,6 +60,21 @@
       ]
     }
   ],
-  "evolvesTo": [],
+  "evolvesTo": [
+    {
+      "character": "zekegreymon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
+    }
+  ],
   "gridCols": 3
 }

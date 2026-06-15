@@ -60,5 +60,34 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "garurumon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 50,
+          "minBattles": 5
+        }
+      ]
+    },
+    {
+      "character": "loogarmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 5
+        }
+      ]
+    }
+  ]
 }

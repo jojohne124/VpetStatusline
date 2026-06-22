@@ -62,8 +62,32 @@
   ],
   "evolvesTo": [
     {
+      "character": "kuwagamon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 50,
+          "minBattles": 5
+        }
+      ]
+    },
+    {
       "character": "kabuterimon",
-      "conditions": [{ "type": "cost_threshold", "usd": 10 }, { "type": "win_rate", "pct": 55, "minBattles": 5 }]
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 5
+        }
+      ]
     }
   ]
 }

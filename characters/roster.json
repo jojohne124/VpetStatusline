@@ -69,7 +69,20 @@
     "metalgreymon_2010",
     "saberleomon",
     "soloogarmon",
-    "zekegreymon"
+    "zekegreymon",
+    "crowmon",
+    "dolphmon",
+    "galemon",
+    "grandgalemon",
+    "grankuwagamon",
+    "kuwagamon",
+    "okuwamon",
+    "plesiomon",
+    "pteromon",
+    "tengumon",
+    "whamon",
+    "xiquemon",
+    "zephagamon"
   ],
   "starters": [
     "agumon",
@@ -84,6 +97,7 @@
     "palmon",
     "biyomon",
     "commandramon",
-    "loogamon"
+    "loogamon",
+    "pteromon"
   ]
 }

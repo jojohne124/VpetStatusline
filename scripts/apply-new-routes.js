@@ -30,17 +30,23 @@ const WAVE_NEW = new Set([
   'blitzgreymon','cresgarurumon',                     // Perfect→Ultimate 上位旁支
   'commandramon','hi-commandramon','cargodramon','brigadramon',  // 突擊獸線
   'loogamon','loogarmon','soloogarmon','fenriloogamon',          // 狼獸線
+  'kuwagamon','okuwamon','grankuwagamon',             // 甲蟲鍬形蟲線（第二波 2026-06-22）
+  'dolphmon','whamon','plesiomon',                    // 海獸海豚線（第二波）
+  'xiquemon','crowmon','tengumon',                    // 鳥喜鵲線（第二波）
+  'pteromon','galemon','grandgalemon','zephagamon',   // 翼龍線（第二波，pteromon 為新 starter）
 ]);
-const WAVE_BASE = new Set(['agumon','gabumon','greymon','garurumon','metalgreymon','weregarurumon']);
+const WAVE_BASE = new Set(['agumon','gabumon','greymon','garurumon','metalgreymon','weregarurumon',
+  'tentomon','kabuterimon','gomamon','ikkakumon','biyomon','birdramon','garudamon',
+  'zudomon']);  // zudomon→plesiomon（plesiomon 改掛上位旁支，與既有 vikemon 並列）
 const inWave = id => WAVE_NEW.has(id) || WAVE_BASE.has(id);
-const WAVE_STARTERS = new Set(['commandramon','loogamon']);
+const WAVE_STARTERS = new Set(['commandramon','loogamon','pteromon']);
 
 // ── 1) power 覆寫（小寫 id → power）。已存在且相同者為 no-op。 ──────────────
 const POWER = {
   agumon:20, greymon:70, greymon_2010:65, metalgreymon_2010:115, zekegreymon:170, metalgreymon:120, blitzgreymon:173,
   gabumon:20, leomon:65, loaderleomon:115, saberleomon:165, garurumon:70, weregarurumon:120, cresgarurumon:173,
   tentomon:15, kuwagamon:60, okuwamon:110, grankuwagamon:165,
-  gomamon:10, dolphmon:65, whamon:115, plesiomon:165,
+  gomamon:10, dolphmon:65, whamon:115, leviamon:170, plesiomon:165,
   biyomon:15, xiquemon:70, crowmon:120, tengumon:170,
   palmon:10, woodmon:65, cherrymon:115, puppetmon:165, togemon:60, blossomon:115, hydramon:170,
   patamon:10, turuiemon:60, antylamon:115, dijiangmon:170,
@@ -65,8 +71,8 @@ const NEW_EDGES = [
   ['gabumon','leomon'], ['leomon','loaderleomon'], ['loaderleomon','saberleomon'], ['garurumon','loaderleomon'],
   // 甲蟲鍬形蟲線（前期弱、後期持平）+ kabuterimon 交叉
   ['tentomon','kuwagamon'], ['kuwagamon','okuwamon'], ['okuwamon','grankuwagamon'], ['kabuterimon','okuwamon'],
-  // 海獸海豚線（上位）+ ikkakumon 交叉
-  ['gomamon','dolphmon'], ['dolphmon','whamon'], ['whamon','plesiomon'], ['ikkakumon','whamon'],
+  // 海獸海豚線：終點改 leviamon（待 leviamon 資產完成才接，現由 --wave 自動 gate 住）；plesiomon 改掛 zudomon（見下方 Perfect→Ultimate）
+  ['gomamon','dolphmon'], ['dolphmon','whamon'], ['ikkakumon','whamon'], ['whamon','leviamon'],
   // 鳥喜鵲線（上位）+ birdramon 交叉
   ['biyomon','xiquemon'], ['xiquemon','crowmon'], ['crowmon','tengumon'], ['birdramon','crowmon'],
   // 植物木偶線（上位）— 注意：togemon→cherrymon 已依指示刪除
@@ -80,7 +86,7 @@ const NEW_EDGES = [
   // 哥吉拉 Jr 線（前期弱、後期持平）
   ['godzillasaurus','godzilla_jr'], ['godzilla_jr','godzilla_1994'],
   // Perfect→Ultimate 上位旁支
-  ['metalgreymon','blitzgreymon'], ['weregarurumon','cresgarurumon'],
+  ['metalgreymon','blitzgreymon'], ['weregarurumon','cresgarurumon'], ['zudomon','plesiomon'],
   // togemon 花妖線（上位）
   ['togemon','blossomon'], ['blossomon','hydramon'],
   // bakemon 南瓜線（上位）

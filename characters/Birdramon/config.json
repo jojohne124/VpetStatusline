@@ -63,7 +63,31 @@
   "evolvesTo": [
     {
       "character": "garudamon",
-      "conditions": [{ "type": "cost_threshold", "usd": 15 }, { "type": "win_rate", "pct": 60, "minBattles": 8 }]
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 8
+        }
+      ]
+    },
+    {
+      "character": "crowmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 8
+        }
+      ]
     }
   ]
 }

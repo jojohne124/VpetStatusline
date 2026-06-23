@@ -34,10 +34,14 @@ const WAVE_NEW = new Set([
   'dolphmon','whamon','plesiomon',                    // 海獸海豚線（第二波）
   'xiquemon','crowmon','tengumon',                    // 鳥喜鵲線（第二波）
   'pteromon','galemon','grandgalemon','zephagamon',   // 翼龍線（第二波，pteromon 為新 starter）
+  'woodmon','cherrymon','puppetmon',                  // 植物木偶線（第三波 2026-06-23）
+  'blossomon','hydramon',                             // togemon 花妖線（第三波）
+  'pumpkinmon','noblepumpkinmon',                     // bakemon 南瓜線（第三波）
 ]);
 const WAVE_BASE = new Set(['agumon','gabumon','greymon','garurumon','metalgreymon','weregarurumon',
   'tentomon','kabuterimon','gomamon','ikkakumon','biyomon','birdramon','garudamon',
-  'zudomon']);  // zudomon→plesiomon（plesiomon 改掛上位旁支，與既有 vikemon 並列）
+  'zudomon',  // zudomon→plesiomon（plesiomon 改掛上位旁支，與既有 vikemon 並列）
+  'palmon','togemon','bakemon']);  // 第三波交叉/下位端點
 const inWave = id => WAVE_NEW.has(id) || WAVE_BASE.has(id);
 const WAVE_STARTERS = new Set(['commandramon','loogamon','pteromon']);
 

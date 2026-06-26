@@ -21,9 +21,15 @@ function tryLoadArt(file) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) { return null; }
 }
 
+// Watchdog：父行程（Claude Code session）若被異常關閉，stdin 的 'end' 永遠不會觸發，
+// 本行程會卡在等待而變孤兒（Windows 殺父不連帶殺子）。逾時自我了結，杜絕殘留洩漏。
+// 正常路徑會在 'end' 第一行 clearTimeout 取消它，所以不會多卡這 8 秒。
+const _watchdog = setTimeout(() => process.exit(0), 8000);
+
 let d = '';
 process.stdin.on('data', c => d += c);
 process.stdin.on('end', () => {
+    clearTimeout(_watchdog);
     try {
         const i   = JSON.parse(d);
         const now = Date.now();

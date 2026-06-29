@@ -23,13 +23,14 @@ function tryLoadArt(file) {
 
 // Watchdog：父行程（Claude Code session）若被異常關閉，stdin 的 'end' 永遠不會觸發，
 // 本行程會卡在等待而變孤兒（Windows 殺父不連帶殺子）。逾時自我了結，杜絕殘留洩漏。
-// 正常路徑會在 'end' 第一行 clearTimeout 取消它，所以不會多卡這 8 秒。
-const _watchdog = setTimeout(() => process.exit(0), 8000);
+// unref()：正常路徑 stdin 結束後行程自然退出，此計時器不 ref 住 event loop，
+// 既不拖慢正常退出、也不需 clearTimeout；只有 stdin 卡住（loop 仍被 stdin 撐著）時才會在 8 秒後強制退出。
+// 注意：同步阻塞（如子行程 spawn 卡死）任何計時器都救不了，故 render 內的 git 已改純讀檔、不再 spawn。
+setTimeout(() => process.exit(0), 8000).unref();
 
 let d = '';
 process.stdin.on('data', c => d += c);
 process.stdin.on('end', () => {
-    clearTimeout(_watchdog);
     try {
         const i   = JSON.parse(d);
         const now = Date.now();

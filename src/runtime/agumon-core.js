@@ -78,6 +78,39 @@ function saveState(stateFile, s) {
     atomicWrite(stateFile, JSON.stringify(s));
 }
 
+// 取得當前 git 分支名：直接讀 .git/HEAD（不 spawn 子行程，杜絕同步卡死與 AV 掃描成本）。
+// 從 startDir 往上找 .git；支援 .git 為目錄(一般 repo)或檔案(worktree → gitdir 指向)。
+// detached HEAD（HEAD 直接是 SHA）回 null，行為同舊版 branch !== 'HEAD' 的跳過。
+function gitBranch(startDir) {
+    try {
+        let dir = startDir || process.cwd();
+        for (let i = 0; i < 40; i++) {
+            const gitPath = path.join(dir, '.git');
+            let headFile = null;
+            try {
+                const stt = fs.statSync(gitPath);
+                if (stt.isDirectory()) {
+                    headFile = path.join(gitPath, 'HEAD');
+                } else if (stt.isFile()) {
+                    const m = fs.readFileSync(gitPath, 'utf8').match(/gitdir:\s*(.+)/);
+                    if (m) headFile = path.join(path.resolve(dir, m[1].trim()), 'HEAD');
+                }
+            } catch (_) {}
+            if (headFile) {
+                try {
+                    const head = fs.readFileSync(headFile, 'utf8').trim();
+                    const rm = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+                    return rm ? rm[1].trim() : null;
+                } catch (_) { return null; }
+            }
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+        }
+    } catch (_) {}
+    return null;
+}
+
 // ── 走路（三角波）────────────────────────────────────────────────
 function computeWalk(step, offset = 0) {
     const period = MAX_POS * 2;
@@ -831,13 +864,10 @@ function buildStatusLines(i) {
     const cwd     = i.cwd || process.cwd();
     const dirname = path.basename(cwd);
     let gitStr = '';
-    try {
-        const { spawnSync } = require('child_process');
-        const branch = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', timeout: 1000 }).stdout.trim();
-        if (branch && branch !== 'HEAD') {
-            gitStr = ` ${GREEN}(${branch})${R}`;
-        }
-    } catch(e) {}
+    const _branch = gitBranch(cwd);
+    if (_branch) {
+        gitStr = ` ${GREEN}(${_branch})${R}`;
+    }
 
     const allCost = i.cost?.total_cost_usd ?? 0;
 

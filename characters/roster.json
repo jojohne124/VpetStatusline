@@ -93,7 +93,25 @@
     "peckmon",
     "turuiemon",
     "antylamon",
-    "jougamon"
+    "jougamon",
+    "amphimon",
+    "angoramon",
+    "ariemon",
+    "diarbbitmon",
+    "godzilla_1994",
+    "godzilla_jr",
+    "jellymon",
+    "ladydevimon",
+    "lamortmon",
+    "lilithmon",
+    "marinbullmon",
+    "ryugumon",
+    "sakuyamon",
+    "shellmon",
+    "syakomon",
+    "symbareangoramon",
+    "teslajellymon",
+    "thetismon"
   ],
   "starters": [
     "agumon",
@@ -109,6 +127,9 @@
     "biyomon",
     "commandramon",
     "loogamon",
-    "pteromon"
+    "pteromon",
+    "syakomon",
+    "angoramon",
+    "jellymon"
   ]
 }

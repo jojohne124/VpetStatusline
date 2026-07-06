@@ -1,7 +1,7 @@
 {
   "name": "sakuyamon",
-  "stage": "Adult",
-  "power": 50,
+  "stage": "Ultimate",
+  "power": 165,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,6 +60,5 @@
       ]
     }
   ],
-  "evolvesTo": [],
-  "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補"
+  "evolvesTo": []
 }

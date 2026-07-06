@@ -37,13 +37,21 @@ const WAVE_NEW = new Set([
   'woodmon','cherrymon','puppetmon',                  // 植物木偶線（第三波 2026-06-23）
   'blossomon','hydramon',                             // togemon 花妖線（第三波）
   'pumpkinmon','noblepumpkinmon',                     // bakemon 南瓜線（第三波）
+  // ── 第四波（2026-07-06，commit 6cfe142 真子彈完成）──
+  'angoramon','symbareangoramon','lamortmon','diarbbitmon',   // Angoramon starter 線（上位）
+  'jellymon','teslajellymon','thetismon','amphimon',          // Jellymon starter 線（上位）
+  'syakomon','shellmon','marinbullmon','ryugumon','ariemon',  // Syakomon starter 線（僅 shellmon 支；seadramon 支未完成不接）
+  'ladydevimon','lilithmon',                          // 聖獸夜線（墮天女）
+  'godzilla_jr','godzilla_1994',                      // 哥吉拉 Jr 線
+  'sakuyamon',                                        // sekkamon 下位究極体
 ]);
 const WAVE_BASE = new Set(['agumon','gabumon','greymon','garurumon','metalgreymon','weregarurumon',
   'tentomon','kabuterimon','gomamon','ikkakumon','biyomon','birdramon','garudamon',
   'zudomon',  // zudomon→plesiomon（plesiomon 改掛上位旁支，與既有 vikemon 並列）
-  'palmon','togemon','bakemon']);  // 第三波交叉/下位端點
+  'palmon','togemon','bakemon',   // 第三波交叉/下位端點
+  'gatomon','godzillasaurus','sekkamon']);  // 第四波交叉/下位端點
 const inWave = id => WAVE_NEW.has(id) || WAVE_BASE.has(id);
-const WAVE_STARTERS = new Set(['commandramon','loogamon','pteromon']);
+const WAVE_STARTERS = new Set(['commandramon','loogamon','pteromon','angoramon','jellymon','syakomon']);
 
 // ── 1) power 覆寫（小寫 id → power）。已存在且相同者為 no-op。 ──────────────
 const POWER = {
@@ -53,8 +61,8 @@ const POWER = {
   gomamon:10, dolphmon:65, whamon:115, leviamon:170, plesiomon:165,
   biyomon:15, xiquemon:70, crowmon:120, tengumon:170,
   palmon:10, woodmon:65, cherrymon:115, puppetmon:165, togemon:60, blossomon:115, hydramon:170,
-  patamon:10, turuiemon:60, antylamon:115, dijiangmon:170,
-  gatomon:55, ladydevimon:130, lilithmon:175,
+  patamon:10, turuiemon:60, antylamon:115, jougamon:170,
+  gatomon:55, ladydevimon:130, lilithmon:175, sakuyamon:165,
   renamon:15, musyamon:60, oboromon:110, zanbamon:160,
   godzillasaurus:80, godzilla_jr:125, godzilla_1994:180,
   bakemon:60, pumpkinmon:120, noblepumpkinmon:175,
@@ -81,8 +89,8 @@ const NEW_EDGES = [
   ['biyomon','xiquemon'], ['xiquemon','crowmon'], ['crowmon','tengumon'], ['birdramon','crowmon'],
   // 植物木偶線（上位）— 注意：togemon→cherrymon 已依指示刪除
   ['palmon','woodmon'], ['woodmon','cherrymon'], ['cherrymon','puppetmon'],
-  // 天使兔線（前弱後強）
-  ['patamon','turuiemon'], ['turuiemon','antylamon'], ['antylamon','dijiangmon'],
+  // 天使兔線（前弱後強）— 終點為 jougamon（2026-06-25 規格；已於 source 接妥、在 roster）
+  ['patamon','turuiemon'], ['turuiemon','antylamon'], ['antylamon','jougamon'],
   // 聖獸日夜分歧（夜→墮天女線）
   ['gatomon','ladydevimon','night'], ['ladydevimon','lilithmon'],
   // 狐武者線（下位）
@@ -91,6 +99,8 @@ const NEW_EDGES = [
   ['godzillasaurus','godzilla_jr'], ['godzilla_jr','godzilla_1994'],
   // Perfect→Ultimate 上位旁支
   ['metalgreymon','blitzgreymon'], ['weregarurumon','cresgarurumon'], ['zudomon','plesiomon'],
+  // 雪化妝下位究極体（sekkamon 第二條究極体，下位；與既有 yukinamon 上位並列）
+  ['sekkamon','sakuyamon'],
   // togemon 花妖線（上位）
   ['togemon','blossomon'], ['blossomon','hydramon'],
   // bakemon 南瓜線（上位）

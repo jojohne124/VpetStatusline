@@ -63,7 +63,39 @@
   "evolvesTo": [
     {
       "character": "angewomon",
-      "conditions": [{ "type": "cost_threshold", "usd": 15 }, { "type": "win_rate", "pct": 70, "minBattles": 8 }]
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 70,
+          "minBattles": 8
+        },
+        {
+          "type": "time_of_day",
+          "period": "day"
+        }
+      ]
+    },
+    {
+      "character": "ladydevimon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 8
+        },
+        {
+          "type": "time_of_day",
+          "period": "night"
+        }
+      ]
     }
   ]
 }

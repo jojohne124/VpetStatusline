@@ -21,22 +21,54 @@ function tryLoadArt(file) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) { return null; }
 }
 
-// Watchdog：父行程（Claude Code session）若被異常關閉／洩漏 stdin 管線，stdin 的 'end'
-// 永遠不會觸發，本行程會卡在 event loop 等待而變孤兒（Windows 殺父不連帶殺子）。逾時自我了結。
-//
-// ⚠️ 這裡「故意不 unref」：unref 的計時器不會被算進 libuv 的 poll 逾時（uv_backend_timeout），
-// 當 loop 阻塞在 poll 等那條永不來資料的 stdin 管線時，unref 的 watchdog 只會在 loop 因其他事件
-// 偶然醒來時被檢查；重負載／記憶體壓力下那個「醒來」不會發生 → watchdog 形同虛設 → 永久孤兒
-// （這正是先前改成 unref 後週末堆到 189 個孤兒的真因）。ref'd 計時器則參與 poll 逾時計算、準時觸發。
-//
-// 代價：ref'd 計時器會 ref 住 loop，故正常路徑必須在收到 'end' 後 clearTimeout，否則每次退出都被拖 8 秒。
-// 註：同步阻塞（如子行程 spawn 卡死）任何計時器都救不了，故 render 內的 git 已改純讀檔、不再 spawn。
+// Watchdog：父行程（Claude Code）異常關閉／洩漏 stdin 管線時，'end' 不會觸發，本行程會卡在
+// event loop 等待而變孤兒（Windows 殺父不連帶殺子）。用 ref'd 計時器（不可 unref——unref 的
+// 計時器不算進 libuv poll 逾時，loop 阻塞等 stdin 時不會被叫醒 → 形同虛設）。收到 'end' 後
+// clearTimeout，正常路徑零延遲退出。
+// 註：此計時器只擋得住「event loop 仍在轉、卡在 async 等待」的孤兒（實測 stdin 不 end → 8 秒
+// 自殺）；擋不了「主執行緒同步卡死 / 行程被記憶體壓力換頁凍結」——那類殘留由下方 reapStale()
+// 交由「後續每一個新啟動的健康行程」跨行程清除（見該函式）。
 const _watchdog = setTimeout(() => process.exit(0), 8000);
+
+// 跨行程收屍：每個新啟動的 statusline 都先掃描 live-pids，把「已登記超過 REAP_AGE 卻還活著」的
+// 舊行程（＝卡死/凍結的孤兒，健康行程早就退出並自我除名了）直接 SIGKILL。killer 是剛被排程、
+// 正常在跑的新行程，故不受「孤兒自己被換頁凍結、連自己的計時器都跑不動」影響——這是唯一能清掉
+// 記憶體壓力下殭屍孤兒的機制。閒置時 statusline 仍每 5~15 秒被叫用一次，故週末也會持續收屍。
+const PIDS_FILE  = path.join(STATE_DIR, 'live-pids.json');
+const REAP_AGE_MS = 20000;   // 活著且登記超過 20 秒 = 卡死（健康 render 1~3 秒早已退出並除名）
+function reapStale() {
+    let map = {};
+    try { map = JSON.parse(fs.readFileSync(PIDS_FILE, 'utf8')) || {}; } catch(e) {}
+    const now = Date.now();
+    for (const key of Object.keys(map)) {
+        const pid = +key;
+        if (pid === process.pid) continue;
+        let alive = true;
+        try { process.kill(pid, 0); } catch(e) { alive = false; }   // 訊號 0：只探活、不影響
+        if (!alive) { delete map[key]; continue; }                   // 已退出（含自我除名）→ 清出名單
+        if (now - map[key] > REAP_AGE_MS) {                          // 活著又逾時 = 卡死孤兒 → 收屍
+            try { process.kill(pid, 'SIGKILL'); } catch(e) {}
+            delete map[key];
+        }
+    }
+    map[process.pid] = now;
+    try { atomicWrite(PIDS_FILE, JSON.stringify(map)); } catch(e) {}
+}
+// 自我除名：正常退出前把自己從名單移除，避免 PID 被作業系統回收再指派給別的行程後被誤殺。
+function deregister() {
+    try {
+        const map = JSON.parse(fs.readFileSync(PIDS_FILE, 'utf8')) || {};
+        delete map[process.pid];
+        atomicWrite(PIDS_FILE, JSON.stringify(map));
+    } catch(e) {}
+}
+try { reapStale(); } catch(e) {}
+process.on('exit', deregister);   // 任何正常退出（含 watchdog process.exit）都自我除名；被 SIGKILL 收屍時不觸發（正確）
 
 let d = '';
 process.stdin.on('data', c => d += c);
 process.stdin.on('end', () => {
-    clearTimeout(_watchdog);   // 收到 'end' = stdin 正常關閉；render 為純同步讀檔、瞬間完成 → 正常退出零延遲
+    clearTimeout(_watchdog);
     try {
         const i   = JSON.parse(d);
         const now = Date.now();

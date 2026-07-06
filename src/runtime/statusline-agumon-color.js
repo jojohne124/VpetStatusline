@@ -21,16 +21,22 @@ function tryLoadArt(file) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) { return null; }
 }
 
-// Watchdog：父行程（Claude Code session）若被異常關閉，stdin 的 'end' 永遠不會觸發，
-// 本行程會卡在等待而變孤兒（Windows 殺父不連帶殺子）。逾時自我了結，杜絕殘留洩漏。
-// unref()：正常路徑 stdin 結束後行程自然退出，此計時器不 ref 住 event loop，
-// 既不拖慢正常退出、也不需 clearTimeout；只有 stdin 卡住（loop 仍被 stdin 撐著）時才會在 8 秒後強制退出。
-// 注意：同步阻塞（如子行程 spawn 卡死）任何計時器都救不了，故 render 內的 git 已改純讀檔、不再 spawn。
-setTimeout(() => process.exit(0), 8000).unref();
+// Watchdog：父行程（Claude Code session）若被異常關閉／洩漏 stdin 管線，stdin 的 'end'
+// 永遠不會觸發，本行程會卡在 event loop 等待而變孤兒（Windows 殺父不連帶殺子）。逾時自我了結。
+//
+// ⚠️ 這裡「故意不 unref」：unref 的計時器不會被算進 libuv 的 poll 逾時（uv_backend_timeout），
+// 當 loop 阻塞在 poll 等那條永不來資料的 stdin 管線時，unref 的 watchdog 只會在 loop 因其他事件
+// 偶然醒來時被檢查；重負載／記憶體壓力下那個「醒來」不會發生 → watchdog 形同虛設 → 永久孤兒
+// （這正是先前改成 unref 後週末堆到 189 個孤兒的真因）。ref'd 計時器則參與 poll 逾時計算、準時觸發。
+//
+// 代價：ref'd 計時器會 ref 住 loop，故正常路徑必須在收到 'end' 後 clearTimeout，否則每次退出都被拖 8 秒。
+// 註：同步阻塞（如子行程 spawn 卡死）任何計時器都救不了，故 render 內的 git 已改純讀檔、不再 spawn。
+const _watchdog = setTimeout(() => process.exit(0), 8000);
 
 let d = '';
 process.stdin.on('data', c => d += c);
 process.stdin.on('end', () => {
+    clearTimeout(_watchdog);   // 收到 'end' = stdin 正常關閉；render 為純同步讀檔、瞬間完成 → 正常退出零延遲
     try {
         const i   = JSON.parse(d);
         const now = Date.now();

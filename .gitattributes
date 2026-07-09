@@ -1,2 +1,4 @@
 # bash 啟動器必須是 LF，否則 shebang 變 "...bash\r" 在 unix 上會壞
 bin/vpet text eol=lf
+*.sh text eol=lf
+*.command text eol=lf

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-#  進化路線 / 參數編輯器 啟動器
-#  用法：./route-editor.sh
-#  會自動：關掉占用 3001 port 的舊 server -> 開瀏覽器 -> 啟動 editor
-#  結束：按 Ctrl+C
+#  進化路線 / 參數編輯器 啟動器（macOS 雙擊版）
+#  在 Finder 直接點兩下即可啟動，等同 Windows 的 route-editor.bat。
+#  結束：在跳出的 Terminal 視窗按 Ctrl+C
 # ============================================================
 
-# 切到本 sh 所在的 repo 目錄
+# 切到本檔所在的 repo 目錄（雙擊時工作目錄不一定正確）
 cd "$(dirname "$0")"
 
 # 關掉占用 3001 port 的舊 server
@@ -20,7 +19,7 @@ fi
 (
   for i in $(seq 1 60); do
     if nc -z localhost 3001 2>/dev/null; then
-      open "http://localhost:3001" 2>/dev/null || xdg-open "http://localhost:3001" 2>/dev/null
+      open "http://localhost:3001"
       break
     fi
     sleep 0.25

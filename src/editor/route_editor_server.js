@@ -57,6 +57,17 @@ function edgeParams(evo) {
     };
 }
 
+// 讀某角色 idle_1 幀（color-halfblock）給前端畫縮圖。讀不到回 null。
+function loadIdleSprite(dir, cfg) {
+    try {
+        const art = JSON.parse(fs.readFileSync(path.join(CHARS_ROOT, dir, 'art.json'), 'utf8'));
+        if (!art.frames || !art.frames.length) return null;
+        const idx = (cfg.frames && cfg.frames.IDLE_1 != null) ? cfg.frames.IDLE_1 : 0;
+        const cells = art.frames[idx] || art.frames[0];
+        return { w: art.width, h: art.height, cells };
+    } catch(e) { return null; }
+}
+
 // ── 建圖：給前端 ───────────────────────────────────────────────────────────
 function buildGraph() {
     const cfgs = loadConfigs();
@@ -79,6 +90,7 @@ function buildGraph() {
             power: cfg.power ?? 10,
             starter: starterSet.has(id),
             implanted: rosterSet.has(id),
+            sprite: loadIdleSprite(dir, cfg),
             x: lay.x ?? null,
             y: lay.y ?? null,
         });

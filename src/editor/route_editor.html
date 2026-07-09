@@ -19,6 +19,12 @@
   #status { font-size: 12px; color: #9aa0a8; margin-left: auto; }
   #deadBadge { background: #c0392b; color: #fff; border-radius: 10px; padding: 2px 9px; font-size: 12px; display: none; }
   #deadBadge.show { display: inline-block; }
+  .dropdown { position: relative; display: inline-block; }
+  .menu { position: absolute; top: 100%; left: 0; margin-top: 5px; background: #23272e; border: 1px solid #4a515a; border-radius: 7px; padding: 8px; max-height: 62vh; overflow-y: auto; z-index: 30; min-width: 190px; box-shadow: 0 6px 20px #0007; }
+  .menu .actions { display: flex; gap: 6px; margin-bottom: 6px; }
+  .menu .actions button { flex: 1; font-size: 12px; padding: 4px 6px; }
+  .menu label { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 13px; white-space: nowrap; border-radius: 4px; }
+  .menu label:hover { background: #2d333b; }
   #main { flex: 1; display: flex; min-height: 0; }
   #canvasWrap { flex: 1; position: relative; overflow: hidden; }
   svg { width: 100%; height: 100%; display: block; cursor: grab; background:
@@ -56,6 +62,10 @@
     <button id="connectBtn" onclick="toggleConnect()">＋ 連線模式</button>
     <button onclick="autoLayout()">⇄ 自動排版</button>
     <label><input type="checkbox" id="showUnimplanted" checked onchange="render()"> 顯示未實裝</label>
+    <div class="dropdown">
+      <button id="starterBtn" onclick="toggleStarterMenu(event)">🧬 顯示 starter 鏈 ▾</button>
+      <div id="starterMenu" class="menu" style="display:none"></div>
+    </div>
     <input type="text" id="search" placeholder="搜尋角色…" oninput="render()">
     <span id="deadBadge"></span>
     <span id="status">載入中…</span>
@@ -79,6 +89,9 @@ const COL_W = 260, NODE_W = 150, NODE_H = 40, ROW_H = 56;
 
 let G = { nodes: [], edges: [] };
 let byId = {};
+let spriteCache = {};   // id → dataURL（idle_1 縮圖）
+let shownStarters = new Set();   // 空 = 顯示全部；否則只顯示這些 starter 可達的鏈
+let reachCache = null;           // 目前篩選下可達的 id 集（null = 全部）
 let selected = null;      // node id
 let suggestions = {}, deadSet = new Set();
 let connectMode = false, connectFrom = null;
@@ -95,14 +108,47 @@ function setStatus(t) { document.getElementById('status').textContent = t; }
 async function reload() {
   const r = await fetch('/graph'); G = await r.json();
   indexNodes();
+  buildStarterMenu();
   // 沒座標的節點自動排版
   if (G.nodes.some(n => n.x == null || n.y == null)) autoLayout(true);
+  refreshReach();
   fitView();
   await validate();
   render();
   setStatus(`${G.nodes.length} 角色 / ${G.edges.length} 邊`);
 }
-function indexNodes() { byId = {}; for (const n of G.nodes) byId[n.id] = n; }
+function indexNodes() {
+  byId = {}; spriteCache = {};
+  for (const n of G.nodes) { byId[n.id] = n; if (n.sprite) spriteCache[n.id] = spriteDataURL(n.sprite); }
+}
+
+// color-halfblock idle 幀 → dataURL（每格上下兩像素，-1=透明）
+function spriteDataURL(sp) {
+  try {
+    const W = sp.w, H = sp.h * 2;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    for (let cy = 0; cy < sp.cells.length; cy++) {
+      const row = sp.cells[cy] || [];
+      for (let cx = 0; cx < row.length; cx++) {
+        const c = row[cx]; if (!c) continue;
+        if (c[0] >= 0) { const o = ((cy*2)*W + cx)*4;   img.data[o]=c[0]; img.data[o+1]=c[1]; img.data[o+2]=c[2]; img.data[o+3]=255; }
+        if (c[3] >= 0) { const o = ((cy*2+1)*W + cx)*4; img.data[o]=c[3]; img.data[o+1]=c[4]; img.data[o+2]=c[5]; img.data[o+3]=255; }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv.toDataURL();
+  } catch(e) { return null; }
+}
+
+// 送 server 的精簡圖（sprite 不必送，server 從磁碟重讀）
+function payload() {
+  return {
+    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, x:n.x, y:n.y })),
+    edges: G.edges,
+  };
+}
 
 function autoLayout(silent) {
   const cols = {};
@@ -115,9 +161,54 @@ function autoLayout(silent) {
   if (!silent) { dirty = true; fitView(); render(); }
 }
 
+// ── starter 鏈篩選 ──────────────────────────────────────────────────────
+function buildStarterMenu() {
+  const m = document.getElementById('starterMenu');
+  const starters = G.nodes.filter(n => n.starter).sort((a, b) => a.dir.localeCompare(b.dir));
+  m.innerHTML =
+    `<div class="actions"><button onclick="allStarters(true)">全選</button>`
+    + `<button onclick="allStarters(false)">清除</button></div>`
+    + starters.map(s => `<label><input type="checkbox" value="${s.id}" ${shownStarters.has(s.id)?'checked':''} onchange="toggleStarter('${s.id}',this.checked)"> ${s.dir}</label>`).join('');
+  updateStarterBtn();
+}
+function updateStarterBtn() {
+  document.getElementById('starterBtn').textContent =
+    shownStarters.size ? `🧬 starter 鏈 (${shownStarters.size}) ▾` : '🧬 顯示 starter 鏈 ▾';
+}
+function toggleStarterMenu(ev) {
+  if (ev) ev.stopPropagation();
+  const m = document.getElementById('starterMenu');
+  m.style.display = m.style.display === 'none' ? 'block' : 'none';
+}
+function toggleStarter(id, on) { on ? shownStarters.add(id) : shownStarters.delete(id); applyFilter(); }
+function allStarters(on) {
+  shownStarters = on ? new Set(G.nodes.filter(n => n.starter).map(n => n.id)) : new Set();
+  buildStarterMenu(); applyFilter();
+}
+function applyFilter() { updateStarterBtn(); refreshReach(); fitView(); render(); }
+// 收起選單（點別處時）
+document.addEventListener('mousedown', ev => {
+  const dd = ev.target.closest && ev.target.closest('.dropdown');
+  if (!dd) { const m = document.getElementById('starterMenu'); if (m) m.style.display = 'none'; }
+});
+// 從選定的 starter 沿 evolvesTo 正向 BFS，得可達 id 集（null = 不篩選）
+function refreshReach() {
+  if (!shownStarters.size) { reachCache = null; return; }
+  const adj = {};
+  for (const e of G.edges) (adj[e.from] = adj[e.from] || []).push(e.to);
+  const seen = new Set(), stack = [...shownStarters];
+  while (stack.length) {
+    const id = stack.pop(); if (seen.has(id)) continue; seen.add(id);
+    for (const t of (adj[id] || [])) if (!seen.has(t)) stack.push(t);
+  }
+  reachCache = seen;
+}
+
 function fitView() {
   if (!G.nodes.length) return;
-  const xs = G.nodes.map(n => n.x), ys = G.nodes.map(n => n.y);
+  const shown = G.nodes.filter(visible);
+  const pool = shown.length ? shown : G.nodes;
+  const xs = pool.map(n => n.x), ys = pool.map(n => n.y);
   const minX = Math.min(...xs)-40, minY = Math.min(...ys)-40;
   const w = Math.max(...xs)+NODE_W+40 - minX, h = Math.max(...ys)+NODE_H+40 - minY;
   const vw = svg.clientWidth, vh = svg.clientHeight;
@@ -132,11 +223,13 @@ function applyView() {
 
 // ── 渲染 ────────────────────────────────────────────────────────────────
 function visible(n) {
+  if (reachCache && !reachCache.has(n.id)) return false;   // 只顯示選定 starter 鏈
   if (!document.getElementById('showUnimplanted').checked && !n.implanted) return false;
   return true;
 }
 function render() {
   applyView();
+  refreshReach();   // 邊可能在編輯中改變，保持可達集最新
   const q = document.getElementById('search').value.trim().toLowerCase();
   edgeLayer.innerHTML = ''; nodeLayer.innerHTML = '';
 
@@ -178,13 +271,25 @@ function render() {
     rect.setAttribute('stroke-width', selected===n.id ? 3 : (hit ? 3 : 1.5));
     if (!n.implanted) rect.setAttribute('stroke-dasharray','4,3');
     g.appendChild(rect);
+    // idle_1 縮圖（左側）
+    const tx = spriteCache[n.id] ? 40 : 10;
+    if (spriteCache[n.id]) {
+      const im = document.createElementNS('http://www.w3.org/2000/svg','image');
+      im.setAttribute('x', 5); im.setAttribute('y', (NODE_H-30)/2);
+      im.setAttribute('width', 30); im.setAttribute('height', 30);
+      im.setAttribute('preserveAspectRatio','xMidYMid meet');
+      im.setAttribute('href', spriteCache[n.id]);
+      im.setAttribute('style','image-rendering:pixelated');
+      if (!n.implanted) im.setAttribute('opacity','0.5');
+      g.appendChild(im);
+    }
     const t = document.createElementNS('http://www.w3.org/2000/svg','text');
-    t.setAttribute('x', 10); t.setAttribute('y', NODE_H/2 - 2);
+    t.setAttribute('x', tx); t.setAttribute('y', NODE_H/2 - 2);
     t.setAttribute('font-size','13'); t.setAttribute('fill','#fff'); t.setAttribute('font-weight','600');
     t.textContent = (n.starter?'★ ':'') + n.dir;
     g.appendChild(t);
     const p = document.createElementNS('http://www.w3.org/2000/svg','text');
-    p.setAttribute('x', 10); p.setAttribute('y', NODE_H/2 + 13);
+    p.setAttribute('x', tx); p.setAttribute('y', NODE_H/2 + 13);
     p.setAttribute('font-size','10'); p.setAttribute('fill','#ffffffcc');
     p.textContent = `${n.stage} · pow ${n.power}`;
     g.appendChild(p);
@@ -207,7 +312,7 @@ let valTimer = null;
 function scheduleValidate() { clearTimeout(valTimer); valTimer = setTimeout(validate, 250); }
 async function validate() {
   try {
-    const r = await fetch('/validate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(G) });
+    const r = await fetch('/validate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload()) });
     const d = await r.json();
     suggestions = d.suggestions || {};
     deadSet = new Set((d.dead||[]).map(x => x.from+'>'+x.strongTgt));
@@ -348,7 +453,7 @@ function updEdge(from, to, key, val) {
 async function save() {
   setStatus('儲存中…');
   try {
-    const r = await fetch('/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(G) });
+    const r = await fetch('/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload()) });
     const d = await r.json();
     if (!d.ok) { setStatus('儲存失敗: '+d.error); return; }
     dirty = false;

@@ -145,7 +145,7 @@ function spriteDataURL(sp) {
 // 送 server 的精簡圖（sprite 不必送，server 從磁碟重讀）
 function payload() {
   return {
-    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, x:n.x, y:n.y })),
+    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, weight:n.weight, highTier:n.highTier, x:n.x, y:n.y })),
     edges: G.edges,
   };
 }
@@ -405,6 +405,12 @@ function openPanel(id) {
       <label><input type="checkbox" ${n.implanted?'checked':''} onchange="upd('${id}','implanted',this.checked)"> 實裝 (roster)</label>
       <label><input type="checkbox" ${n.starter?'checked':''} onchange="upd('${id}','starter',this.checked)"> starter</label>
     </div>
+    ${n.starter ? `<div class="row" style="align-items:flex-end">
+      <div class="field"><label>reset 抽選權重</label>
+        <input type="number" min="0" step="0.5" value="${n.weight ?? 1}" onchange="upd('${id}','weight',this.value===''?1:+this.value)"></div>
+      <div class="field"><label>&nbsp;</label>
+        <label style="display:flex;align-items:center;gap:5px;height:29px"><input type="checkbox" ${n.highTier?'checked':''} onchange="upd('${id}','highTier',this.checked)"> 高階(reset 用 dust_hi)</label></div>
+    </div>` : ''}
     <div class="field"><label>進化到 (evolvesTo)</label></div>
     ${outEdges.map(e=>edgeCardHtml(id,e)).join('') || '<div class="hint">（無 — 終點角色）</div>'}
     <div class="addEdge field">
@@ -443,7 +449,11 @@ function edgeCardHtml(from, e) {
     ${dead?'<div class="warn">⚠ 死路：調高此邊 win% 或降低較弱分支</div>':''}
   </div>`;
 }
-function upd(id, key, val) { byId[id][key] = val; dirty = true; scheduleValidate(); }
+function upd(id, key, val) {
+  byId[id][key] = val; dirty = true;
+  if (selected === id) openPanel(id);   // starter/高階 等結構變動即時反映面板
+  scheduleValidate();
+}
 function updEdge(from, to, key, val) {
   const e = G.edges.find(x=>x.from===from && x.to===to); if (!e) return;
   e[key] = val; dirty = true; scheduleValidate();

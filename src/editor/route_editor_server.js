@@ -36,8 +36,12 @@ function loadConfigs() {
 function loadRoster() {
     try {
         const r = JSON.parse(fs.readFileSync(ROSTER_PATH, 'utf8'));
-        return Array.isArray(r) ? { roster: r, starters: [] } : { roster: r.roster || [], starters: r.starters || [] };
-    } catch(e) { return { roster: [], starters: [] }; }
+        if (Array.isArray(r)) return { roster: r, starters: [], starterWeights: {}, highTierStarters: [] };
+        return {
+            roster: r.roster || [], starters: r.starters || [],
+            starterWeights: r.starterWeights || {}, highTierStarters: r.highTierStarters || [],
+        };
+    } catch(e) { return { roster: [], starters: [], starterWeights: {}, highTierStarters: [] }; }
 }
 function loadLayout() {
     try { return JSON.parse(fs.readFileSync(LAYOUT_PATH, 'utf8')); } catch(e) { return {}; }
@@ -71,10 +75,11 @@ function loadIdleSprite(dir, cfg) {
 // ── 建圖：給前端 ───────────────────────────────────────────────────────────
 function buildGraph() {
     const cfgs = loadConfigs();
-    const { roster, starters } = loadRoster();
+    const { roster, starters, starterWeights, highTierStarters } = loadRoster();
     const layout = loadLayout();
     const rosterSet = new Set(roster);
     const starterSet = new Set(starters);
+    const highTierSet = new Set(highTierStarters);
 
     const nodes = [];
     const edges = [];
@@ -90,6 +95,8 @@ function buildGraph() {
             power: cfg.power ?? 10,
             starter: starterSet.has(id),
             implanted: rosterSet.has(id),
+            weight: starterWeights[id] ?? 1,
+            highTier: highTierSet.has(id),
             sprite: loadIdleSprite(dir, cfg),
             x: lay.x ?? null,
             y: lay.y ?? null,
@@ -185,7 +192,11 @@ function save(graph) {
     for (const id of [...implantedSet].sort()) if (!roster.includes(id)) roster.push(id);
     const starters = oldStarters.filter(id => starterSet.has(id));
     for (const id of [...starterSet].sort()) if (!starters.includes(id)) starters.push(id);
-    const rosterOut = JSON.stringify({ roster, starters }, null, 2) + '\n';
+    // starter 權重（非 1 才存，保持精簡）+ 高階 starter 清單（reset 用 dust_hi）
+    const starterWeights = {};
+    for (const n of graph.nodes) if (n.starter && n.weight != null && n.weight !== 1) starterWeights[n.id] = n.weight;
+    const highTierStarters = graph.nodes.filter(n => n.starter && n.highTier).map(n => n.id).sort();
+    const rosterOut = JSON.stringify({ roster, starters, starterWeights, highTierStarters }, null, 2) + '\n';
     fs.copyFileSync(ROSTER_PATH, ROSTER_PATH + '.bak');
     fs.writeFileSync(ROSTER_PATH, rosterOut);
     try { fs.writeFileSync(path.join(ASSETS_DIR, 'roster.json'), rosterOut); }

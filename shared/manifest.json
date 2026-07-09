@@ -76,6 +76,13 @@
       ],
       "frames": 1,
       "size": 16
+    },
+    "dust_hi": {
+      "indices": [
+        14
+      ],
+      "frames": 1,
+      "size": 16
     }
   }
 }

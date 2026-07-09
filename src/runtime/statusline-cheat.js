@@ -19,6 +19,17 @@ const PVP_FILE     = path.join(INSTALL_ROOT, 'state', 'pvp.json');   // { endpoi
 const rosterData = JSON.parse(fs.readFileSync(ROSTER_FILE, 'utf8'));
 const roster   = Array.isArray(rosterData) ? rosterData : rosterData.roster;
 const starters = Array.isArray(rosterData) ? rosterData : (rosterData.starters || [rosterData.roster[0]]);
+const starterWeights = (rosterData && rosterData.starterWeights) || {};   // {id:權重}，缺 = 1
+
+// reset 加權抽選：權重越大越容易被抽到；缺值視為 1，全為 0 時退回均勻。
+function weightedPickStarter(list) {
+    const ws = list.map(id => Math.max(0, starterWeights[id] ?? 1));
+    const total = ws.reduce((a, b) => a + b, 0);
+    if (total <= 0) return list[Math.floor(Math.random() * list.length)];
+    let r = Math.random() * total;
+    for (let i = 0; i < list.length; i++) { r -= ws[i]; if (r < 0) return list[i]; }
+    return list[list.length - 1];
+}
 
 const args = process.argv.slice(2);
 
@@ -423,7 +434,9 @@ if (args[0] === '--evolve') {
 const arg = args[0];
 let target;
 if (arg === '--reset') {
-    target = starters[Math.floor(Math.random() * starters.length)];
+    // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
+    const pool = starters.filter(s => roster.includes(s));
+    target = weightedPickStarter(pool.length ? pool : starters);
     console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);

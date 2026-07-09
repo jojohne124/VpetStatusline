@@ -8,7 +8,7 @@ const {
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     buildStatusLines, composeOutput, visLen,
-    loadCharacter, loadShared, getSharedFrame,
+    loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
     updateEvoHistory,
 } = require('./agumon-core');
@@ -321,7 +321,9 @@ process.stdin.on('end', () => {
             const art      = tryLoadArt(artFile);
             const idle     = charDef.F?.IDLE_1 ?? 0;
             const charRows = art ? getFacingRows(art, idle, 'left', charDef.RIGHT_OFFSET) : null;
-            const dustRows = getSharedFrame(loadShared(), 'dust', 0);   // 未畫時為空白 → 不顯示煙塵
+            // 高階 starter 用另一種登場煙霧 dust_hi（目前為 dust 複本，待美術替換）
+            const dustName = isHighTierStarter(st.characterId) ? 'dust_hi' : 'dust';
+            const dustRows = getSharedFrame(loadShared(), dustName, 0);   // 未畫時為空白 → 不顯示煙塵
             outputLines = composeDropScene({ charRows, dustRows, elapsed: result.elapsed });
         }
 

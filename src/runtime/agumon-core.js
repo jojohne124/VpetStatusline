@@ -307,6 +307,18 @@ function getRosterSet() {
     return _rosterSetCache;
 }
 
+// 高階 starter（reset 用另一種登場煙霧 dust_hi）。由編輯器勾選、存 roster.highTierStarters。
+let _highTierSetCache = null;
+function getHighTierStarterSet() {
+    if (_highTierSetCache) return _highTierSetCache;
+    try {
+        const raw = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
+        _highTierSetCache = new Set(Array.isArray(raw) ? [] : (raw.highTierStarters || []));
+    } catch(e) { _highTierSetCache = new Set(); }
+    return _highTierSetCache;
+}
+function isHighTierStarter(id) { return !!id && getHighTierStarterSet().has(id); }
+
 // 各階段戰力上限（UnStage 無上限）
 const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnStage: Infinity };
 function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
@@ -1401,6 +1413,7 @@ module.exports = {
     getCharacterPower,
     getTierCap,
     characterExists,
+    isHighTierStarter,
     isEvolutionTarget,
     buildLineageBackward,
     updateEvoHistory,

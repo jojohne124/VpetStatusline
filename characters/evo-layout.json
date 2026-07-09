@@ -1,0 +1,510 @@
+{
+  "agumon": {
+    "x": 40,
+    "y": 544
+  },
+  "amphimon": {
+    "x": 820,
+    "y": 1552
+  },
+  "angemon": {
+    "x": 300,
+    "y": 1608
+  },
+  "angewomon": {
+    "x": 560,
+    "y": 1720
+  },
+  "angoramon": {
+    "x": 40,
+    "y": 712
+  },
+  "antylamon": {
+    "x": 560,
+    "y": 376
+  },
+  "ariemon": {
+    "x": 820,
+    "y": 376
+  },
+  "babygodzilla": {
+    "x": 40,
+    "y": 992
+  },
+  "bakemon": {
+    "x": 300,
+    "y": 208
+  },
+  "biollante": {
+    "x": 300,
+    "y": 600
+  },
+  "birdramon": {
+    "x": 300,
+    "y": 656
+  },
+  "biyomon": {
+    "x": 40,
+    "y": 320
+  },
+  "blitzgreymon": {
+    "x": 820,
+    "y": 1440
+  },
+  "blossomon": {
+    "x": 560,
+    "y": 432
+  },
+  "brigadramon": {
+    "x": 820,
+    "y": 1608
+  },
+  "cargodramon": {
+    "x": 560,
+    "y": 1384
+  },
+  "cherrymon": {
+    "x": 560,
+    "y": 488
+  },
+  "coelamon": {
+    "x": 300,
+    "y": 40
+  },
+  "commandramon": {
+    "x": 40,
+    "y": 768
+  },
+  "creepymon": {
+    "x": 878,
+    "y": 263
+  },
+  "cresgarurumon": {
+    "x": 809,
+    "y": 882
+  },
+  "crowmon": {
+    "x": 597,
+    "y": 428
+  },
+  "demidevimon": {
+    "x": 40,
+    "y": 600
+  },
+  "destoroyah": {
+    "x": 820,
+    "y": 2112
+  },
+  "devimon": {
+    "x": 332,
+    "y": 638
+  },
+  "diarbbitmon": {
+    "x": 820,
+    "y": 1720
+  },
+  "dijiangmon": {
+    "x": 820,
+    "y": 880
+  },
+  "dolphmon": {
+    "x": 300,
+    "y": 712
+  },
+  "dominimon": {
+    "x": 820,
+    "y": 1776
+  },
+  "fenriloogamon": {
+    "x": 822,
+    "y": 1077
+  },
+  "fujamon": {
+    "x": 40,
+    "y": 40
+  },
+  "g-metalgreymon": {
+    "x": 596,
+    "y": 2276
+  },
+  "g-wargreymon": {
+    "x": 820,
+    "y": 2280
+  },
+  "gabumon": {
+    "x": 40,
+    "y": 656
+  },
+  "galemon": {
+    "x": 311,
+    "y": 1051
+  },
+  "garudamon": {
+    "x": 620,
+    "y": 636
+  },
+  "garurumon": {
+    "x": 314,
+    "y": 693
+  },
+  "gatomon": {
+    "x": 300,
+    "y": 96
+  },
+  "godzillasaurus": {
+    "x": 300,
+    "y": 1664
+  },
+  "godzilla_1954": {
+    "x": 560,
+    "y": 1832
+  },
+  "godzilla_1994": {
+    "x": 820,
+    "y": 2168
+  },
+  "godzilla_1999": {
+    "x": 820,
+    "y": 2224
+  },
+  "godzilla_jr": {
+    "x": 560,
+    "y": 1440
+  },
+  "gomamon": {
+    "x": 40,
+    "y": 96
+  },
+  "grandgalemon": {
+    "x": 584,
+    "y": 1066
+  },
+  "grankuwagamon": {
+    "x": 820,
+    "y": 432
+  },
+  "greymon": {
+    "x": 300,
+    "y": 1160
+  },
+  "greymon_2010": {
+    "x": 300,
+    "y": 768
+  },
+  "gryphonmon": {
+    "x": 869,
+    "y": 556
+  },
+  "herculeskabuterimon": {
+    "x": 820,
+    "y": 488
+  },
+  "hi-commandramon": {
+    "x": 300,
+    "y": 1384
+  },
+  "huankunmon": {
+    "x": 560,
+    "y": 40
+  },
+  "hydramon": {
+    "x": 820,
+    "y": 936
+  },
+  "ikkakumon": {
+    "x": 300,
+    "y": 264
+  },
+  "jellymon": {
+    "x": 40,
+    "y": 824
+  },
+  "jougamon": {
+    "x": 820,
+    "y": 992
+  },
+  "kabuterimon": {
+    "x": 300,
+    "y": 824
+  },
+  "kiryu": {
+    "x": 560,
+    "y": 1048
+  },
+  "kuwagamon": {
+    "x": 300,
+    "y": 320
+  },
+  "ladydevimon": {
+    "x": 560,
+    "y": 1888
+  },
+  "lamortmon": {
+    "x": 560,
+    "y": 1552
+  },
+  "leomon": {
+    "x": 351,
+    "y": 540
+  },
+  "lilithmon": {
+    "x": 820,
+    "y": 1888
+  },
+  "lillymon": {
+    "x": 560,
+    "y": 96
+  },
+  "loaderleomon": {
+    "x": 592,
+    "y": 623
+  },
+  "loogamon": {
+    "x": 40,
+    "y": 880
+  },
+  "loogarmon": {
+    "x": 309,
+    "y": 952
+  },
+  "magnaangemon": {
+    "x": 560,
+    "y": 1944
+  },
+  "magnadramon": {
+    "x": 820,
+    "y": 1944
+  },
+  "majaja": {
+    "x": 1080,
+    "y": 96
+  },
+  "marinbullmon": {
+    "x": 560,
+    "y": 1104
+  },
+  "megakabuterimon": {
+    "x": 560,
+    "y": 656
+  },
+  "megaseadramon": {
+    "x": 560,
+    "y": 712
+  },
+  "metalgarurumon": {
+    "x": 792,
+    "y": 800
+  },
+  "metalgreymon": {
+    "x": 560,
+    "y": 1160
+  },
+  "metalgreymon_2010": {
+    "x": 560,
+    "y": 768
+  },
+  "metalseadramon": {
+    "x": 820,
+    "y": 96
+  },
+  "musyamon": {
+    "x": 300,
+    "y": 376
+  },
+  "myotismon": {
+    "x": 567,
+    "y": 667
+  },
+  "noblepumpkinmon": {
+    "x": 823,
+    "y": 438
+  },
+  "oboromon": {
+    "x": 560,
+    "y": 152
+  },
+  "okuwamon": {
+    "x": 560,
+    "y": 208
+  },
+  "palmon": {
+    "x": 40,
+    "y": 152
+  },
+  "patamon": {
+    "x": 40,
+    "y": 208
+  },
+  "peckmon": {
+    "x": 300,
+    "y": 1216
+  },
+  "phantomon": {
+    "x": 560,
+    "y": 264
+  },
+  "phoenixmon": {
+    "x": 844,
+    "y": 691
+  },
+  "plesiomon": {
+    "x": 820,
+    "y": 600
+  },
+  "pteromon": {
+    "x": 39,
+    "y": 853
+  },
+  "pumpkinmon": {
+    "x": 520,
+    "y": 437
+  },
+  "puppetmon": {
+    "x": 820,
+    "y": 656
+  },
+  "renamon": {
+    "x": 40,
+    "y": 376
+  },
+  "rosemon": {
+    "x": 820,
+    "y": 152
+  },
+  "ryugumon": {
+    "x": 820,
+    "y": 1104
+  },
+  "saberleomon": {
+    "x": 820,
+    "y": 712
+  },
+  "sakuyamon": {
+    "x": 820,
+    "y": 768
+  },
+  "salamon": {
+    "x": 40,
+    "y": 264
+  },
+  "seadramon": {
+    "x": 300,
+    "y": 152
+  },
+  "sekkamon": {
+    "x": 560,
+    "y": 824
+  },
+  "shadow": {
+    "x": 1080,
+    "y": 40
+  },
+  "shagaramon": {
+    "x": 820,
+    "y": 824
+  },
+  "shellmon": {
+    "x": 300,
+    "y": 544
+  },
+  "shishimamon": {
+    "x": 560,
+    "y": 880
+  },
+  "soloogarmon": {
+    "x": 543,
+    "y": 1041
+  },
+  "soulseer_mizutsune": {
+    "x": 1080,
+    "y": 152
+  },
+  "syakomon": {
+    "x": 40,
+    "y": 432
+  },
+  "symbareangoramon": {
+    "x": 300,
+    "y": 1496
+  },
+  "tengumon": {
+    "x": 848,
+    "y": 366
+  },
+  "tenkomon": {
+    "x": 300,
+    "y": 936
+  },
+  "tentomon": {
+    "x": 40,
+    "y": 488
+  },
+  "teslajellymon": {
+    "x": 300,
+    "y": 1552
+  },
+  "thetismon": {
+    "x": 560,
+    "y": 1664
+  },
+  "togemon": {
+    "x": 300,
+    "y": 432
+  },
+  "turuiemon": {
+    "x": 300,
+    "y": 488
+  },
+  "venommyotismon": {
+    "x": 911,
+    "y": 674
+  },
+  "vikemon": {
+    "x": 820,
+    "y": 208
+  },
+  "wargreymon": {
+    "x": 820,
+    "y": 1272
+  },
+  "weregarurumon": {
+    "x": 554,
+    "y": 783
+  },
+  "whamon": {
+    "x": 560,
+    "y": 936
+  },
+  "woodmon": {
+    "x": 300,
+    "y": 992
+  },
+  "xiangpengmon": {
+    "x": 820,
+    "y": 264
+  },
+  "xiquemon": {
+    "x": 300,
+    "y": 1272
+  },
+  "yukinamon": {
+    "x": 820,
+    "y": 1328
+  },
+  "zanbamon": {
+    "x": 820,
+    "y": 320
+  },
+  "zekegreymon": {
+    "x": 820,
+    "y": 1384
+  },
+  "zephagamon": {
+    "x": 842,
+    "y": 1074
+  },
+  "zudomon": {
+    "x": 560,
+    "y": 320
+  }
+}

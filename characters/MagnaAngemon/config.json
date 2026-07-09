@@ -63,7 +63,17 @@
   "evolvesTo": [
     {
       "character": "dominimon",
-      "conditions": [{ "type": "cost_threshold", "usd": 20 }, { "type": "win_rate", "pct": 75, "minBattles": 12 }]
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 75,
+          "minBattles": 12
+        }
+      ]
     }
   ]
 }

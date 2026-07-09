@@ -1,7 +1,7 @@
 {
   "name": "coelamon",
   "stage": "Adult",
-  "power": 50,
+  "power": 55,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,6 +60,21 @@
       ]
     }
   ],
-  "evolvesTo": [],
+  "evolvesTo": [
+    {
+      "character": "huankunmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 8
+        }
+      ]
+    }
+  ],
   "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補"
 }

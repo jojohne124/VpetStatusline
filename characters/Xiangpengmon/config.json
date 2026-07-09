@@ -1,7 +1,7 @@
 {
   "name": "xiangpengmon",
-  "stage": "Adult",
-  "power": 50,
+  "stage": "Ultimate",
+  "power": 160,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

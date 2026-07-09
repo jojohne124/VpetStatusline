@@ -60,5 +60,34 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "metalseadramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 12
+        }
+      ]
+    },
+    {
+      "character": "shagaramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
 }

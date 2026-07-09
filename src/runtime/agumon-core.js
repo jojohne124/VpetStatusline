@@ -200,8 +200,10 @@ function checkEvolution(st, input, config) {
 
     // 每 tick 評估「所有」進化路線（不在第一條達成時就 return），
     // 讓各路線的 latch 狀態（_ready/_peaked）都保持更新，再決定走哪條。
+    const roster = getRosterSet();   // 未實裝（不在 roster）的目標直接跳過
     const ready = [];
     for (const evo of config.evolvesTo) {
+        if (roster && !roster.has(evo.character)) continue;
         // 支援 conditions 陣列或舊格式的單一 condition
         const conditions = evo.conditions ?? (evo.condition ? [evo.condition] : []);
         if (!conditions.length) continue;
@@ -290,6 +292,19 @@ function getCharacterStage(name) {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
         return config.stage ?? 'UnStage';
     } catch(e) { return 'UnStage'; }
+}
+
+// roster 成員 = 「已實裝」角色。進化路線編輯器把未實裝的邊也留在 config.evolvesTo，
+// 用 roster 當 gate：不在 roster 的目標不會被進化進去。讀不到 roster 時 fail-open（回 null → 不 gate）。
+let _rosterSetCache = null;
+function getRosterSet() {
+    if (_rosterSetCache) return _rosterSetCache;
+    try {
+        const raw = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
+        const list = Array.isArray(raw) ? raw : raw.roster;
+        _rosterSetCache = new Set(list);
+    } catch(e) { _rosterSetCache = null; }
+    return _rosterSetCache;
 }
 
 // 各階段戰力上限（UnStage 無上限）

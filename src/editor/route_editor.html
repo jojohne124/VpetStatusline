@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>進化路線編輯器</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; background: #1a1d21; color: #e6e6e6; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #23272e; border-bottom: 1px solid #333; flex-wrap: wrap; }
+  #toolbar button { background: #3a4048; color: #e6e6e6; border: 1px solid #4a515a; border-radius: 5px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  #toolbar button:hover { background: #464d57; }
+  #toolbar button.primary { background: #2d7d46; border-color: #2d7d46; }
+  #toolbar button.primary:hover { background: #359152; }
+  #toolbar button.active { background: #b8862d; border-color: #b8862d; }
+  #toolbar label { font-size: 13px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  #toolbar input[type=text] { background: #1a1d21; border: 1px solid #4a515a; color: #e6e6e6; border-radius: 5px; padding: 5px 8px; font-size: 13px; width: 130px; }
+  #status { font-size: 12px; color: #9aa0a8; margin-left: auto; }
+  #deadBadge { background: #c0392b; color: #fff; border-radius: 10px; padding: 2px 9px; font-size: 12px; display: none; }
+  #deadBadge.show { display: inline-block; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #canvasWrap { flex: 1; position: relative; overflow: hidden; }
+  svg { width: 100%; height: 100%; display: block; cursor: grab; background:
+        radial-gradient(circle, #262a30 1px, transparent 1px); background-size: 28px 28px; }
+  svg.connecting { cursor: crosshair; }
+  #panel { width: 320px; background: #23272e; border-left: 1px solid #333; padding: 14px; overflow-y: auto; font-size: 13px; }
+  #panel h3 { margin: 0 0 4px; font-size: 15px; }
+  #panel .sub { color: #9aa0a8; font-size: 11px; margin-bottom: 12px; }
+  #panel .field { margin-bottom: 10px; }
+  #panel .field label { display: block; margin-bottom: 3px; color: #b8bec6; font-size: 12px; }
+  #panel input, #panel select { width: 100%; background: #1a1d21; border: 1px solid #4a515a; color: #e6e6e6; border-radius: 4px; padding: 5px 7px; font-size: 13px; }
+  #panel .row { display: flex; gap: 8px; }
+  #panel .row > * { flex: 1; }
+  #panel .checkrow { display: flex; gap: 14px; margin: 10px 0; }
+  #panel .checkrow label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px; }
+  .edgeCard { border: 1px solid #3a4048; border-radius: 6px; padding: 8px; margin-bottom: 8px; background: #1e2228; }
+  .edgeCard.dead { border-color: #c0392b; }
+  .edgeCard .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .edgeCard .top b { font-size: 13px; }
+  .edgeCard .del { background: #5a2d2d; border: none; color: #f0b0b0; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
+  .edgeCard .warn { color: #e88; font-size: 11px; margin-top: 4px; }
+  .addEdge { margin-top: 8px; }
+  .hint { color: #7f868e; font-size: 11px; line-height: 1.5; margin-top: 8px; }
+  .legend { position: absolute; bottom: 10px; left: 10px; background: rgba(35,39,46,.9); border: 1px solid #333; border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.7; }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+  .node text { pointer-events: none; user-select: none; }
+  .empty { color: #7f868e; text-align: center; margin-top: 40px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <button onclick="reload()">↻ 重新載入</button>
+    <button class="primary" onclick="save()">💾 儲存</button>
+    <button id="connectBtn" onclick="toggleConnect()">＋ 連線模式</button>
+    <button onclick="autoLayout()">⇄ 自動排版</button>
+    <label><input type="checkbox" id="showUnimplanted" checked onchange="render()"> 顯示未實裝</label>
+    <input type="text" id="search" placeholder="搜尋角色…" oninput="render()">
+    <span id="deadBadge"></span>
+    <span id="status">載入中…</span>
+  </div>
+  <div id="main">
+    <div id="canvasWrap">
+      <svg id="svg"><g id="edgeLayer"></g><g id="nodeLayer"></g><g id="tempLayer"></g></svg>
+      <div class="legend">
+        <div><span class="sw" style="background:#3d6fb4"></span>Child　<span class="sw" style="background:#3d9b6f"></span>Adult</div>
+        <div><span class="sw" style="background:#b88a2d"></span>Perfect　<span class="sw" style="background:#a24bb0"></span>Ultimate</div>
+        <div><span class="sw" style="background:#c0392b"></span>死路邊　<span class="sw" style="border:1px dashed #888;background:transparent"></span>未實裝　★ starter</div>
+      </div>
+    </div>
+    <div id="panel"><div class="empty">點選節點以編輯<br>或用「連線模式」新增進化邊</div></div>
+  </div>
+</div>
+<script>
+const STAGE_ORDER = ['Child','Adult','Perfect','Ultimate','UnStage'];
+const STAGE_COLOR = { Child:'#3d6fb4', Adult:'#3d9b6f', Perfect:'#b88a2d', Ultimate:'#a24bb0', UnStage:'#666' };
+const COL_W = 260, NODE_W = 150, NODE_H = 40, ROW_H = 56;
+
+let G = { nodes: [], edges: [] };
+let byId = {};
+let selected = null;      // node id
+let suggestions = {}, deadSet = new Set();
+let connectMode = false, connectFrom = null;
+let view = { x: 0, y: 0, scale: 1 };
+let dirty = false;
+
+const svg = document.getElementById('svg');
+const edgeLayer = document.getElementById('edgeLayer');
+const nodeLayer = document.getElementById('nodeLayer');
+const tempLayer = document.getElementById('tempLayer');
+
+function setStatus(t) { document.getElementById('status').textContent = t; }
+
+async function reload() {
+  const r = await fetch('/graph'); G = await r.json();
+  indexNodes();
+  // 沒座標的節點自動排版
+  if (G.nodes.some(n => n.x == null || n.y == null)) autoLayout(true);
+  fitView();
+  await validate();
+  render();
+  setStatus(`${G.nodes.length} 角色 / ${G.edges.length} 邊`);
+}
+function indexNodes() { byId = {}; for (const n of G.nodes) byId[n.id] = n; }
+
+function autoLayout(silent) {
+  const cols = {};
+  STAGE_ORDER.forEach(s => cols[s] = []);
+  for (const n of G.nodes) (cols[n.stage] || (cols[n.stage]=[])).push(n);
+  STAGE_ORDER.forEach((s, ci) => {
+    (cols[s] || []).sort((a,b) => a.power - b.power || a.id.localeCompare(b.id))
+      .forEach((n, ri) => { n.x = 40 + ci * COL_W; n.y = 40 + ri * ROW_H; });
+  });
+  if (!silent) { dirty = true; fitView(); render(); }
+}
+
+function fitView() {
+  if (!G.nodes.length) return;
+  const xs = G.nodes.map(n => n.x), ys = G.nodes.map(n => n.y);
+  const minX = Math.min(...xs)-40, minY = Math.min(...ys)-40;
+  const w = Math.max(...xs)+NODE_W+40 - minX, h = Math.max(...ys)+NODE_H+40 - minY;
+  const vw = svg.clientWidth, vh = svg.clientHeight;
+  view.scale = Math.min(1, Math.min(vw/w, vh/h));
+  view.x = minX; view.y = minY;
+  applyView();
+}
+function applyView() {
+  const vw = svg.clientWidth / view.scale, vh = svg.clientHeight / view.scale;
+  svg.setAttribute('viewBox', `${view.x} ${view.y} ${vw} ${vh}`);
+}
+
+// ── 渲染 ────────────────────────────────────────────────────────────────
+function visible(n) {
+  if (!document.getElementById('showUnimplanted').checked && !n.implanted) return false;
+  return true;
+}
+function render() {
+  applyView();
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  edgeLayer.innerHTML = ''; nodeLayer.innerHTML = '';
+
+  for (const e of G.edges) {
+    const a = byId[e.from], b = byId[e.to];
+    if (!a || !b || !visible(a) || !visible(b)) continue;
+    const x1 = a.x + NODE_W, y1 = a.y + NODE_H/2, x2 = b.x, y2 = b.y + NODE_H/2;
+    const mx = (x1+x2)/2;
+    const dead = deadSet.has(e.from+'>'+e.to);
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke', dead ? '#c0392b' : (e.time ? '#7a6fb0' : '#5a6570'));
+    path.setAttribute('stroke-width', dead ? 2.5 : 1.6);
+    if (e.time) path.setAttribute('stroke-dasharray','5,3');
+    edgeLayer.appendChild(path);
+    // pct label
+    const pct = e.pct != null ? e.pct : suggestions[e.from+'>'+e.to];
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+    lbl.setAttribute('x', mx); lbl.setAttribute('y', (y1+y2)/2 - 4);
+    lbl.setAttribute('text-anchor','middle');
+    lbl.setAttribute('font-size','11'); lbl.setAttribute('fill', dead ? '#e88' : '#9aa0a8');
+    lbl.textContent = (pct != null ? pct+'%' : '?') + (e.time ? ' '+(e.time==='night'?'🌙':'☀') : '') + (e.pct==null?'*':'');
+    edgeLayer.appendChild(lbl);
+  }
+
+  for (const n of G.nodes) {
+    if (!visible(n)) continue;
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class','node');
+    g.setAttribute('transform',`translate(${n.x},${n.y})`);
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('width',NODE_W); rect.setAttribute('height',NODE_H);
+    rect.setAttribute('rx',7);
+    rect.setAttribute('fill', STAGE_COLOR[n.stage] || '#666');
+    rect.setAttribute('fill-opacity', n.implanted ? 0.92 : 0.28);
+    const hit = q && n.id.includes(q);
+    rect.setAttribute('stroke', selected===n.id ? '#fff' : (hit ? '#ffd54a' : (n.implanted ? '#0006' : '#888')));
+    rect.setAttribute('stroke-width', selected===n.id ? 3 : (hit ? 3 : 1.5));
+    if (!n.implanted) rect.setAttribute('stroke-dasharray','4,3');
+    g.appendChild(rect);
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x', 10); t.setAttribute('y', NODE_H/2 - 2);
+    t.setAttribute('font-size','13'); t.setAttribute('fill','#fff'); t.setAttribute('font-weight','600');
+    t.textContent = (n.starter?'★ ':'') + n.dir;
+    g.appendChild(t);
+    const p = document.createElementNS('http://www.w3.org/2000/svg','text');
+    p.setAttribute('x', 10); p.setAttribute('y', NODE_H/2 + 13);
+    p.setAttribute('font-size','10'); p.setAttribute('fill','#ffffffcc');
+    p.textContent = `${n.stage} · pow ${n.power}`;
+    g.appendChild(p);
+    g.addEventListener('mousedown', ev => onNodeDown(ev, n));
+    nodeLayer.appendChild(g);
+  }
+  document.getElementById('connectBtn').classList.toggle('active', connectMode);
+  svg.classList.toggle('connecting', connectMode);
+  updateDeadBadge();
+}
+
+function updateDeadBadge() {
+  const b = document.getElementById('deadBadge');
+  if (deadSet.size) { b.classList.add('show'); b.textContent = `⚠ ${deadSet.size} 條死路`; }
+  else b.classList.remove('show');
+}
+
+// ── 驗證 ────────────────────────────────────────────────────────────────
+let valTimer = null;
+function scheduleValidate() { clearTimeout(valTimer); valTimer = setTimeout(validate, 250); }
+async function validate() {
+  try {
+    const r = await fetch('/validate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(G) });
+    const d = await r.json();
+    suggestions = d.suggestions || {};
+    deadSet = new Set((d.dead||[]).map(x => x.from+'>'+x.strongTgt));
+    render();
+    if (selected) openPanel(selected);
+  } catch(e) { setStatus('驗證失敗: '+e.message); }
+}
+
+// ── 節點拖拉 / 連線 / 選取 ──────────────────────────────────────────────
+let drag = null;
+function onNodeDown(ev, n) {
+  ev.stopPropagation();
+  if (connectMode) {
+    if (!connectFrom) { connectFrom = n.id; setStatus(`連線：從 ${n.dir} → 點目標`); render(); }
+    else { addEdge(connectFrom, n.id); connectFrom = null; }
+    return;
+  }
+  const pt = toSvg(ev);
+  drag = { id: n.id, dx: pt.x - n.x, dy: pt.y - n.y, moved: false };
+}
+window.addEventListener('mousemove', ev => {
+  if (drag) {
+    const pt = toSvg(ev); const n = byId[drag.id];
+    n.x = pt.x - drag.dx; n.y = pt.y - drag.dy; drag.moved = true; dirty = true;
+    render();
+  } else if (pan) {
+    view.x = pan.vx - (ev.clientX - pan.sx)/view.scale;
+    view.y = pan.vy - (ev.clientY - pan.sy)/view.scale;
+    applyView();
+  }
+});
+window.addEventListener('mouseup', ev => {
+  if (drag && !drag.moved) select(drag.id);
+  drag = null; pan = null;
+});
+let pan = null;
+svg.addEventListener('mousedown', ev => {
+  if (connectMode) { connectFrom = null; setStatus('連線模式：點來源節點'); return; }
+  pan = { sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
+});
+svg.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const pt = toSvg(ev);
+  const f = ev.deltaY < 0 ? 1.12 : 1/1.12;
+  view.scale = Math.max(0.15, Math.min(3, view.scale * f));
+  const pt2 = toSvg(ev);
+  view.x += pt.x - pt2.x; view.y += pt.y - pt2.y;
+  applyView(); render();
+}, { passive:false });
+
+function toSvg(ev) {
+  const r = svg.getBoundingClientRect();
+  return { x: view.x + (ev.clientX - r.left)/view.scale, y: view.y + (ev.clientY - r.top)/view.scale };
+}
+function select(id) { selected = id; render(); openPanel(id); }
+function toggleConnect() { connectMode = !connectMode; connectFrom = null; setStatus(connectMode?'連線模式：點來源節點':'已離開連線模式'); render(); }
+
+function addEdge(from, to) {
+  if (from === to) { setStatus('不能連自己'); return; }
+  if (G.edges.some(e => e.from===from && e.to===to)) { setStatus('這條邊已存在'); return; }
+  G.edges.push({ from, to, pct:null, cost:null, minBattles:null, time:null });
+  dirty = true; setStatus(`新增邊 ${byId[from].dir}→${byId[to].dir}`);
+  scheduleValidate();
+}
+function removeEdge(from, to) {
+  G.edges = G.edges.filter(e => !(e.from===from && e.to===to));
+  dirty = true; scheduleValidate();
+}
+
+// ── 右側面板 ────────────────────────────────────────────────────────────
+function openPanel(id) {
+  const n = byId[id]; if (!n) return;
+  const outEdges = G.edges.filter(e => e.from === id);
+  const inEdges = G.edges.filter(e => e.to === id);
+  const targets = G.nodes.filter(m => m.id!==id && !outEdges.some(e=>e.to===m.id))
+    .sort((a,b)=>a.power-b.power);
+  const p = document.getElementById('panel');
+  p.innerHTML = `
+    <h3>${n.dir}</h3>
+    <div class="sub">id: ${n.id}　被進化來源: ${inEdges.map(e=>byId[e.from]?.dir||e.from).join(', ')||'—'}</div>
+    <div class="row">
+      <div class="field"><label>階段 stage</label>
+        <select onchange="upd('${id}','stage',this.value)">
+          ${STAGE_ORDER.map(s=>`<option ${s===n.stage?'selected':''}>${s}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>戰力 power</label>
+        <input type="number" value="${n.power}" onchange="upd('${id}','power',+this.value)"></div>
+    </div>
+    <div class="checkrow">
+      <label><input type="checkbox" ${n.implanted?'checked':''} onchange="upd('${id}','implanted',this.checked)"> 實裝 (roster)</label>
+      <label><input type="checkbox" ${n.starter?'checked':''} onchange="upd('${id}','starter',this.checked)"> starter</label>
+    </div>
+    <div class="field"><label>進化到 (evolvesTo)</label></div>
+    ${outEdges.map(e=>edgeCardHtml(id,e)).join('') || '<div class="hint">（無 — 終點角色）</div>'}
+    <div class="addEdge field">
+      <label>＋ 新增進化到</label>
+      <select id="addTgt">
+        <option value="">選目標…</option>
+        ${targets.map(m=>`<option value="${m.id}">${m.dir} (pow ${m.power}${m.implanted?'':' ·未實裝'})</option>`).join('')}
+      </select>
+      <button style="margin-top:6px;width:100%" onclick="const v=document.getElementById('addTgt').value; if(v) addEdge('${id}',v)">加入</button>
+    </div>
+    <div class="hint">win% 顯示 <b>*</b> = 未手填、用公式建議值。留空存檔時自動帶入建議值。<br>紅框 = 死路（目標 power 較高但 win% 沒較高，取強者時永遠選不到）。</div>
+  `;
+}
+function edgeCardHtml(from, e) {
+  const t = byId[e.to];
+  const dead = deadSet.has(from+'>'+e.to);
+  const sug = suggestions[from+'>'+e.to];
+  return `<div class="edgeCard ${dead?'dead':''}">
+    <div class="top"><b>→ ${t?t.dir:e.to}</b><button class="del" onclick="removeEdge('${from}','${e.to}')">刪除</button></div>
+    <div class="row">
+      <div class="field"><label>win% ${e.pct==null?`(建議 ${sug??'?'})`:''}</label>
+        <input type="number" placeholder="${sug??''}" value="${e.pct==null?'':e.pct}" onchange="updEdge('${from}','${e.to}','pct',this.value===''?null:+this.value)"></div>
+      <div class="field"><label>花費 usd</label>
+        <input type="number" placeholder="stage 預設" value="${e.cost==null?'':e.cost}" onchange="updEdge('${from}','${e.to}','cost',this.value===''?null:+this.value)"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>minBattles</label>
+        <input type="number" placeholder="stage 預設" value="${e.minBattles==null?'':e.minBattles}" onchange="updEdge('${from}','${e.to}','minBattles',this.value===''?null:+this.value)"></div>
+      <div class="field"><label>日夜 time</label>
+        <select onchange="updEdge('${from}','${e.to}','time',this.value||null)">
+          <option value="" ${!e.time?'selected':''}>—</option>
+          <option value="day" ${e.time==='day'?'selected':''}>☀ 日</option>
+          <option value="night" ${e.time==='night'?'selected':''}>🌙 夜</option>
+        </select></div>
+    </div>
+    ${dead?'<div class="warn">⚠ 死路：調高此邊 win% 或降低較弱分支</div>':''}
+  </div>`;
+}
+function upd(id, key, val) { byId[id][key] = val; dirty = true; scheduleValidate(); }
+function updEdge(from, to, key, val) {
+  const e = G.edges.find(x=>x.from===from && x.to===to); if (!e) return;
+  e[key] = val; dirty = true; scheduleValidate();
+}
+
+// ── 儲存 ────────────────────────────────────────────────────────────────
+async function save() {
+  setStatus('儲存中…');
+  try {
+    const r = await fetch('/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(G) });
+    const d = await r.json();
+    if (!d.ok) { setStatus('儲存失敗: '+d.error); return; }
+    dirty = false;
+    let msg = `✅ 已寫入 ${d.written} 角色 · roster ${d.roster} · starters ${d.starters}`;
+    if (d.dead && d.dead.length) msg += ` · ⚠ ${d.dead.length} 死路`;
+    if (d.deployErrors && d.deployErrors.length) msg += ` · 部署錯誤 ${d.deployErrors.length}`;
+    setStatus(msg);
+  } catch(e) { setStatus('儲存失敗: '+e.message); }
+}
+
+window.addEventListener('keydown', ev => {
+  if ((ev.ctrlKey||ev.metaKey) && ev.key==='s') { ev.preventDefault(); save(); }
+});
+window.addEventListener('beforeunload', ev => { if (dirty) { ev.preventDefault(); ev.returnValue=''; } });
+window.addEventListener('resize', () => { applyView(); });
+
+reload();
+</script>
+</body>
+</html>

@@ -22,6 +22,15 @@ const HTML_PATH   = path.join(__dirname, 'route_editor.html');
 const INSTALL_DIR = path.join(os.homedir(), '.claude', 'agumon-statusline');
 const ASSETS_DIR  = path.join(INSTALL_DIR, 'assets');
 
+// ── 換行處理：沿用目標檔原本的 EOL（Windows 多為 CRLF、Mac/新檔為 LF），────────
+// 避免存檔把 CRLF 檔改成 LF 而在 git 產生「整檔變動」的幻影 diff。新檔用平台預設。
+function eolOf(p) {
+    try { return /\r\n/.test(fs.readFileSync(p, 'utf8')) ? '\r\n' : '\n'; }
+    catch(e) { return os.EOL; }
+}
+// body 以 \n 產生（JSON.stringify），寫檔時轉成目標檔的 EOL
+function writeText(p, body) { fs.writeFileSync(p, body.replace(/\r?\n/g, eolOf(p))); }
+
 // ── 載入所有角色 config（小寫 id → {dir, cfg}）──────────────────────────────
 function loadConfigs() {
     const out = {};
@@ -175,11 +184,11 @@ function save(graph) {
         const srcPath = path.join(CHARS_ROOT, entry.dir, 'config.json');
         fs.copyFileSync(srcPath, srcPath + '.bak');
         const json = JSON.stringify(cfg, null, 2) + '\n';
-        fs.writeFileSync(srcPath, json);
+        writeText(srcPath, json);   // 沿用原檔 EOL
         // 部署到 assets/<lc>/config.json
         try {
             const dstDir = path.join(ASSETS_DIR, n.id);
-            if (fs.existsSync(dstDir)) fs.writeFileSync(path.join(dstDir, 'config.json'), json);
+            if (fs.existsSync(dstDir)) writeText(path.join(dstDir, 'config.json'), json);
         } catch(e) { deployErrors.push(`${n.id}: ${e.message}`); }
         written.push(n.id);
     }
@@ -198,14 +207,14 @@ function save(graph) {
     const highTierStarters = graph.nodes.filter(n => n.starter && n.highTier).map(n => n.id).sort();
     const rosterOut = JSON.stringify({ roster, starters, starterWeights, highTierStarters }, null, 2) + '\n';
     fs.copyFileSync(ROSTER_PATH, ROSTER_PATH + '.bak');
-    fs.writeFileSync(ROSTER_PATH, rosterOut);
-    try { fs.writeFileSync(path.join(ASSETS_DIR, 'roster.json'), rosterOut); }
+    writeText(ROSTER_PATH, rosterOut);
+    try { writeText(path.join(ASSETS_DIR, 'roster.json'), rosterOut); }
     catch(e) { deployErrors.push(`roster: ${e.message}`); }
 
     // layout（座標）— 只寫 source，不部署
     const layout = {};
     for (const n of graph.nodes) if (n.x != null && n.y != null) layout[n.id] = { x: Math.round(n.x), y: Math.round(n.y) };
-    fs.writeFileSync(LAYOUT_PATH, JSON.stringify(layout, null, 2) + '\n');
+    writeText(LAYOUT_PATH, JSON.stringify(layout, null, 2) + '\n');
 
     const { dead } = validate(graph);
     return { ok: true, written: written.length, roster: roster.length, starters: starters.length, dead, deployErrors };

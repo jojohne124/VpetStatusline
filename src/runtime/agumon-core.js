@@ -332,8 +332,8 @@ function seedRand01(seed) {
 // 我戰力 = min(我power + trainingBonus, 我階段 cap)；敵戰力 = 敵power
 // 差距制線性：勝率% = 50 + (我戰 - 敵戰) + 體驗補正，clamp [5,95]。
 // 每 1 點戰力差 = 1% 勝率，直觀好算；clamp 留 ±5% 爆冷空間。
-// 體驗補正：單機 +5（玩家小優勢）；PvP 0 → 零和對稱（A勝率 + B勝率 = 100）。
-const WIN_EXP_BONUS = 5;      // 單機體驗補正（百分點）
+// 體驗補正：單機 0（純戰力差，與 PvP 一致零和對稱）。（2026-07-09 由 +5 改為 0）
+const WIN_EXP_BONUS = 0;      // 單機體驗補正（百分點）
 const WIN_FLOOR = 0.05;
 const WIN_CEIL  = 0.95;
 // 共用勝率核心：給已算好的雙方戰力 + 體驗補正 → 勝率機率。單機與 PvP 共用同一條公式。

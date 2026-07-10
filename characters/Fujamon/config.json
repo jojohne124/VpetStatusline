@@ -74,6 +74,20 @@
           "minBattles": 5
         }
       ]
+    },
+    {
+      "character": "seadramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 50,
+          "minBattles": 5
+        }
+      ]
     }
   ],
   "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補"

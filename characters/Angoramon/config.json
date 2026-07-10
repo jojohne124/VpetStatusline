@@ -62,7 +62,7 @@
   ],
   "evolvesTo": [
     {
-      "character": "leomon",
+      "character": "turuiemon",
       "conditions": [
         {
           "type": "cost_threshold",

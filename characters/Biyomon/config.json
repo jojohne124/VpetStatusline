@@ -88,20 +88,6 @@
           "minBattles": 5
         }
       ]
-    },
-    {
-      "character": "xiquemon",
-      "conditions": [
-        {
-          "type": "cost_threshold",
-          "usd": 10
-        },
-        {
-          "type": "win_rate",
-          "pct": 50,
-          "minBattles": 5
-        }
-      ]
     }
   ]
 }

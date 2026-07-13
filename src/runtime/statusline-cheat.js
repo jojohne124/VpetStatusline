@@ -11,6 +11,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const INSTALL_ROOT = __dirname;
+const IS_RELEASE   = fs.existsSync(path.join(INSTALL_ROOT, 'RELEASE'));   // release 版：隱藏/停用開發指令
 const ROSTER_FILE  = path.join(INSTALL_ROOT, 'assets', 'roster.json');
 const FORCE_FILE   = path.join(INSTALL_ROOT, 'state', 'force-char.json');
 const STATE_FILE   = path.join(INSTALL_ROOT, 'state', 'color-state.json');
@@ -39,24 +40,27 @@ const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
+    const dev = !IS_RELEASE;   // 開發指令只在非 release 顯示
     console.log('用法（指令可省略 --，例 vpet pvp）:');
     console.log('  vpet help                   顯示這份指令說明');
-    console.log('  vpet <index|name>           切換角色');
-    console.log('  vpet reset                  reset 到隨機 starter');
-    console.log('  vpet battle [enemy]         立即觸發戰鬥（可加 win / lose 強制勝負）');
-    console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
-    console.log('  vpet evolve <next>          立即播進化表演');
+    console.log('  vpet card                   顯示狀態卡（角色 / 階級 / 戰力 / 勝率）');
+    console.log('  vpet tree                   顯示進化歷程（走過的彩色、未到的黑影問號）');
+    console.log('  vpet reset                  重抽一隻起始桌寵');
+    console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
-    console.log('  vpet tree                   顯示目前角色的進化歷程（走過的彩色、未到的黑影問號）');
+    console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
     console.log('  vpet pvp-setup <url> <key> [名牌]  一鍵設定 PvP（首次用這個）');
-    console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名名牌；配不到真人自動派固定對手）');
-    console.log('  vpet pvp MAJAJA             指名固定練習對手（依你的階級，純本機免連線）');
-    console.log('  vpet code                   查看名牌 / server');
-    console.log('  vpet code <名牌>            設定名牌（顯示名＝指名 ID，中文或英數，例 vpet code 阿張）');
-    console.log('  vpet pvp-server <url> [key] 只設後端（進階）');
-    console.log('\n目前角色列表:');
-    roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
-    console.log('Starters:', starters.join(', '));
+    console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名；配不到真人派固定對手）');
+    console.log('  vpet pvp MAJAJA             指名固定練習對手（純本機免連線）');
+    console.log('  vpet code [名牌]            查看 / 設定名牌');
+    if (dev) {
+        console.log('  ── 開發指令（release 版不提供）──');
+        console.log('  vpet <index|name>           切換到任意角色');
+        console.log('  vpet evolve <next>          立即播進化表演');
+        console.log('  vpet battle [enemy] [win|lose]  強制戰鬥 / 指定勝負');
+        console.log('  vpet pvp-server <url> [key] 只設後端');
+        console.log('  vpet pin / unpin            釘住 / 解除 IDLE 對照');
+    }
 }
 
 // 顯式 help：vpet help / --help / -h（成功離開 exit 0）
@@ -67,7 +71,7 @@ if (!args.length) { printHelp(); process.exit(1); }
 // ── release 版 gate：部署目錄有 RELEASE 標記檔時，停用開發／作弊指令 ──
 // 移除：直接切換任意角色、evolve <角色>、battle <敵人>/win/lose、pvp-server、pin/unpin。
 // 保留：help/card/pvp/pvp-setup/code/sleep/wake/tree/reset/freeze/unfreeze、battle on/off。
-if (fs.existsSync(path.join(INSTALL_ROOT, 'RELEASE'))) {
+if (IS_RELEASE) {
     const a0 = args[0];
     const blockedCmd    = ['--evolve', '--pvp-server', '--pin', '--unpin'].includes(a0);
     const blockedBattle = a0 === '--battle' && !(args[1] === 'on' || args[1] === 'off');  // 保留 battle on/off
@@ -456,7 +460,6 @@ if (arg === '--reset') {
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
     const pool = starters.filter(s => roster.includes(s));
     target = weightedPickStarter(pool.length ? pool : starters);
-    console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);
     target = isNaN(idx) ? arg.toLowerCase() : roster[idx - 1];   // 角色名不分大小寫
@@ -476,4 +479,5 @@ delete force.evolveTriggerTs;
 delete force.evolveTarget;
 if (arg === '--reset') force.dropTriggerTs = Date.now();   // reset 抽 starter → 播空降表演
 writeForce(force);
-console.log(`✓ 已切換至 ${target}（下次 refresh 生效）`);
+// reset：只回報抽中對象的英文名（精簡）；一般切換：完整訊息
+console.log(arg === '--reset' ? target : `✓ 已切換至 ${target}（下次 refresh 生效）`);

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# vpet — 轉呼叫部署後的 statusline-cheat（assets/state 在 ~/.claude）
+node "$HOME/.claude/agumon-statusline/statusline-cheat.js" "$@"

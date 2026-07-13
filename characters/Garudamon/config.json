@@ -1,0 +1,93 @@
+{
+  "name": "garudamon",
+  "stage": "Perfect",
+  "power": 115,
+  "frameCount": 12,
+  "targetSize": 16,
+  "layout": "individual",
+  "frameNames": [
+    "Idle_1",
+    "Idle_2",
+    "Eat_1",
+    "Eat_2",
+    "Sleep_1",
+    "Sleep_2",
+    "Refuse",
+    "Happy",
+    "Angry",
+    "Hurt",
+    "Sad",
+    "Attack"
+  ],
+  "frames": {
+    "IDLE_1": 0,
+    "IDLE_2": 1,
+    "EAT_1": 2,
+    "EAT_2": 3,
+    "SLEEP_1": 4,
+    "SLEEP_2": 5,
+    "REFUSE": 6,
+    "HAPPY": 7,
+    "ANGRY": 8,
+    "HURT": 9,
+    "SAD": 10,
+    "ATTACK": 11
+  },
+  "sleepFrames": [
+    4,
+    5
+  ],
+  "sleepPeriod": 2,
+  "roarFrames": [
+    11,
+    0,
+    11
+  ],
+  "tokenResetFrames": [
+    7,
+    0,
+    7
+  ],
+  "exprs": [
+    {
+      "frames": [
+        2
+      ]
+    },
+    {
+      "frames": [
+        8
+      ]
+    }
+  ],
+  "evolvesTo": [
+    {
+      "character": "gryphonmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 12
+        }
+      ]
+    },
+    {
+      "character": "phoenixmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
+}

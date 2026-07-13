@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "sprites": {
+    "encounter": {
+      "indices": [
+        0,
+        1,
+        0
+      ],
+      "frames": 3,
+      "size": 16
+    },
+    "boom": {
+      "indices": [
+        2,
+        3,
+        2
+      ],
+      "frames": 3,
+      "size": 16
+    },
+    "dna": {
+      "indices": [
+        4,
+        5,
+        6
+      ],
+      "frames": 3,
+      "size": 16
+    },
+    "dna_end1": {
+      "indices": [
+        7
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "dna_end2": {
+      "indices": [
+        8
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "sun": {
+      "indices": [
+        9
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "cloud": {
+      "indices": [
+        10
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "zsleep1": {
+      "indices": [
+        11
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "zsleep2": {
+      "indices": [
+        12
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "dust": {
+      "indices": [
+        13
+      ],
+      "frames": 1,
+      "size": 16
+    },
+    "dust_hi": {
+      "indices": [
+        14
+      ],
+      "frames": 1,
+      "size": 16
+    }
+  }
+}

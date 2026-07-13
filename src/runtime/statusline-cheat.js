@@ -38,8 +38,9 @@ const args = process.argv.slice(2);
 const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
-if (!args.length) {
+function printHelp() {
     console.log('用法（指令可省略 --，例 vpet pvp）:');
+    console.log('  vpet help                   顯示這份指令說明');
     console.log('  vpet <index|name>           切換角色');
     console.log('  vpet reset                  reset 到隨機 starter');
     console.log('  vpet battle [enemy]         立即觸發戰鬥（可加 win / lose 強制勝負）');
@@ -56,7 +57,25 @@ if (!args.length) {
     console.log('\n目前角色列表:');
     roster.forEach((name, i) => console.log(`  #${i + 1} ${name}`));
     console.log('Starters:', starters.join(', '));
-    process.exit(1);
+}
+
+// 顯式 help：vpet help / --help / -h（成功離開 exit 0）
+if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') { printHelp(); process.exit(0); }
+// 無參數：印用法（視為未給指令，exit 1）
+if (!args.length) { printHelp(); process.exit(1); }
+
+// ── release 版 gate：部署目錄有 RELEASE 標記檔時，停用開發／作弊指令 ──
+// 移除：直接切換任意角色、evolve <角色>、battle <敵人>/win/lose、pvp-server、pin/unpin。
+// 保留：help/card/pvp/pvp-setup/code/sleep/wake/tree/reset/freeze/unfreeze、battle on/off。
+if (fs.existsSync(path.join(INSTALL_ROOT, 'RELEASE'))) {
+    const a0 = args[0];
+    const blockedCmd    = ['--evolve', '--pvp-server', '--pin', '--unpin'].includes(a0);
+    const blockedBattle = a0 === '--battle' && !(args[1] === 'on' || args[1] === 'off');  // 保留 battle on/off
+    const blockedSwitch = a0 && !a0.startsWith('--');   // 裸角色名/index（--reset 有 -- 前綴不受影響）
+    if (blockedCmd || blockedBattle || blockedSwitch) {
+        console.log('此版本未提供此指令。輸入 vpet help 看可用指令。');
+        process.exit(1);
+    }
 }
 
 function readForce() {

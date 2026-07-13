@@ -84,6 +84,11 @@ function installRuntime() {
         if (copyFile(path.join(srcDir, fn), path.join(INSTALL_DIR, fn))) ok++;
     }
     console.log(`  -> ${ok}/${RUNTIME_FILES.length} runtime 檔案已安裝`);
+    // release 版標記：repo 根有 RELEASE 就部署到 INSTALL_DIR，讓 statusline-cheat 停用開發指令。
+    // main（開發）沒有此檔 → 不部署（開發指令全開）。
+    if (fs.existsSync(path.join(REPO_ROOT, 'RELEASE'))) {
+        copyFile(path.join(REPO_ROOT, 'RELEASE'), path.join(INSTALL_DIR, 'RELEASE'), 'release');
+    }
 }
 
 function installCharacters() {

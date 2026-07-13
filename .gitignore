@@ -32,3 +32,6 @@ characters/*/pixels.json.bak
 # Cloudflare Worker (PvP) 本機 dev 殘留與密鑰
 server/**/.wrangler/
 server/**/.dev.vars
+
+# release 打包產物
+dist/

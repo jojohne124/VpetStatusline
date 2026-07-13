@@ -1,0 +1,99 @@
+#!/usr/bin/env node
+/*
+ * build-release.js — 從 main 產出「一般使用者」用的輕量 release 樹。
+ *
+ * 用法：
+ *   node scripts/build-release.js            # 產到 dist/release
+ *   node scripts/build-release.js <out-dir>  # 產到指定目錄
+ *
+ * 產物只含執行 vpet statusline 所需：runtime js、部署用角色 json、shared json、
+ * install/uninstall、bin 薄殼、package.json，並放一個 RELEASE 標記檔（install 後
+ * statusline-cheat 會據此停用開發／作弊指令）。
+ *
+ * 移除（開發資產）：角色原圖 PNG、pixels.json/bullet.json 中介檔、*.bak、
+ *   src/editor（含進化路線編輯器）、src/tools、legacy/、server/、docs/、
+ *   scripts/ 內開發工具（只留 install/uninstall）、shared 的 sprites.json、
+ *   characters/evo-layout.json。
+ *
+ * 發布：驗證 dist/release 後，可用 git worktree 推到 release 分支，或直接打包。
+ *   （見結尾印出的提示）
+ */
+const fs = require('fs');
+const path = require('path');
+
+const REPO = path.resolve(__dirname, '..');
+const OUT = process.argv[2] ? path.resolve(process.argv[2]) : path.join(REPO, 'dist', 'release');
+
+const SHELL_SHIMS = new Set(['vpet']);   // 無副檔名的 bash 薄殼
+const isShell = f => SHELL_SHIMS.has(path.basename(f)) || /\.(sh|command)$/.test(f);
+
+let files = 0, chars = 0, skippedPng = 0, savedBytes = 0;
+
+function rmrf(p) { if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true }); }
+function copyRel(rel) {
+    const src = path.join(REPO, rel), dst = path.join(OUT, rel);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    if (isShell(src)) {
+        // shell 薄殼強制 LF，避免 CRLF 讓 shebang 在 unix/mac 壞掉
+        fs.writeFileSync(dst, fs.readFileSync(src, 'utf8').replace(/\r\n/g, '\n'));
+    } else {
+        fs.copyFileSync(src, dst);
+    }
+    files++;
+}
+
+rmrf(OUT);
+fs.mkdirSync(OUT, { recursive: true });
+
+// bin/（vpet 薄殼）
+for (const f of fs.readdirSync(path.join(REPO, 'bin'))) copyRel(path.join('bin', f));
+
+// package.json（npm link 的 bin 欄位需要）
+copyRel('package.json');
+
+// runtime js
+for (const f of fs.readdirSync(path.join(REPO, 'src', 'runtime')))
+    if (f.endsWith('.js')) copyRel(path.join('src', 'runtime', f));
+
+// 只留 install / uninstall
+for (const f of ['install.js', 'uninstall.js'])
+    if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
+
+// characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）
+copyRel(path.join('characters', 'roster.json'));
+const KEEP_CHAR = new Set(['art.json', 'config.json', 'bullet-art.json', 'cutin-art.json']);
+for (const d of fs.readdirSync(path.join(REPO, 'characters'), { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join('characters', d.name);
+    if (!fs.existsSync(path.join(REPO, dir, 'config.json'))) continue;
+    chars++;
+    for (const f of fs.readdirSync(path.join(REPO, dir))) {
+        if (KEEP_CHAR.has(f)) copyRel(path.join(dir, f));
+        else if (/\.png$/i.test(f)) { skippedPng++; savedBytes += fs.statSync(path.join(REPO, dir, f)).size; }
+    }
+}
+
+// shared：runtime 只讀 manifest + art（sprites.json 是編輯器來源，不含）
+for (const f of ['manifest.json', 'art.json'])
+    if (fs.existsSync(path.join(REPO, 'shared', f))) copyRel(path.join('shared', f));
+
+// RELEASE 標記（install 會部署到 ~/.claude/agumon-statusline/RELEASE → 停用開發指令）
+fs.writeFileSync(path.join(OUT, 'RELEASE'), '1\n');
+
+// 簡短 README
+fs.writeFileSync(path.join(OUT, 'README.md'),
+`# vpet statusline（release）
+
+一般使用者版。安裝：
+
+    node scripts/install.js
+
+安裝後輸入 \`vpet help\` 看可用指令。此版本已移除開發／作弊指令與美術原始檔。
+`);
+
+const mb = (savedBytes / 1048576).toFixed(1);
+console.log(`\n✅ release 已產出：${path.relative(REPO, OUT) || OUT}`);
+console.log(`   檔案 ${files} 個、角色 ${chars} 隻；略過原圖 PNG ${skippedPng} 個（省下約 ${mb} MB）。`);
+console.log(`\n下一步（發布到 release 分支，可選）：`);
+console.log(`   git worktree add -B release ../agumon-release`);
+console.log(`   （把 ${path.relative(REPO, OUT)}/ 內容覆蓋進該 worktree，commit、push origin release）`);

@@ -460,6 +460,7 @@ if (arg === '--reset') {
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
     const pool = starters.filter(s => roster.includes(s));
     target = weightedPickStarter(pool.length ? pool : starters);
+    console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);
     target = isNaN(idx) ? arg.toLowerCase() : roster[idx - 1];   // 角色名不分大小寫
@@ -479,5 +480,4 @@ delete force.evolveTriggerTs;
 delete force.evolveTarget;
 if (arg === '--reset') force.dropTriggerTs = Date.now();   // reset 抽 starter → 播空降表演
 writeForce(force);
-// reset：只回報抽中對象的英文名（精簡）；一般切換：完整訊息
-console.log(arg === '--reset' ? target : `✓ 已切換至 ${target}（下次 refresh 生效）`);
+console.log(`✓ 已切換至 ${target}（下次 refresh 生效）`);

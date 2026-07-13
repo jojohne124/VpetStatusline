@@ -80,16 +80,10 @@ for (const f of ['manifest.json', 'art.json'])
 // RELEASE 標記（install 會部署到 ~/.claude/agumon-statusline/RELEASE → 停用開發指令）
 fs.writeFileSync(path.join(OUT, 'RELEASE'), '1\n');
 
-// 簡短 README
-fs.writeFileSync(path.join(OUT, 'README.md'),
-`# vpet statusline（release）
-
-一般使用者版。安裝：
-
-    node scripts/install.js
-
-安裝後輸入 \`vpet help\` 看可用指令。此版本已移除開發／作弊指令與美術原始檔。
-`);
+// 新手指南當 README（clone release 就看到安裝指引）
+const guide = path.join(REPO, 'GUIDE.md');
+if (fs.existsSync(guide)) { fs.copyFileSync(guide, path.join(OUT, 'README.md')); files++; }
+else console.warn('  [warn] 找不到 GUIDE.md，release 少了 README');
 
 const mb = (savedBytes / 1048576).toFixed(1);
 console.log(`\n✅ release 已產出：${path.relative(REPO, OUT) || OUT}`);

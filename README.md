@@ -5,6 +5,7 @@
 - **左側**：模型 / ctx % / cwd / git / cost / rate-limit 進度條
 - **右側**：16×16 像素角色，會走路、表情、大吼、睡覺、進化
 
+> 一般使用者的安裝與指令說明請見 [GUIDE.md](GUIDE.md)。
 > 詳細架構、設計決策、TODO 路線圖請見 [PROJECT.md](PROJECT.md)。
 
 ---

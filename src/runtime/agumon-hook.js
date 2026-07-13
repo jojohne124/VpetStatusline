@@ -15,6 +15,14 @@ function ensureDir(p) { try { fs.mkdirSync(p, { recursive: true }); } catch(e) {
 // 後 clearTimeout，正常路徑零延遲退出。
 const _watchdog = setTimeout(() => process.exit(0), 8000);
 
+// 登記自己，讓 statusline 的跨行程收屍也能清掉「被凍結而 watchdog 跑不動」的 hook 孤兒。
+// 本檔只登記/除名，不主動收屍（收屍由 statusline-agumon-color.js 的 reapStale() 統一處理）。
+// 只寫／刪自己那一個 pid 檔，不碰共享名單 → 無競態。
+const PIDS_DIR = path.join(INSTALL_ROOT, 'state', 'pids');
+const PID_FILE = path.join(PIDS_DIR, process.pid + '.pid');
+try { ensureDir(PIDS_DIR); fs.writeFileSync(PID_FILE, String(Date.now())); } catch(e) {}
+process.on('exit', () => { try { fs.unlinkSync(PID_FILE); } catch(e) {} });
+
 let d = '';
 process.stdin.on('data', c => d += c);
 process.stdin.on('end', () => {

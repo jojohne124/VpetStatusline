@@ -30,38 +30,45 @@ function tryLoadArt(file) {
 // 交由「後續每一個新啟動的健康行程」跨行程清除（見該函式）。
 const _watchdog = setTimeout(() => process.exit(0), 8000);
 
-// 跨行程收屍：每個新啟動的 statusline 都先掃描 live-pids，把「已登記超過 REAP_AGE 卻還活著」的
+// 跨行程收屍：每個新啟動的 statusline 都先掃描 pids/，把「已登記超過 REAP_AGE 卻還活著」的
 // 舊行程（＝卡死/凍結的孤兒，健康行程早就退出並自我除名了）直接 SIGKILL。killer 是剛被排程、
 // 正常在跑的新行程，故不受「孤兒自己被換頁凍結、連自己的計時器都跑不動」影響——這是唯一能清掉
 // 記憶體壓力下殭屍孤兒的機制。閒置時 statusline 仍每 5~15 秒被叫用一次，故週末也會持續收屍。
-const PIDS_FILE  = path.join(STATE_DIR, 'live-pids.json');
+//
+// ⚠️ 每個行程只寫／刪「自己那一個 pid 檔」，絕不整份讀改寫共享名單。舊版用單一 live-pids.json
+// 當共享 map，兩個時間重疊的行程會 read-modify-write 互相覆蓋：B 先讀到（還沒有 A 的）舊快照、
+// A 寫入自己、B 再把舊快照寫回 → A 的登記被抹掉 → A 之後凍結成孤兒也永遠查不到、收不了屍。
+// 目錄列表即名單，天生無競態。
+const PIDS_DIR   = path.join(STATE_DIR, 'pids');
 const REAP_AGE_MS = 20000;   // 活著且登記超過 20 秒 = 卡死（健康 render 1~3 秒早已退出並除名）
+function pidFile(pid) { return path.join(PIDS_DIR, pid + '.pid'); }
 function reapStale() {
-    let map = {};
-    try { map = JSON.parse(fs.readFileSync(PIDS_FILE, 'utf8')) || {}; } catch(e) {}
+    try { fs.mkdirSync(PIDS_DIR, { recursive: true }); } catch(e) {}
+    // 先登記自己：單一檔案的整檔寫入，不依賴任何共享狀態
+    try { fs.writeFileSync(pidFile(process.pid), String(Date.now())); } catch(e) {}
+    let names = [];
+    try { names = fs.readdirSync(PIDS_DIR); } catch(e) {}
     const now = Date.now();
-    for (const key of Object.keys(map)) {
-        const pid = +key;
-        if (pid === process.pid) continue;
+    for (const name of names) {
+        const pid = parseInt(name, 10);
+        if (!pid || pid === process.pid) continue;
+        let ts = 0;
+        try { ts = parseInt(fs.readFileSync(path.join(PIDS_DIR, name), 'utf8'), 10) || 0; } catch(e) { continue; }
         let alive = true;
-        try { process.kill(pid, 0); } catch(e) { alive = false; }   // 訊號 0：只探活、不影響
-        if (!alive) { delete map[key]; continue; }                   // 已退出（含自我除名）→ 清出名單
-        if (now - map[key] > REAP_AGE_MS) {                          // 活著又逾時 = 卡死孤兒 → 收屍
+        // 訊號 0：只探活、不影響。EPERM＝行程存在但無權限，仍算活著（舊版一律當死掉，會把活孤兒
+        // 誤刪出名單而永遠收不到屍）。
+        try { process.kill(pid, 0); } catch(e) { alive = (e.code === 'EPERM'); }
+        if (!alive) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} continue; }   // 已退出 → 清掉殘留檔
+        if (now - ts > REAP_AGE_MS) {                                                // 活著又逾時 = 卡死孤兒 → 收屍
             try { process.kill(pid, 'SIGKILL'); } catch(e) {}
-            delete map[key];
+            try { fs.unlinkSync(pidFile(pid)); } catch(e) {}
         }
     }
-    map[process.pid] = now;
-    try { atomicWrite(PIDS_FILE, JSON.stringify(map)); } catch(e) {}
 }
-// 自我除名：正常退出前把自己從名單移除，避免 PID 被作業系統回收再指派給別的行程後被誤殺。
-function deregister() {
-    try {
-        const map = JSON.parse(fs.readFileSync(PIDS_FILE, 'utf8')) || {};
-        delete map[process.pid];
-        atomicWrite(PIDS_FILE, JSON.stringify(map));
-    } catch(e) {}
-}
+// 自我除名：正常退出前刪掉自己的 pid 檔，避免 PID 被作業系統回收再指派給別的行程後被誤殺。
+// （死掉行程的殘留檔也會在每次 render 的掃描中被清掉，故「殘留檔存活到 PID 被回收且超過 20 秒」
+//   幾乎不可能發生。）
+function deregister() { try { fs.unlinkSync(pidFile(process.pid)); } catch(e) {} }
 try { reapStale(); } catch(e) {}
 process.on('exit', deregister);   // 任何正常退出（含 watchdog process.exit）都自我除名；被 SIGKILL 收屍時不觸發（正確）
 

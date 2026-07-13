@@ -88,6 +88,4 @@ else console.warn('  [warn] 找不到 GUIDE.md，release 少了 README');
 const mb = (savedBytes / 1048576).toFixed(1);
 console.log(`\n✅ release 已產出：${path.relative(REPO, OUT) || OUT}`);
 console.log(`   檔案 ${files} 個、角色 ${chars} 隻；略過原圖 PNG ${skippedPng} 個（省下約 ${mb} MB）。`);
-console.log(`\n下一步（發布到 release 分支，可選）：`);
-console.log(`   git worktree add -B release ../agumon-release`);
-console.log(`   （把 ${path.relative(REPO, OUT)}/ 內容覆蓋進該 worktree，commit、push origin release）`);
+console.log(`\n發布到 release 分支：node scripts/publish-release.js（一鍵 build+更新+push，無變更會跳過）`);

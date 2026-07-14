@@ -23,6 +23,9 @@ cd vpet
 node scripts/install.js
 ```
 
+> **不想開終端機？** 下載後直接雙擊資料夾裡的 **`install.bat`**（Windows）或
+> **`install.command`**（macOS）即可安裝，效果與上面的指令相同。（仍需先裝 Node.js）
+
 安裝腳本會自動：
 - 把桌寵資產裝到 `~/.claude/agumon-statusline/`
 - 幫你的 `~/.claude/settings.json` 掛上 statusline 與 prompt hook（會先備份）
@@ -63,6 +66,7 @@ node scripts/install.js
 | `vpet pvp-setup <url> <key> [名牌]` | 首次設定幽靈對戰（見下） |
 | `vpet pvp [名牌]` | 幽靈對戰 |
 | `vpet code [名牌]` | 查看 / 設定你的名牌 |
+| `vpet doctor [--check]` | 桌寵卡住／不動時：清除卡死的背景行程（`--check` 只診斷不清） |
 
 > 指令的 `--` 可省略（`vpet pvp` = `vpet --pvp`）。
 
@@ -110,6 +114,7 @@ vpet code 新名牌     # 改名牌（會同步更新後端上的戰卡）
 - **狀態列沒出現桌寵**：確認已重開 Claude Code；檢查 `~/.claude/settings.json` 的
   `statusLine.command` 有指向 `agumon-statusline/statusline-agumon-color.js`。
 - **打 `vpet` 說找不到指令**：重開終端機；仍不行就照安裝時印的 PATH 指示加一下。
+- **桌寵卡住不動 / 動畫凍結**：打 `vpet doctor` 清除卡死的背景行程（只想先看有沒有問題就 `vpet doctor --check`）。平時系統會自動清，這是手動補刀。
 - **想移除**：在安裝資料夾執行 `node scripts/uninstall.js`。
 
 祝養寵愉快 🦖

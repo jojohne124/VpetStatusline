@@ -7,8 +7,8 @@
  *   node scripts/build-release.js <out-dir>  # 產到指定目錄
  *
  * 產物只含執行 vpet statusline 所需：runtime js、部署用角色 json、shared json、
- * install/uninstall、bin 薄殼、package.json，並放一個 RELEASE 標記檔（install 後
- * statusline-cheat 會據此停用開發／作弊指令）。
+ * install/uninstall、bin 薄殼、package.json、tools/agumon-doctor 自救包，並放一個
+ * RELEASE 標記檔（install 後 statusline-cheat 會據此停用開發／作弊指令）。
  *
  * 移除（開發資產）：角色原圖 PNG、pixels.json/bullet.json 中介檔、*.bak、
  *   src/editor（含進化路線編輯器）、src/tools、legacy/、server/、docs/、
@@ -76,6 +76,12 @@ for (const d of fs.readdirSync(path.join(REPO, 'characters'), { withFileTypes: t
 // shared：runtime 只讀 manifest + art（sprites.json 是編輯器來源，不含）
 for (const f of ['manifest.json', 'art.json'])
     if (fs.existsSync(path.join(REPO, 'shared', f))) copyRel(path.join('shared', f));
+
+// tools/agumon-doctor：桌寵卡死自救的獨立包（雙擊 .bat/.command + doctor.js + README）。
+// 一般使用者卡死時可直接在 release 樹裡雙擊自救，不必另外索取 zip。
+const doctorDir = path.join(REPO, 'tools', 'agumon-doctor');
+if (fs.existsSync(doctorDir))
+    for (const f of fs.readdirSync(doctorDir)) copyRel(path.join('tools', 'agumon-doctor', f));
 
 // RELEASE 標記（install 會部署到 ~/.claude/agumon-statusline/RELEASE → 停用開發指令）
 fs.writeFileSync(path.join(OUT, 'RELEASE'), '1\n');

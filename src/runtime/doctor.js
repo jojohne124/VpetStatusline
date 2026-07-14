@@ -2,7 +2,7 @@
 // agumon doctor —— 手動掃描並清除 statusline / hook 的 node 孤兒。
 //
 // statusline 內建的跨行程收屍（reapStale）平時就會自動清孤兒；本工具是「手動補刀 + 診斷」：
-// 隨時用 `ac doctor` 就能得到權威答案（現在有幾隻孤兒）並一鍵清除，不必再手刻 PowerShell。
+// 隨時用 `vpet doctor` 就能得到權威答案（現在有幾隻孤兒）並一鍵清除，不必再手刻 PowerShell。
 //
 // 判定：掃 OS 上所有 node，只認命令列含 statusline-agumon-color / agumon-hook 的行程。
 //   齡 > ORPHAN_AGE_SEC 視為孤兒（健康 render 1~3 秒就結束；留超過 20 秒＝卡死/凍結）。

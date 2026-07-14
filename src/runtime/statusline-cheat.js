@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
@@ -53,6 +53,7 @@ function printHelp() {
     console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名；配不到真人派固定對手）');
     console.log('  vpet pvp MAJAJA             指名固定練習對手（純本機免連線）');
     console.log('  vpet code [名牌]            查看 / 設定名牌');
+    console.log('  vpet doctor [--check]       檢查並清除卡死的 node 孤兒（--check 只診斷不清）');
     if (dev) {
         console.log('  ── 開發指令（release 版不提供）──');
         console.log('  vpet <index|name>           切換到任意角色');
@@ -67,6 +68,13 @@ function printHelp() {
 if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') { printHelp(); process.exit(0); }
 // 無參數：印用法（視為未給指令，exit 1）
 if (!args.length) { printHelp(); process.exit(1); }
+
+// doctor：檢查並清除 node 孤兒。放在 release gate 之前 → 維護指令一律可用。
+// （真正卡死時建議用獨立包直接跑 doctor.js，不必經這裡；見 tools/agumon-doctor/）
+if (args[0] === '--doctor') {
+    const check = args.includes('--check') || args[1] === 'check';
+    process.exit(require('./doctor').run({ fix: !check }));
+}
 
 // ── release 版 gate：部署目錄有 RELEASE 標記檔時，停用開發／作弊指令 ──
 // 移除：直接切換任意角色、evolve <角色>、battle <敵人>/win/lose、pvp-server、pin/unpin。

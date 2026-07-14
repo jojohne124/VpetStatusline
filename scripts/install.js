@@ -44,6 +44,7 @@ const RUNTIME_FILES = [
     'statusline-agumon.js',
     'statusline-cheat.js',
     'agumon-hook.js',
+    'doctor.js',            // vpet doctor：檢查/清除 node 孤兒（漏掉會導致 ac doctor 失效）
 ];
 
 // 舊版散落在 ~/.claude/ 的檔案 → 新位置

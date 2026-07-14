@@ -54,14 +54,20 @@ function reapStale() {
         if (!pid || pid === process.pid) continue;
         let ts = 0;
         try { ts = parseInt(fs.readFileSync(path.join(PIDS_DIR, name), 'utf8'), 10) || 0; } catch(e) { continue; }
-        let alive = true;
-        // 訊號 0：只探活、不影響。EPERM＝行程存在但無權限，仍算活著（舊版一律當死掉，會把活孤兒
-        // 誤刪出名單而永遠收不到屍）。
-        try { process.kill(pid, 0); } catch(e) { alive = (e.code === 'EPERM'); }
-        if (!alive) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} continue; }   // 已退出 → 清掉殘留檔
-        if (now - ts > REAP_AGE_MS) {                                                // 活著又逾時 = 卡死孤兒 → 收屍
+        // 核心不變量：pid 檔只有在「確認行程已死」時才移除；只要還活著就保留，下個 render 重試。
+        // ⚠️ 舊版兩處都「沒確認死亡就 unlink」，正是永久孤兒的真凶：本機記憶體吃緊時，
+        // 對凍結行程送 SIGKILL（TerminateProcess）可能延遲生效甚至當下沒死，舊版卻立刻刪掉 pid 檔
+        // → 行程還活著卻從名單消失 → 之後所有 render 都看不到它 → 永久收不了屍。改為殺完「回探」，
+        // 只有拿到 ESRCH（確認終結）才刪檔，否則留檔重試。探活同理：只有明確 ESRCH 才算死，EPERM
+        // 或任何暫時性錯誤一律當活著（避免記憶體壓力下的暫時錯誤誤刪活孤兒的追蹤檔）。
+        let dead = false;
+        try { process.kill(pid, 0); } catch(e) { dead = (e.code === 'ESRCH'); }   // 訊號 0：只探活
+        if (dead) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} continue; }  // 確認死亡 → 清殘留檔
+        if (now - ts > REAP_AGE_MS) {                                             // 活著又逾時 = 卡死孤兒 → 收屍
             try { process.kill(pid, 'SIGKILL'); } catch(e) {}
-            try { fs.unlinkSync(pidFile(pid)); } catch(e) {}
+            let killed = false;
+            try { process.kill(pid, 0); } catch(e) { killed = (e.code === 'ESRCH'); }  // 回探：真的死了嗎
+            if (killed) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} }      // 確認終結才刪，否則留檔下輪再殺
         }
     }
 }

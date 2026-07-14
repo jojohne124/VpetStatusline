@@ -108,6 +108,26 @@ h1 { margin: 0 0 16px; font-size: 18px; }
   align-self: start;
 }
 
+/* 攻擊表演預覽 */
+.battle-row { display: flex; gap: 16px; align-items: flex-start; }
+#battle-canvas {
+  image-rendering: pixelated;
+  width: 520px; height: 160px;   /* 52×16 放大 10× */
+  background: #111; border: 1px solid var(--border); border-radius: 4px;
+}
+.battle-ctrls { display: flex; flex-direction: column; gap: 10px; min-width: 160px; }
+.battle-btns { display: flex; gap: 6px; }
+.battle-btns button { flex: 1; padding: 7px 6px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.battle-toggle { background: #3a3a3a; color: #aaa; border: 1px solid var(--border); }
+.battle-toggle.active { background: var(--ok); color: #fff; border-color: var(--ok); }
+.battle-speed { font-size: 12px; color: #bbb; display: flex; flex-direction: column; gap: 4px; }
+.battle-speed input { width: 100%; }
+.battle-enemy { font-size: 12px; color: #bbb; display: flex; flex-direction: column; gap: 4px; }
+.battle-enemy-row { display: flex; gap: 6px; }
+.battle-enemy select { flex: 1; background: #3a3a3a; color: #e0e0e0; border: 1px solid var(--border); border-radius: 6px; padding: 5px; }
+.battle-enemy .battle-toggle { flex: 0 0 auto; padding: 5px 9px; }
+.battle-meta { font-size: 11px; color: #888; line-height: 1.5; }
+
 /* 右側：工具 */
 .palette {
   display: grid;
@@ -230,6 +250,32 @@ h1 { margin: 0 0 16px; font-size: 18px; }
         <div>
           <div style="font-size:12px;color:#999;margin-bottom:4px;">8× 預覽</div>
           <canvas id="preview" width="16" height="16"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- 子彈模式：攻擊表演預覽（重用 runtime 戰鬥邏輯）-->
+    <div class="panel" id="battle-panel" style="display:none;">
+      <h3>▶ 攻擊表演預覽（子彈＝目前編輯的那一幀）</h3>
+      <div class="battle-row">
+        <canvas id="battle-canvas" width="52" height="16"></canvas>
+        <div class="battle-ctrls">
+          <div class="battle-btns">
+            <button id="bp-play" class="secondary">▶ 播放</button>
+            <button id="bp-win" class="battle-toggle active" title="我方勝／敗（影響子彈上下層與結算）">勝</button>
+            <button id="bp-loop" class="battle-toggle active" title="循環播放">循環</button>
+          </div>
+          <label class="battle-enemy">對手
+            <span class="battle-enemy-row">
+              <select id="bp-enemy" title="自動＝同階隨機；也可指定任一角色"></select>
+              <button id="bp-reroll" class="battle-toggle" title="換一個對手（自動模式）">🎲</button>
+            </span>
+          </label>
+          <label class="battle-speed">速度
+            <input type="range" id="bp-speed" min="120" max="1000" step="20" value="420">
+            <span id="bp-speed-val">420ms</span>
+          </label>
+          <div class="battle-meta" id="bp-meta">尚未載入</div>
         </div>
       </div>
     </div>
@@ -373,6 +419,7 @@ async function load() {
     buildPalette();
     renderThumbs();
     selectFrame(0);
+    updateBattlePanel();
 }
 
 async function switchMode(mode) {
@@ -858,6 +905,7 @@ async function loadChars() {
         const res = await fetch('/chars');
         if (!res.ok) return;
         const { chars, current } = await res.json();
+        allCharsList = chars;
         if (!currentChar) currentChar = current;
         const sel = document.getElementById('char-select');
         sel.innerHTML = chars.map(c =>
@@ -871,6 +919,112 @@ async function loadChars() {
         };
     } catch(e) {}
 }
+
+// ── 攻擊表演預覽（子彈模式）──────────────────────────
+let bpFrames = [], bpIdx = 0, bpTimer = null, bpPlaying = false;
+let bpWin = true, bpLoop = true, bpSpeed = 420, bpSeed = 1;
+let allCharsList = [];   // /chars 回傳，供對手下拉用
+
+function updateBattlePanel() {
+    const show = currentMode === 'bullet';
+    document.getElementById('battle-panel').style.display = show ? 'block' : 'none';
+    if (!show) { stopBattle(); return; }
+    populateEnemySelect();
+}
+
+function populateEnemySelect() {
+    const sel = document.getElementById('bp-enemy');
+    const cur = (currentChar || '').toLowerCase();
+    const prev = sel.value;
+    const opts = ['<option value="">自動（同階隨機）</option>'];
+    for (const c of allCharsList) {
+        if (c.toLowerCase() === cur) continue;   // 不跟自己打
+        opts.push(`<option value="${c}">${c}</option>`);
+    }
+    sel.innerHTML = opts.join('');
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function drawBattleFrame() {
+    const canvas = document.getElementById('battle-canvas');
+    const ctx = canvas.getContext('2d');
+    const buf = bpFrames[bpIdx];
+    const img = ctx.createImageData(canvas.width, canvas.height);   // 全透明起手
+    if (buf) {
+        for (let r = 0; r < buf.length; r++) {
+            const row = buf[r] || [];
+            for (let x = 0; x < row.length; x++) {
+                const cell = row[x];
+                if (!cell) continue;
+                const put = (px, py, rr, gg, bb) => {
+                    const o = (py * canvas.width + px) * 4;
+                    img.data[o] = rr; img.data[o+1] = gg; img.data[o+2] = bb; img.data[o+3] = 255;
+                };
+                if (cell[0] !== -1) put(x, r*2,   cell[0], cell[1], cell[2]);
+                if (cell[3] !== -1) put(x, r*2+1, cell[3], cell[4], cell[5]);
+            }
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+}
+
+function stopBattle() {
+    bpPlaying = false;
+    if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
+    document.getElementById('bp-play').textContent = '▶ 播放';
+}
+
+function tickBattle() {
+    bpIdx++;
+    if (bpIdx >= bpFrames.length) {
+        if (bpLoop) bpIdx = 0;
+        else { bpIdx = bpFrames.length - 1; drawBattleFrame(); stopBattle(); return; }
+    }
+    drawBattleFrame();
+}
+
+async function playBattle(force) {
+    if (bpPlaying && !force) { stopBattle(); return; }
+    const meta = document.getElementById('bp-meta');
+    meta.textContent = '載入中…';
+    try {
+        const enemy = document.getElementById('bp-enemy').value;
+        const oppQ = enemy ? '&enemy=' + encodeURIComponent(enemy) : '&seed=' + bpSeed;
+        const res = await fetch('/battle-frames?mode=bullet' + charParam() + '&win=' + (bpWin ? 'win' : 'lose') + oppQ,
+            { method: 'POST', body: JSON.stringify({ ...data, frameIdx: currentFrame }) });
+        const r = await res.json();
+        if (!r.ok) { meta.textContent = '✗ ' + r.error; return; }
+        bpFrames = r.frames;
+        meta.innerHTML = `對手：<b>${r.enemy}</b>　分鏡 v${r.version}　${r.win ? '我方勝' : '我方敗'}<br>${r.frames.length} 拍（實機 ${r.stepMs}ms/拍）`;
+        bpIdx = 0; drawBattleFrame();
+        bpPlaying = true;
+        document.getElementById('bp-play').textContent = '⏸ 暫停';
+        if (bpTimer) clearInterval(bpTimer);
+        bpTimer = setInterval(tickBattle, bpSpeed);
+    } catch (e) { meta.textContent = '✗ ' + e.message; }
+}
+
+document.getElementById('bp-play').onclick = () => playBattle();
+document.getElementById('bp-enemy').onchange = () => playBattle(true);
+document.getElementById('bp-reroll').onclick = () => {
+    document.getElementById('bp-enemy').value = '';   // 回「自動」
+    bpSeed++;
+    playBattle(true);
+};
+document.getElementById('bp-win').onclick = (e) => {
+    bpWin = !bpWin;
+    e.target.classList.toggle('active', bpWin);
+    e.target.textContent = bpWin ? '勝' : '敗';
+};
+document.getElementById('bp-loop').onclick = (e) => {
+    bpLoop = !bpLoop;
+    e.target.classList.toggle('active', bpLoop);
+};
+document.getElementById('bp-speed').oninput = (e) => {
+    bpSpeed = +e.target.value;
+    document.getElementById('bp-speed-val').textContent = bpSpeed + 'ms';
+    if (bpPlaying && bpTimer) { clearInterval(bpTimer); bpTimer = setInterval(tickBattle, bpSpeed); }
+};
 
 (async () => { await loadChars(); await load(); })();
 </script>

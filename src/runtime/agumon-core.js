@@ -1181,6 +1181,9 @@ function composeBattleScene(opts) {
         if (wRows) paintCells(buffer, wRows, BATTLE_SCENE_WIDTH - 16);  // col 36，sprite 內容靠上 → 右上角
     }
 
+    // 編輯器預覽用：回傳原始 cell buffer（52×8），不做 ANSI 化 / 名牌
+    if (opts.returnCells) return buffer;
+
     const lines = renderCells(buffer);
 
     // PvP 名牌：白字、置於各自角色腳底下（場景最底加一列）。

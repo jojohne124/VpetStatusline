@@ -7,7 +7,19 @@ const os   = require('os');
 const { execFileSync } = require('child_process');
 
 const name = process.argv[2] || 'agumon';
-const PORT = 3000;
+const PORT = Number(process.env.SPRITE_EDITOR_PORT) || 3000;
+
+// 戰鬥表演預覽：重用 runtime 的 decideBattleFrame + composeBattleScene，
+// 確保預覽與實際 statusline 表演一致（子彈用編輯器當下的像素）。
+// 必須用「已部署」的 core：它的 ASSETS_DIR 指向 ~/.claude/agumon-statusline/assets，
+// loadCharacter/loadShared/chooseBattleEnemy 才讀得到角色資產。
+let CORE = null;
+for (const p of [
+    path.join(os.homedir(), '.claude', 'agumon-statusline', 'agumon-core.js'),
+    path.join(__dirname, '..', 'runtime', 'agumon-core.js'),
+]) {
+    try { if (fs.existsSync(p)) { CORE = require(p); break; } } catch (e) {}
+}
 
 const REPO_ROOT   = path.resolve(__dirname, '..', '..');
 const CHAR_DIR    = path.join(REPO_ROOT, 'characters', name);
@@ -259,6 +271,82 @@ const server = http.createServer((req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ok: true, convert: convertOut.trim(), mode }));
             } catch(e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+    }
+    else if (req.method === 'POST' && urlPath === '/battle-frames') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                if (!CORE) throw new Error('agumon-core 載入失敗，無法預覽');
+                const data    = JSON.parse(body);          // 編輯器當下像素（未存也行）
+                const win     = query.win !== 'lose';       // 預設我方勝
+                const meId    = charName.toLowerCase();      // assets 資料夾為小寫
+
+                // 我方子彈＝目前編輯中的那一幀（runtime 只用 frames[0]，這裡用選取幀當它）
+                const w = data.width || 16, h = data.height || 16;
+                const fi = Math.max(0, Math.min((data.frames?.length || 1) - 1, data.frameIdx | 0));
+                const meBulletArt = {
+                    style: 'color-halfblock', width: w, height: h / 2,
+                    frames: [pixelsToArt(data.frames[fi], w, h)],
+                };
+
+                // 我方 / 共用資源（自 installed assets 讀）
+                const me      = CORE.loadCharacter(meId);
+                const meArt   = JSON.parse(fs.readFileSync(me.artFile, 'utf8'));
+                const shared  = CORE.loadShared();
+                const F       = me.charDef.F;
+                const meRO    = me.charDef.RIGHT_OFFSET ?? null;
+
+                // 對手：指定 ?enemy=（小寫化對到 assets 資料夾）；否則同階隨機，
+                // ?seed= 讓「換對手」每次換一個（決定性、可重現）
+                const seed = Number(query.seed) || 1;
+                const enemyId = query.enemy
+                    ? query.enemy.toLowerCase()
+                    : CORE.chooseBattleEnemy(meId, seed, null);
+                let enemyArt = null, enemyBulletArt = null, enemyCutInArt = null, enemyRO = null;
+                try {
+                    const en = CORE.loadCharacter(enemyId);
+                    enemyArt       = JSON.parse(fs.readFileSync(en.artFile, 'utf8'));
+                    enemyBulletArt = fs.existsSync(en.bulletArtFile) ? JSON.parse(fs.readFileSync(en.bulletArtFile, 'utf8')) : null;
+                    enemyCutInArt  = fs.existsSync(en.cutinArtFile)  ? JSON.parse(fs.readFileSync(en.cutinArtFile, 'utf8'))  : null;
+                    enemyRO        = en.charDef.RIGHT_OFFSET ?? null;
+                } catch (e) {
+                    // 對手沒安裝 → 黑影
+                    try {
+                        const sh = CORE.loadCharacter('shadow');
+                        enemyArt       = CORE.silhouetteArt(JSON.parse(fs.readFileSync(sh.artFile, 'utf8')));
+                        enemyBulletArt = fs.existsSync(sh.bulletArtFile) ? CORE.silhouetteArt(JSON.parse(fs.readFileSync(sh.bulletArtFile, 'utf8'))) : null;
+                        enemyRO        = sh.charDef.RIGHT_OFFSET ?? null;
+                    } catch (e2) {}
+                }
+
+                const meCutInArt = fs.existsSync(me.cutinArtFile) ? JSON.parse(fs.readFileSync(me.cutinArtFile, 'utf8')) : null;
+                const version = CORE.pickBattleVersion(meId, enemyId);
+                const useCutIn = version === 2;
+                const length = CORE.battleLength(version);
+
+                const frames = [];
+                for (let elapsed = 0; elapsed < length; elapsed++) {
+                    const f = CORE.decideBattleFrame(elapsed, win, enemyId, F, useCutIn);
+                    const buffer = CORE.composeBattleScene({
+                        frame: f, meArt, enemyArt, meBulletArt, enemyBulletArt,
+                        meCutInArt, enemyCutInArt, shared,
+                        meRightOffset: meRO, enemyRightOffset: enemyRO,
+                        returnCells: true,
+                    });
+                    frames.push(buffer);
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({
+                    ok: true, width: CORE.BATTLE_SCENE_WIDTH, height: CORE.BATTLE_SCENE_HEIGHT,
+                    stepMs: 1000, frames, enemy: enemyId, version, win,
+                }));
+            } catch (e) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ok: false, error: e.message }));
             }

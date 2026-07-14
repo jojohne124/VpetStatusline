@@ -23,6 +23,9 @@ cd vpet
 node scripts/install.js
 ```
 
+> **不想開終端機？** 下載後直接雙擊資料夾裡的 **`install.bat`**（Windows）或
+> **`install.command`**（macOS）即可安裝，效果與上面的指令相同。（仍需先裝 Node.js）
+
 安裝腳本會自動：
 - 把桌寵資產裝到 `~/.claude/agumon-statusline/`
 - 幫你的 `~/.claude/settings.json` 掛上 statusline 與 prompt hook（會先備份）

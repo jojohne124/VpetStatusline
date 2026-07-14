@@ -59,6 +59,10 @@ for (const f of fs.readdirSync(path.join(REPO, 'src', 'runtime')))
 for (const f of ['install.js', 'uninstall.js'])
     if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
 
+// 根目錄雙擊安裝啟動器（免打指令）；.command 由 isShell() 強制 LF
+for (const f of ['install.bat', 'install.command'])
+    if (fs.existsSync(path.join(REPO, f))) copyRel(f);
+
 // characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）
 copyRel(path.join('characters', 'roster.json'));
 const KEEP_CHAR = new Set(['art.json', 'config.json', 'bullet-art.json', 'cutin-art.json']);

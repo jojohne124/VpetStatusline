@@ -89,6 +89,13 @@ function installRuntime() {
     // main（開發）沒有此檔 → 不部署（開發指令全開）。
     if (fs.existsSync(path.join(REPO_ROOT, 'RELEASE'))) {
         copyFile(path.join(REPO_ROOT, 'RELEASE'), path.join(INSTALL_DIR, 'RELEASE'), 'release');
+    } else {
+        // source 無 RELEASE（開發版）→ 主動移除已部署的舊標記，
+        // 確保由 release 切回 dev 時開發指令全部解禁（否則舊標記殘留會繼續 gate）。
+        const stale = path.join(INSTALL_DIR, 'RELEASE');
+        if (fs.existsSync(stale)) {
+            try { fs.unlinkSync(stale); console.log('  -> 移除殘留 release 標記（開發指令全開）'); } catch (e) {}
+        }
     }
 }
 

@@ -486,7 +486,7 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
         position: 'sides',
         meCutIn: false,
         enemyCutIn: false,
-        meCutInCol: null,      // null = 用預設 BATTLE_CUTIN_ME_COL；其他值覆寫（用於滑入動畫）
+        meCutInCol: null,      // null = 用動態 settled 落點（依前緣留白後退）；有值則覆寫（滑入動畫）
         enemyCutInCol: null,   // 同上
     };
     const IDLE_1 = safeF(F, 'IDLE_1', 0);
@@ -1077,10 +1077,14 @@ const BATTLE_ME_LEFT_COL    = 0;
 const BATTLE_ENEMY_RIGHT_COL = BATTLE_SCENE_WIDTH - 16;  // 36
 const BATTLE_CENTER_COL      = (BATTLE_SCENE_WIDTH - 16) / 2;  // 18
 
-// v2 cut-in settled 位置：32 寬，往兩側各退 BATTLE_CUTIN_RETREAT 拉開距離
-const BATTLE_CUTIN_RETREAT   = 4;                                       // 各退 4 cells → 中央 col 24-27 重疊 4 cells
-const BATTLE_CUTIN_ME_COL    = 0 - BATTLE_CUTIN_RETREAT;                // -4 (左側裁掉 4 cells)
-const BATTLE_CUTIN_ENEMY_COL = (BATTLE_SCENE_WIDTH - 32) + BATTLE_CUTIN_RETREAT; // 24 (右側裁掉 4 cells)
+// v2 cut-in settled 位置：兩張各 32 寬，貼在場景兩側 base，再往外「後退」拉開避免交疊。
+// 後退量「動態」：依該 cut-in 前緣（面向中央那側）連續透明欄數 blank 決定，
+//   retreat = max(0, BATTLE_CUTIN_RETREAT - blank)。
+//   → 前段留白已 ≥4 的角色不後退（以原圖自然位置演出）；留白不足者補到共 4 欄的前段淨空。
+// 前緣：敵方面左→左緣；我方翻轉面右→右緣（＝原圖左緣，因所有 cut-in 皆左向圖）。
+const BATTLE_CUTIN_RETREAT   = 4;                                       // 前段要騰出的總欄數上限
+const BATTLE_CUTIN_ME_BASE    = 0;                                     // 我方 base（左側）
+const BATTLE_CUTIN_ENEMY_BASE = BATTLE_SCENE_WIDTH - 32;              // 敵方 base（右側）= 20
 
 function paintCells(buffer, rows, col0) {
     if (!rows) return;
@@ -1110,6 +1114,28 @@ function getFacingRows(art, frameIdx, facing, rightOffset) {
     return rows;
 }
 
+// cell rows 某一側連續「整欄透明」的欄數（fromRight=true 從右緣數，否則左緣）。
+// 整欄透明 = 該欄每一列的 cell 皆 null 或上下半都 -1。給 cut-in 動態後退用。
+function cutinEdgeBlank(rows, fromRight) {
+    if (!rows || !rows.length || !rows[0].length) return 0;
+    const W = rows[0].length;
+    let n = 0;
+    for (let i = 0; i < W; i++) {
+        const c = fromRight ? W - 1 - i : i;
+        let blank = true;
+        for (const row of rows) {
+            const cell = row[c];
+            if (cell && (cell[0] !== -1 || cell[3] !== -1)) { blank = false; break; }
+        }
+        if (blank) n++; else break;
+    }
+    return n;
+}
+// 依前緣留白算後退量：留白越多退越少，留白 ≥ 上限則不退（0）
+function cutinRetreat(rows, fromRight) {
+    return Math.max(0, BATTLE_CUTIN_RETREAT - cutinEdgeBlank(rows, fromRight));
+}
+
 function composeBattleScene(opts) {
     const {
         frame,
@@ -1130,13 +1156,15 @@ function composeBattleScene(opts) {
     //   - 我方在左 → 翻轉成面右（朝中央/敵方）→ 兩邊互瞪
     // 我方畫在敵方之上（玩家視角優先）
     if (frame.enemyCutIn && enemyCutInArt?.frames?.[0]) {
-        const col = frame.enemyCutInCol ?? BATTLE_CUTIN_ENEMY_COL;
-        paintCells(buffer, enemyCutInArt.frames[0], col);
+        const enemyRows = enemyCutInArt.frames[0];   // 敵方面左，前緣=左緣
+        // settled 落點動態；滑入動畫(frame.enemyCutInCol 有值)照舊
+        const col = frame.enemyCutInCol ?? (BATTLE_CUTIN_ENEMY_BASE + cutinRetreat(enemyRows, false));
+        paintCells(buffer, enemyRows, col);
     }
     if (frame.meCutIn && meCutInArt?.frames?.[0]) {
-        const col = frame.meCutInCol ?? BATTLE_CUTIN_ME_COL;
-        // 我方需要面右；優先用客製右向（frames[1]），沒有就翻轉左向
+        // 我方需要面右；優先用客製右向（frames[1]），沒有就翻轉左向。前緣=右緣
         const meRows = meCutInArt.frames[1] || flipRows(meCutInArt.frames[0]);
+        const col = frame.meCutInCol ?? (BATTLE_CUTIN_ME_BASE - cutinRetreat(meRows, true));
         paintCells(buffer, meRows, col);
     }
 

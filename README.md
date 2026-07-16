@@ -114,7 +114,8 @@ vpet code 新名牌     # 改名牌（會同步更新後端上的戰卡）
 - **狀態列沒出現桌寵**：確認已重開 Claude Code；檢查 `~/.claude/settings.json` 的
   `statusLine.command` 有指向 `agumon-statusline/statusline-agumon-color.js`。
 - **打 `vpet` 說找不到指令**：重開終端機；仍不行就照安裝時印的 PATH 指示加一下。
-- **桌寵卡住不動 / 動畫凍結**：打 `vpet doctor` 清除卡死的背景行程（只想先看有沒有問題就 `vpet doctor --check`）。平時系統會自動清，這是手動補刀。
+- **桌寵卡住不動 / 動畫凍結**：先打 `vpet doctor` 清除卡死的背景行程（只想先看有沒有問題就 `vpet doctor --check`）。平時系統會自動清，這是手動補刀。
+- **整個 statusline 完全凍住、doctor 也救不回**：到 `tools/agumon-doctor/` 資料夾雙擊 **`agumon-restart.bat`**（Windows）/ **`agumon-restart.command`**（macOS）強制重啟（會保留你的角色與進度），或執行 `node tools/agumon-doctor/restart.js`。
 - **想移除**：在安裝資料夾執行 `node scripts/uninstall.js`。
 
 祝養寵愉快 🦖

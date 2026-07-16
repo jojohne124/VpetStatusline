@@ -1,10 +1,11 @@
 agumon 桌寵急救工具包
 ====================================
 
-裡面有兩支工具：
+裡面有三支工具：
   • agumon-doctor  —— 清掉「卡死的 node 孤兒」行程（溫和、平常保養用）
   • agumon-restart —— statusline 整個卡住/凍結時的「重啟」（比較狠，一鍵救回）
-先試 doctor；若整個 statusline 還是凍住不動，再用 restart。
+  • agumon-report  —— 卡住時「輸出現況」給開發者診斷（唯讀，不改任何東西）
+先試 doctor；還凍住就 restart；若 restart 也救不回，請跑 report 把現況貼回給開發者。
 
 
 ==== agumon doctor（清孤兒）====
@@ -61,3 +62,25 @@ agumon 桌寵急救工具包
 
 【安全性】
   同樣只動 agumon 自己的行程與狀態，不會碰 Cursor / 其他程式。
+
+
+==== agumon report（輸出現況給開發者診斷）====
+
+【什麼時候用】
+  卡住、且 doctor / restart 都救不回時。這支「不修東西」，只把現況拍成一份報告，
+  讓開發者判斷是「Claude Code 停止呼叫指令」還是別的原因。
+
+【它會做什麼】
+  唯讀蒐集：安裝資訊、最後一次 render / 送訊息的時間差（判斷指令是否還被呼叫）、
+  目前 agumon 行程與登記、state 關鍵旗標、settings 的 statusLine 設定、
+  執行環境（node / 作業系統 / 記憶體）。
+  結果會印在畫面，並存成家目錄的 agumon-report.txt。
+
+【怎麼用】
+  Windows：對著 agumon-report.bat 點兩下
+  macOS  ：對著 agumon-report.command 點兩下
+  任何系統：開終端機，在本資料夾執行  node report.js
+  跑完把家目錄的 agumon-report.txt（或印出來的整段文字）貼回給開發者即可。
+
+【安全性】
+  純唯讀，不殺行程、不改 state、不動任何檔案（只多產生一份報告 txt）。

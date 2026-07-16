@@ -10,8 +10,50 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
-let scanAgumonNodes = null;
-try { ({ scanAgumonNodes } = require('./doctor')); } catch (e) {}
+const { execFileSync } = require('child_process');
+
+// 內嵌行程掃描（自 doctor.js 複製）→ 本檔完全自包、可單獨一個檔丟給人跑。
+function scanAgumonNodes() {
+    try { return process.platform === 'win32' ? scanWin() : scanUnix(); }
+    catch (e) { return null; }
+}
+function scanWin() {
+    const psScript = [
+        "$ErrorActionPreference='SilentlyContinue'",
+        "$now=Get-Date",
+        "Get-Process node | ForEach-Object {",
+        "  $p=$_; $st=$null; try{$st=$p.StartTime}catch{}",
+        "  $age= if($st){[int]($now-$st).TotalSeconds}else{-1}",
+        "  $cl=(Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.Id)\").CommandLine",
+        "  $k= if($cl -match 'statusline-agumon-color'){'statusline'} elseif($cl -match 'agumon-hook'){'hook'} else {'other'}",
+        "  if($k -ne 'other'){ \"$($p.Id)|$age|$($p.Threads.Count)|$k\" }",
+        "}",
+    ].join('\n');
+    let out;
+    try { out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { encoding: 'utf8', timeout: 25000 }); }
+    catch (e) { return null; }
+    return out.trim().split(/\r?\n/).filter(Boolean).map(line => {
+        const [pid, age, threads, kind] = line.split('|');
+        return { pid: +pid, ageSec: +age, threads: +threads, kind };
+    });
+}
+function scanUnix() {
+    let out;
+    try { out = execFileSync('ps', ['-eo', 'pid=,etimes=,args='], { encoding: 'utf8', timeout: 15000 }); }
+    catch (e) { return null; }
+    const res = [];
+    for (const line of out.split(/\r?\n/)) {
+        const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+        if (!m) continue;
+        const args = m[3];
+        if (!/\bnode\b/.test(args)) continue;
+        const kind = /statusline-agumon-color/.test(args) ? 'statusline'
+                   : /agumon-hook/.test(args)             ? 'hook' : 'other';
+        if (kind === 'other') continue;
+        res.push({ pid: +m[1], ageSec: +m[2], threads: 0, kind });
+    }
+    return res;
+}
 
 const INSTALL_ROOT = process.env.AGUMON_HOME || path.join(os.homedir(), '.claude', 'agumon-statusline');
 const STATE_DIR    = path.join(INSTALL_ROOT, 'state');

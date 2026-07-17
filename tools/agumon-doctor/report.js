@@ -130,7 +130,8 @@ if (settings) {
 p('\n--- 執行環境 ---');
 p(`node ${process.version}  platform=${process.platform}  os=${os.release()}`);
 const totMB = Math.round(os.totalmem() / 1048576), freeMB = Math.round(os.freemem() / 1048576);
-p(`記憶體：free ${freeMB}MB / total ${totMB}MB（free 很低 = 記憶體壓力，可能讓 render 被換頁凍住）`);
+const lowMem = freeMB < 512 || (freeMB / totMB) < 0.05;   // 只有真的很低才示警，免誤導
+p(`記憶體：free ${freeMB}MB / total ${totMB}MB` + (lowMem ? '  ⚠️ free 偏低，可能有記憶體壓力（render 恐被換頁凍住）' : '  （充足）'));
 p(`CPU ${os.cpus().length} 核  系統 uptime ${Math.round(os.uptime() / 3600)}h`);
 p('=======================================================');
 

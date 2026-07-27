@@ -1,7 +1,7 @@
 {
   "name": "shellmon",
   "stage": "Adult",
-  "power": 62,
+  "power": 60,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

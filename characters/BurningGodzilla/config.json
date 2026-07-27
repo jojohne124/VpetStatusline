@@ -1,7 +1,7 @@
 {
-  "name": "fujamon",
-  "stage": "Child",
-  "power": 10,
+  "name": "burninggodzilla",
+  "stage": "Adult",
+  "power": 200,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,21 +60,6 @@
       ]
     }
   ],
-  "evolvesTo": [
-    {
-      "character": "coelamon",
-      "conditions": [
-        {
-          "type": "cost_threshold",
-          "usd": 10
-        },
-        {
-          "type": "win_rate",
-          "pct": 45,
-          "minBattles": 5
-        }
-      ]
-    }
-  ],
+  "evolvesTo": [],
   "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補"
 }

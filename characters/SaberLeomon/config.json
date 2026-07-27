@@ -1,7 +1,7 @@
 {
   "name": "saberleomon",
   "stage": "Ultimate",
-  "power": 165,
+  "power": 160,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

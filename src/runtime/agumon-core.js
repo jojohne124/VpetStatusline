@@ -422,7 +422,9 @@ function getHighTierStarterSet() {
 function isHighTierStarter(id) { return !!id && getHighTierStarterSet().has(id); }
 
 // 各階段戰力上限（UnStage 無上限）
-const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnStage: Infinity };
+// 'Super-Ultimate' = 隱藏第 5 階。目前只用於「敵方」（無人 evolvesTo 指向該階角色 → 玩家取得不到）；
+// 我方進化條件（特規）待定。cap 210 先就位，之後我方實裝不用再動這裡。
+const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, 'Super-Ultimate': 210, UnStage: Infinity };
 function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 
 // 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
@@ -470,7 +472,15 @@ function _hashSeed(seed) {
     return h;
 }
 
-function chooseBattleEnemy(myId, seed, lastEnemyId) {
+// Super-Ultimate 敵方出現條件（隱藏第 5 階）：我方 Ultimate/SU + 勝率 > SU_WIN_RATE_GATE
+// → SU_CHANCE 機率改從 SU 池抽，其餘照常抽 Ultimate。minBattles 防「首戰全勝＝100%」秒觸發。
+const SU_STAGE          = 'Super-Ultimate';
+const SU_WIN_RATE_GATE  = 0.8;
+const SU_CHANCE         = 0.3;
+const SU_MIN_BATTLES    = 5;
+const SU_SEED_SALT      = 9973;   // 與 anti-stick 的 seed+1 明顯區隔，避免兩個擲骰相關
+
+function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
     // 同階隨機（排除自己）；給 seed → 決定性挑選（多視窗一致）。
     // anti-stick：若抽到的 == 上一場敵人，用 seed+1 變體 re-roll；仍同就順移下一個 candidate。
     //   連續同敵機率從 1/N 降到 ~1/N²，避免短樣本下「一直重複」的觀感。
@@ -478,7 +488,23 @@ function chooseBattleEnemy(myId, seed, lastEnemyId) {
         const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
         const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
         const myStage = getCharacterStage(myId);
-        const candidates = roster.filter(n => n !== myId && getCharacterStage(n) === myStage);
+        // 我方若已是 SU，「同階」幾乎抓不到人 → 基礎池退回 Ultimate（規格：其餘為 Ultimate）
+        const baseStage = (myStage === SU_STAGE) ? 'Ultimate' : myStage;
+        let candidates = roster.filter(n => n !== myId && getCharacterStage(n) === baseStage);
+
+        // ── Super-Ultimate 強敵抽選 ──
+        if (myStage === 'Ultimate' || myStage === SU_STAGE) {
+            const total = (battleStats && battleStats.total) || 0;
+            const wins  = (battleStats && battleStats.wins)  || 0;
+            const rate  = total > 0 ? wins / total : 0;
+            if (total >= SU_MIN_BATTLES && rate > SU_WIN_RATE_GATE) {
+                const suPool = roster.filter(n => n !== myId && getCharacterStage(n) === SU_STAGE);
+                // 擲骰同樣走 seed → 多視窗算出同一結果（無 seed 才退回 Math.random）
+                const roll = (seed != null) ? seedRand01(seed + SU_SEED_SALT) : Math.random();
+                if (suPool.length > 0 && roll < SU_CHANCE) candidates = suPool;
+            }
+        }
+
         if (candidates.length === 0) return 'godzilla_1999';
         let pick;
         if (seed != null) {
@@ -648,7 +674,9 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
 //   winProb = computeWinProb(我, 敵)；用 seedRand01(seed) 擲骰決定。
 function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
-    st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy);
+    // 帶入戰績 → 讓 chooseBattleEnemy 判斷是否抽 Super-Ultimate 強敵（勝率 gate）
+    st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy,
+                                              { total: st.battleTotalCount || 0, wins: st.battleWinCount || 0 });
     if (seed != null) {
         const winProb = computeWinProb(myId, st, st.battleEnemy);
         st.battleWin  = seedRand01(seed) < winProb;
@@ -776,16 +804,25 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     // ── 觸碰互動（獨立介面點角色）：正常 happy；短時間連點 → refuse 鬧脾氣 ──────
     // 連點的「次數/時間」判定在 daemon 的 HTTP 層做（1 秒 tick 抓不到連點），
     // 這裡只負責演出。被擋住就直接丟棄（不排隊），同 card 的作法。
-    if (st._forceHappy) {
-        if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
-        delete st._forceHappy;
-    }
-    if (st._forceRefuse) {
-        if (!(st.refuseStartStep >= 0)) {
-            st.refuseStartStep = step;
-            st.happyStartStep  = -1;   // 生氣蓋掉高興
+    if (st._forceSleep) {
+        // 強制睡（vpet sleep）：契約是「持續到 vpet wake，發訊息也不會醒」→ 摸摸同樣叫不動，
+        // 連表演都不演（否則會出現「演完又倒回去睡」的怪畫面）。直接丟棄觸碰。
+        delete st._forceHappy; delete st._forceRefuse;
+    } else {
+        // 自然 idle 睡（超過 IDLE_MS 沒活動）→ 摸摸視同活動，把牠叫醒。
+        // 只要更新 lastActivityAt，下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
+        if (st._forceHappy || st._forceRefuse) st.lastActivityAt = now;
+        if (st._forceHappy) {
+            if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
+            delete st._forceHappy;
         }
-        delete st._forceRefuse;
+        if (st._forceRefuse) {
+            if (!(st.refuseStartStep >= 0)) {
+                st.refuseStartStep = step;
+                st.happyStartStep  = -1;   // 生氣蓋掉高興
+            }
+            delete st._forceRefuse;
+        }
     }
 
     // ════════ B. 依優先序渲染（第一個命中就 return）════════

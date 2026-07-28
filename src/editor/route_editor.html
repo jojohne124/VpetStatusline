@@ -76,6 +76,7 @@
       <div class="legend">
         <div><span class="sw" style="background:#3d6fb4"></span>Child　<span class="sw" style="background:#3d9b6f"></span>Adult</div>
         <div><span class="sw" style="background:#b88a2d"></span>Perfect　<span class="sw" style="background:#a24bb0"></span>Ultimate</div>
+        <div><span class="sw" style="background:#d1442f"></span>Super-Ultimate</div>
         <div><span class="sw" style="background:#c0392b"></span>死路邊　<span class="sw" style="border:1px dashed #888;background:transparent"></span>未實裝　★ starter</div>
       </div>
     </div>
@@ -83,8 +84,11 @@
   </div>
 </div>
 <script>
-const STAGE_ORDER = ['Child','Adult','Perfect','Ultimate','UnStage'];
-const STAGE_COLOR = { Child:'#3d6fb4', Adult:'#3d9b6f', Perfect:'#b88a2d', Ultimate:'#a24bb0', UnStage:'#666' };
+// Super-Ultimate = 隱藏第 5 階（目前只有敵方角色，我方進化條件未定）。
+// 必須列在 STAGE_ORDER：否則該階節點不會被 autoLayout 定位，且右側 stage 下拉選單
+// 找不到對應 option → 顯示成 Child，一存檔就把階級改掉（資料遺失）。
+const STAGE_ORDER = ['Child','Adult','Perfect','Ultimate','Super-Ultimate','UnStage'];
+const STAGE_COLOR = { Child:'#3d6fb4', Adult:'#3d9b6f', Perfect:'#b88a2d', Ultimate:'#a24bb0', 'Super-Ultimate':'#d1442f', UnStage:'#666' };
 const COL_W = 260, NODE_W = 150, NODE_H = 40, ROW_H = 56;
 
 let G = { nodes: [], edges: [] };

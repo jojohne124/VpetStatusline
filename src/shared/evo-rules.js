@@ -10,8 +10,11 @@
  */
 
 // ── 各階段預設值 / 公式常數 ──────────────────────────────────────────────
-const STAGE_COST = { Child: 10, Adult: 15, Perfect: 20, Ultimate: 20 };
-const STAGE_MINB = { Child: 5,  Adult: 8,  Perfect: 12, Ultimate: 12 };
+const STAGE_COST = { Child: 10, Adult: 15, Perfect: 20, Ultimate: 20, 'Super-Ultimate': 20 };
+const STAGE_MINB = { Child: 5,  Adult: 8,  Perfect: 12, Ultimate: 12, 'Super-Ultimate': 12 };
+// ⚠️ BAND 蓄意不含 Super-Ultimate：BAND 專供 stageForPower() 由 power 反推階段，而 SU 的 power
+// 與 Ultimate 同區間（我方 SU power 不變、敵方暫定 200）→ 放進來只會把一般 Ultimate 誤判成 SU。
+// SU 是隱藏階，一律由 config.stage 明寫，不從 power 推導。
 const BAND = { Child: [10, 30], Adult: [55, 80], Perfect: [110, 130], Ultimate: [160, 190] };
 const FC   = { Child: [45, 60], Adult: [50, 70], Perfect: [55, 80] };
 

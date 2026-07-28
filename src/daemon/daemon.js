@@ -233,6 +233,7 @@ function doTick() {
         const st = loadState(STATE_FILE);
         if (!st.characterId) st.characterId = 'agumon';
         const out = renderTick(i, st, now);
+        forceSleeping = !!st._forceSleep;   // 給 petTouch 判斷「叫不動」
         // 當家模式：render 成功才寫 heartbeat → statusLine 據此退唯讀。tick 若拋錯就不更新，
         // heartbeat 4 秒過期 → statusLine 自動接管（daemon 壞掉的 failsafe）。
         if (AUTHORITATIVE) { try { fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ ts: now, pid: process.pid })); } catch (e) {} }
@@ -283,8 +284,11 @@ const TOUCH_LIMIT     = 5;      // 窗口內達此次數 → 生氣
 const SULK_MS         = 3000;   // 生氣後鬧脾氣：這段期間再戳也不理
 let touchTimes = [];
 let sulkUntil  = 0;
+let forceSleeping = false;   // 由每拍的 doTick 更新（vpet sleep 狀態）
 function petTouch() {
     const now = Date.now();
+    // vpet sleep 強制睡：叫不動。回明確訊息，避免使用者以為點擊壞了；也不累計連戳。
+    if (forceSleeping) return { ok: true, action: 'pet', mood: 'asleep' };
     if (now < sulkUntil) return { ok: true, action: 'pet', mood: 'sulking' };   // 鬧脾氣中，不回應
     touchTimes = touchTimes.filter(t => now - t < TOUCH_WINDOW_MS);
     touchTimes.push(now);
@@ -443,8 +447,9 @@ async function sendCmd(action){
   const el=document.getElementById('cmdmsg');
   try{
     const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
-    el.textContent = r.ok ? ('已送出：'+action) : ('失敗：'+(r.error||action));
-    el.style.color = r.ok ? '#3fb950' : '#f85149';
+    const MOOD={happy:'摸摸 ♥',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
+    el.textContent = r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action));
+    el.style.color = r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149';
   }catch(e){el.textContent='送出失敗：'+e.message;el.style.color='#f85149';}
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>sendCmd(b.dataset.cmd)));

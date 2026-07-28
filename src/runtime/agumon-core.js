@@ -4,7 +4,8 @@ const os   = require('os');
 const path = require('path');
 
 const INSTALL_ROOT = __dirname;
-const STATE_DIR    = path.join(INSTALL_ROOT, 'state');
+// STATE_DIR 可用 AGUMON_STATE_DIR 覆蓋（daemon 隔離 / 測試用）；未設 = 原本行為，零變化。
+const STATE_DIR    = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'state');
 const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
@@ -1119,9 +1120,9 @@ const BATTLE_CENTER_COL      = (BATTLE_SCENE_WIDTH - 16) / 2;  // 18
 // v2 cut-in settled 位置：兩張各 32 寬，貼在場景兩側 base，再往外「後退」拉開避免交疊。
 // 後退量「動態」：依該 cut-in 前緣（面向中央那側）連續透明欄數 blank 決定，
 //   retreat = max(0, BATTLE_CUTIN_RETREAT - blank)。
-//   → 前段留白已 ≥4 的角色不後退（以原圖自然位置演出）；留白不足者補到共 4 欄的前段淨空。
+//   → 前段留白已 ≥6 的角色不後退（以原圖自然位置演出）；留白不足者補到共 6 欄的前段淨空。
 // 前緣：敵方面左→左緣；我方翻轉面右→右緣（＝原圖左緣，因所有 cut-in 皆左向圖）。
-const BATTLE_CUTIN_RETREAT   = 4;                                       // 前段要騰出的總欄數上限
+const BATTLE_CUTIN_RETREAT   = 6;                                       // 前段要騰出的總欄數上限
 const BATTLE_CUTIN_ME_BASE    = 0;                                     // 我方 base（左側）
 const BATTLE_CUTIN_ENEMY_BASE = BATTLE_SCENE_WIDTH - 32;              // 敵方 base（右側）= 20
 

@@ -15,6 +15,19 @@ const {
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
 const FORCE_FILE = path.join(STATE_DIR, 'force-char.json');
+const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
+
+// C 方案：daemon 若活著（每秒寫 heartbeat）就由它當唯一寫入者。本 statusLine 偵測到
+// heartbeat 新鮮 → 退「唯讀」：照常算出當前該顯示的畫面，但不觸發指令、不 consume force、
+// 不 saveState（避免與 daemon 搶寫 color-state.json）。heartbeat 過期／不存在 → readOnly=false
+// → 完全等同原本的自寫行為（沒裝 daemon 的人零變化）。
+const DAEMON_FRESH_MS = 4000;   // daemon 每秒寫；4 秒內視為活著
+function daemonIsAuthoritative() {
+    try {
+        const hb = JSON.parse(fs.readFileSync(HEARTBEAT_FILE, 'utf8'));
+        return hb && typeof hb.ts === 'number' && (Date.now() - hb.ts) < DAEMON_FRESH_MS;
+    } catch (e) { return false; }
+}
 
 // 安全讀取角色 art / bullet-art；失敗回 null
 function tryLoadArt(file) {
@@ -86,11 +99,12 @@ process.stdin.on('end', () => {
         const i   = JSON.parse(d);
         const now = Date.now();
         const st  = loadState(STATE_FILE);
+        const readOnly = daemonIsAuthoritative();   // daemon 當家時本行程只顯示、不寫
 
         // ── 作弊碼：強制切換角色 / 強制戰鬥 ───────────────────────
         // 角色切換仍是「first-write-wins」（會 consume force.character）
         // 戰鬥改用 token 制（battleTriggerTs）：每個視窗各自比對，不 consume，可多視窗同時觸發
-        try {
+        if (!readOnly) try {
             const force = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));
             if (force.character) {
                 const changed = st.characterId !== force.character;
@@ -186,7 +200,7 @@ process.stdin.on('end', () => {
         //    commit 那一步會用舊 charDef 載入 art，render 出舊角色走路 1 幀）
         // 用 shownElapsed 判斷而非 target：搭配 core 的 frame throttle，避免 wallclock 超過
         // 但仍有未播完的拍卡在後面就提前 commit
-        if (st.evoStartStep != null && st.evoStartStep >= 0) {
+        if (!readOnly && st.evoStartStep != null && st.evoStartStep >= 0) {
             const targetElapsed = step - st.evoStartStep;
             const prevShown     = st.evoShownElapsed ?? -1;
             const wouldAdvance  = Math.min(targetElapsed, prevShown + 1);
@@ -210,10 +224,10 @@ process.stdin.on('end', () => {
         const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
 
         // characterId 此刻已定案 → 維護進化歷史（給 vpet tree 用；自然進化 append、斷點重設、空補種）
-        updateEvoHistory(st);
+        if (!readOnly) updateEvoHistory(st);
 
         // 1.5 cheat trigger：reset 掉落表演（角色已切換成新 starter，演出空降）
-        if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
+        if (!readOnly && st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
             st.dropStartStep = step;
             st.dropShownElapsed = -1;
             delete st._forceDrop;
@@ -222,7 +236,7 @@ process.stdin.on('end', () => {
         }
 
         // 2. cheat trigger：強制進化
-        if (st._forceEvolve && !(st.evoStartStep >= 0)) {
+        if (!readOnly && st._forceEvolve && !(st.evoStartStep >= 0)) {
             st.evoStartStep = step;
             st.evoNextCharId = st._forceEvolve;
             st.evoShownElapsed = -1;
@@ -231,7 +245,7 @@ process.stdin.on('end', () => {
             delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
         }
         // 3. 自然觸發：checkEvolution 命中（freeze 凍結時跳過，cost 仍累積，解除後達標即進化）
-        if (!(st.evoStartStep >= 0) && !st._freezeEvolve) {
+        if (!readOnly && !(st.evoStartStep >= 0) && !st._freezeEvolve) {
             const nextChar = checkEvolution(st, i, config);
             if (nextChar) {
                 st.evoStartStep = step;
@@ -366,7 +380,7 @@ process.stdin.on('end', () => {
             }
         }
 
-        saveState(STATE_FILE, st);
+        if (!readOnly) saveState(STATE_FILE, st);   // daemon 當家時不寫，避免搶寫
 
         if (!outputLines) {
             process.stdout.write(statusLines.join('\n'));

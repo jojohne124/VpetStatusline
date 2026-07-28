@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
@@ -54,6 +54,7 @@ function printHelp() {
     console.log('  vpet pvp MAJAJA             指名固定練習對手（純本機免連線）');
     console.log('  vpet code [名牌]            查看 / 設定名牌');
     console.log('  vpet doctor [--check]       檢查並清除卡死的 node 孤兒（--check 只診斷不清）');
+    console.log('  vpet hide / show            隱藏 / 顯示狀態列的 pet（只留狀態文字；pet 可到獨立介面看）');
     if (dev) {
         console.log('  ── 開發指令（release 版不提供）──');
         console.log('  vpet <index|name>           切換到任意角色');
@@ -433,6 +434,22 @@ if (args[0] === '--freeze' || args[0] === '--unfreeze') {
         delete force.freezeEvolve;
         writeForce(force);
         console.log('☀ 已解除進化凍結');
+    }
+    process.exit(0);
+}
+
+// ── --hide / --show：隱藏 / 顯示 statusline 的 pet（狀態列照常顯示）──────────
+// 給「只想用 statusline 狀態列」或「只在獨立介面看 pet」的人。非作弊，release 也可用。
+if (args[0] === '--hide' || args[0] === '--show') {
+    const force = readForce();
+    if (args[0] === '--hide') {
+        force.petHidden = true;
+        writeForce(force);
+        console.log('✓ 已隱藏 pet（statusline 只顯示狀態列；vpet show 恢復。想看 pet 可用獨立介面）');
+    } else {
+        delete force.petHidden;
+        writeForce(force);
+        console.log('✓ 已恢復顯示 pet');
     }
     process.exit(0);
 }

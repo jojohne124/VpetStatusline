@@ -119,7 +119,10 @@
     "metalseadramon",
     "seadramon",
     "shagaramon",
-    "shishimamon"
+    "shishimamon",
+    "betamon",
+    "mechagodzilla",
+    "burninggodzilla"
   ],
   "starters": [
     "agumon",
@@ -139,12 +142,15 @@
     "syakomon",
     "angoramon",
     "jellymon",
-    "fujamon"
+    "fujamon",
+    "betamon"
   ],
   "starterWeights": {
     "agumon": 5,
+    "betamon": 7,
     "biyomon": 5,
     "demidevimon": 5,
+    "fujamon": 5,
     "gabumon": 5,
     "gomamon": 5,
     "palmon": 5,

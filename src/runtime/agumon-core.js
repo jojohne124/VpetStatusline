@@ -4,7 +4,8 @@ const os   = require('os');
 const path = require('path');
 
 const INSTALL_ROOT = __dirname;
-const STATE_DIR    = path.join(INSTALL_ROOT, 'state');
+// STATE_DIR 可用 AGUMON_STATE_DIR 覆蓋（daemon 隔離 / 測試用）；未設 = 原本行為，零變化。
+const STATE_DIR    = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'state');
 const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
@@ -76,6 +77,107 @@ function loadState(stateFile) {
 function saveState(stateFile, s) {
     if (!s || !s.characterId) return;   // 防護：state 被弄空時不覆蓋 disk，避免角色倒退
     atomicWrite(stateFile, JSON.stringify(s));
+}
+
+// ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────
+// 讀 force-char.json 把 cheat/指令轉成 st 上的 _force* 旗標與持續開關；每拍都要跑
+// （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
+const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
+function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
+    let force;
+    try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
+    if (force.character) {
+        const changed = st.characterId !== force.character;
+        st.characterId = force.character;
+        if (changed) {
+            Object.keys(st).forEach(k => { if (k.startsWith('_evo_') || k === '_r5hPeaked' || k === '_costEvolved') delete st[k]; });
+            delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
+            delete st._r5hResetAt;
+            delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
+            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
+            st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
+            delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
+        }
+    }
+    if (force.battleTriggerTs && force.battleTriggerTs !== st.lastBattleTriggerTs) {
+        const age = Date.now() - force.battleTriggerTs;
+        if (age >= 0 && age < 10000 && !(st.battleStartStep >= 0)) {
+            st._forceBattle = true;
+            if (typeof force.forceBattleWin === 'boolean')   st._forceBattleWin   = force.forceBattleWin;
+            if (typeof force.forceBattleEnemy === 'string')  st._forceBattleEnemy = force.forceBattleEnemy;
+            st._pvpOppLabel = (typeof force.pvpOppLabel === 'string') ? force.pvpOppLabel : null;
+            st._pvpMeLabel  = (typeof force.pvpMeLabel  === 'string') ? force.pvpMeLabel  : null;
+            st._battleNoCount = (force.battleNoCount === true);
+        }
+        st.lastBattleTriggerTs = force.battleTriggerTs;   // 不論是否觸發都記下，避免日後 stale 重觸發
+    }
+    if (force.evolveTriggerTs && force.evolveTriggerTs !== st.lastEvolveTriggerTs) {
+        const age = Date.now() - force.evolveTriggerTs;
+        if (age >= 0 && age < 300000 && !(st.evoStartStep >= 0) && typeof force.evolveTarget === 'string') {
+            st._forceEvolve = force.evolveTarget;
+        }
+        st.lastEvolveTriggerTs = force.evolveTriggerTs;
+    }
+    if (force.dropTriggerTs && force.dropTriggerTs !== st.lastDropTriggerTs) {
+        const age = Date.now() - force.dropTriggerTs;
+        if (age >= 0 && age < 10000 && !(st.dropStartStep >= 0)) st._forceDrop = true;
+        st.lastDropTriggerTs = force.dropTriggerTs;
+    }
+    // 觸碰互動（獨立介面點角色）：petMood 由 daemon 判定（happy / refuse），這裡只轉旗標。
+    // 窗口短（3 秒）：觸碰是即時反應，過期的點擊不該補演。
+    if (force.petTriggerTs && force.petTriggerTs !== st.lastPetTriggerTs) {
+        const age = Date.now() - force.petTriggerTs;
+        if (age >= 0 && age < 3000) {
+            if (force.petMood === 'refuse') st._forceRefuse = true;
+            else                            st._forceHappy  = true;
+        }
+        st.lastPetTriggerTs = force.petTriggerTs;
+    }
+    st._forceSleep   = !!force.forceSleep;     // --wake 才解除
+    st._freezeEvolve = !!force.freezeEvolve;   // --unfreeze 才解除（手動 evolve 不受影響）
+    st._noAutoBattle = !!force.autoBattleOff;  // vpet battle off（手動 vpet battle 不受影響）
+    st._petHidden    = !!force.petHidden;      // vpet hide：statusline 只顯示狀態列（daemon 顯示層不受影響）
+    if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
+        const age = Date.now() - force.cardTriggerTs;
+        const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0) || (st.cardStartStep >= 0);
+        if (age >= 0 && age < 10000 && !blocked) st._forceCard = true;
+        st.lastCardTriggerTs = force.cardTriggerTs;
+    }
+    if (force.treeTriggerTs && force.treeTriggerTs !== st.lastTreeTriggerTs) {
+        const age = Date.now() - force.treeTriggerTs;
+        const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0);
+        if (age >= 0 && age < 10000 && !blocked) st._forceTree = true;
+        st.lastTreeTriggerTs = force.treeTriggerTs;
+    }
+}
+
+// force 觸發 → 表演起始（drop 空降 / 強制進化）；在 loadCharacter+updateEvoHistory 之後、
+// decideAgumon 之前跑。與 evo/battle 互斥。
+function applyForceTriggers(st, step) {
+    if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
+        st.dropStartStep = step;
+        st.dropShownElapsed = -1;
+        delete st._forceDrop;
+        st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;  // 互斥
+        delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
+    }
+    if (st._forceEvolve && !(st.evoStartStep >= 0)) {
+        st.evoStartStep = step;
+        st.evoNextCharId = st._forceEvolve;
+        st.evoShownElapsed = -1;
+        delete st._forceEvolve;
+        st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
+        delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
+    }
+}
+
+// 進化 commit 後清掉 force.character（避免下次 refresh 把角色拉回進化前 → 無限迴圈）
+function clearForceCharacter(forceFile = FORCE_FILE_DEFAULT) {
+    try {
+        const f = JSON.parse(fs.readFileSync(forceFile, 'utf8'));
+        delete f.character; delete f.resetCostBase;
+        fs.writeFileSync(forceFile, JSON.stringify(f));
+    } catch (e) {}
 }
 
 // 取得當前 git 分支名：直接讀 .git/HEAD（不 spawn 子行程，杜絕同步卡死與 AV 掃描成本）。
@@ -320,7 +422,9 @@ function getHighTierStarterSet() {
 function isHighTierStarter(id) { return !!id && getHighTierStarterSet().has(id); }
 
 // 各階段戰力上限（UnStage 無上限）
-const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, UnStage: Infinity };
+// 'Super-Ultimate' = 隱藏第 5 階。目前只用於「敵方」（無人 evolvesTo 指向該階角色 → 玩家取得不到）；
+// 我方進化條件（特規）待定。cap 210 先就位，之後我方實裝不用再動這裡。
+const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, 'Super-Ultimate': 210, UnStage: Infinity };
 function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 
 // 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
@@ -368,7 +472,15 @@ function _hashSeed(seed) {
     return h;
 }
 
-function chooseBattleEnemy(myId, seed, lastEnemyId) {
+// Super-Ultimate 敵方出現條件（隱藏第 5 階）：我方 Ultimate/SU + 勝率 > SU_WIN_RATE_GATE
+// → SU_CHANCE 機率改從 SU 池抽，其餘照常抽 Ultimate。minBattles 防「首戰全勝＝100%」秒觸發。
+const SU_STAGE          = 'Super-Ultimate';
+const SU_WIN_RATE_GATE  = 0.8;
+const SU_CHANCE         = 0.3;
+const SU_MIN_BATTLES    = 5;
+const SU_SEED_SALT      = 9973;   // 與 anti-stick 的 seed+1 明顯區隔，避免兩個擲骰相關
+
+function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
     // 同階隨機（排除自己）；給 seed → 決定性挑選（多視窗一致）。
     // anti-stick：若抽到的 == 上一場敵人，用 seed+1 變體 re-roll；仍同就順移下一個 candidate。
     //   連續同敵機率從 1/N 降到 ~1/N²，避免短樣本下「一直重複」的觀感。
@@ -376,7 +488,23 @@ function chooseBattleEnemy(myId, seed, lastEnemyId) {
         const rosterData = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
         const roster = Array.isArray(rosterData) ? rosterData : rosterData.roster;
         const myStage = getCharacterStage(myId);
-        const candidates = roster.filter(n => n !== myId && getCharacterStage(n) === myStage);
+        // 我方若已是 SU，「同階」幾乎抓不到人 → 基礎池退回 Ultimate（規格：其餘為 Ultimate）
+        const baseStage = (myStage === SU_STAGE) ? 'Ultimate' : myStage;
+        let candidates = roster.filter(n => n !== myId && getCharacterStage(n) === baseStage);
+
+        // ── Super-Ultimate 強敵抽選 ──
+        if (myStage === 'Ultimate' || myStage === SU_STAGE) {
+            const total = (battleStats && battleStats.total) || 0;
+            const wins  = (battleStats && battleStats.wins)  || 0;
+            const rate  = total > 0 ? wins / total : 0;
+            if (total >= SU_MIN_BATTLES && rate > SU_WIN_RATE_GATE) {
+                const suPool = roster.filter(n => n !== myId && getCharacterStage(n) === SU_STAGE);
+                // 擲骰同樣走 seed → 多視窗算出同一結果（無 seed 才退回 Math.random）
+                const roll = (seed != null) ? seedRand01(seed + SU_SEED_SALT) : Math.random();
+                if (suPool.length > 0 && roll < SU_CHANCE) candidates = suPool;
+            }
+        }
+
         if (candidates.length === 0) return 'godzilla_1999';
         let pick;
         if (seed != null) {
@@ -546,7 +674,9 @@ function decideBattleFrame(elapsed, win, enemyId, F, useCutIn = false) {
 //   winProb = computeWinProb(我, 敵)；用 seedRand01(seed) 擲骰決定。
 function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
-    st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy);
+    // 帶入戰績 → 讓 chooseBattleEnemy 判斷是否抽 Super-Ultimate 強敵（勝率 gate）
+    st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy,
+                                              { total: st.battleTotalCount || 0, wins: st.battleWinCount || 0 });
     if (seed != null) {
         const winProb = computeWinProb(myId, st, st.battleEnemy);
         st.battleWin  = seedRand01(seed) < winProb;
@@ -564,11 +694,58 @@ function startBattle(st, step, myId, seed) {
     delete st._pvpOppLabel; delete st._pvpMeLabel; delete st._battleNoCount;
 }
 
+// ── 計時表演共同骨架（drop / evo / battle 共用）─────────────────────────
+// 三者都是「從 startField 起算、每拍最多前進 1 格、依 過期/進行中/結束 三態分派」。
+// 把最容易出錯的節流（shownElapsed = min(target, prevShown+1)）與門檻判斷收斂到這一處，
+// 各表演只提供自己的欄位名與三個 handler：
+//   cfg.startField / shownField：st 上的欄位名
+//   cfg.length：正常播放長度（shown >= length 視為播完）；cfg.safety：target 超過即當殘留清掉
+//   cfg.onFrame(shown) → 回傳該拍 frame（helper 已先把 shown 寫回 shownField）
+//   cfg.onExpired()：target<0 或 >=safety 的清理
+//   cfg.onEnd?()：正常播完的收尾（可省略＝不清、等外部 commit，如 evo）
+// 回傳 frame（呼叫端要 return）或 undefined（未啟動 / 已結束 / 過期 → 往下一個表演）。
+function runTimedPerformance(st, step, cfg) {
+    const startStep = st[cfg.startField];
+    if (startStep == null || startStep < 0) return undefined;
+    const targetElapsed = step - startStep;
+    const shownElapsed  = Math.min(targetElapsed, (st[cfg.shownField] ?? -1) + 1);
+    if (targetElapsed < 0 || targetElapsed >= cfg.safety) {
+        cfg.onExpired();
+        return undefined;
+    }
+    if (shownElapsed < cfg.length) {
+        st[cfg.shownField] = shownElapsed;
+        return cfg.onFrame(shownElapsed);
+    }
+    if (cfg.onEnd) cfg.onEnd();
+    return undefined;
+}
+
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
+// ⭐ decideAgumon —— 桌寵每拍（1 render = 1 tick）的表演決策。結構分兩大段：
+//
+//   【A. 觸發/偵測（每拍必跑，無論最後畫什麼）】
+//     hook(新訊息)→roar+trainingBonus+battleArm、auto-battle pending、force-battle、
+//     r5h token 重置→happy、從睡眠喚醒對齊。這些只「改狀態/武裝旗標」，不 return。
+//
+//   【B. 依優先序渲染（第一個命中就 return 該幀）】以 computeWalk 為分水嶺切兩組：
+//     ── 算 walk 之前（全螢幕表演，不需走路座標）──
+//       1. drop（空降）  2. evo（進化）  3. battle（戰鬥）      ← 皆走 runTimedPerformance
+//     ── 算 walk 之後（單幀疊在走路上，需 walk.facing/pos）──
+//       4. roar（大吼，播完可同拍 chain→battle）  5. battlePending→battle
+//       6. happy（token 重置）  7. card（overlay，蓋睡覺但不中斷 roar/battle/evo）
+//       8. tree（overlay，同 card）  9. forceSleep  10. idle sleep
+//       11. expr（隨機表情，播放中）  12. expr 新觸發  13. walk（預設）
+//
+//   ⚠️ 新增/調整表演時：先決定它屬於 A 還是 B；若是 B，決定在 computeWalk 前/後、
+//      以及在上面優先序的哪個位置插入。動 A 段的次序（trainingBonus++/r5h latch/battleArm）
+//      對多視窗 race 敏感，改前務必想清楚。
 function decideAgumon(i, st, now, charDef, opts = {}) {
     const { F, EXPRS, ROAR_FRAMES, TOKEN_RESET_FRAMES, sleepFrames, SLEEP_PERIOD } = charDef;
     const step = Math.floor(now / STEP_MS);
     const allowBattle = !!opts.allowBattle;
+
+    // ════════ A. 觸發/偵測（每拍必跑，不 return）════════
 
     // 每 tick 累積本 session 花費（即使凍結/表演中也累積，避免漏記 cost 高水位）
     updateEvoSpend(st, i);
@@ -624,66 +801,78 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         delete st._forceBattle; delete st._forceBattleWin; delete st._forceBattleEnemy;
     }
 
-    // ── Reset 掉落表演（新 starter 空降；優先於 walk/roar，與 evo/battle 互斥）─────────
-    if (st.dropStartStep != null && st.dropStartStep >= 0) {
-        const targetElapsed = step - st.dropStartStep;
-        const prevShown     = st.dropShownElapsed ?? -1;
-        const shownElapsed  = Math.min(targetElapsed, prevShown + 1);   // 每拍最多 +1
-        if (targetElapsed < 0 || targetElapsed >= DROP_LENGTH + 8) {
-            // 殘留清理（跨機/跨重啟）
-            st.dropStartStep = -1; st.dropShownElapsed = -1;
-        } else if (shownElapsed >= 0 && shownElapsed < DROP_LENGTH) {
-            st.dropShownElapsed = shownElapsed;
-            return { kind: 'drop', elapsed: shownElapsed };
-        } else {
-            // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
-            st.dropStartStep = -1; st.dropShownElapsed = -1;
-            st.lastStepSeen = step;
-            const PERIOD    = MAX_POS * 2;
-            const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
-            st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+    // ── 觸碰互動（獨立介面點角色）：正常 happy；短時間連點 → refuse 鬧脾氣 ──────
+    // 連點的「次數/時間」判定在 daemon 的 HTTP 層做（1 秒 tick 抓不到連點），
+    // 這裡只負責演出。被擋住就直接丟棄（不排隊），同 card 的作法。
+    if (st._forceSleep) {
+        // 強制睡（vpet sleep）：契約是「持續到 vpet wake，發訊息也不會醒」→ 摸摸同樣叫不動，
+        // 連表演都不演（否則會出現「演完又倒回去睡」的怪畫面）。直接丟棄觸碰。
+        delete st._forceHappy; delete st._forceRefuse;
+    } else {
+        // 自然 idle 睡（超過 IDLE_MS 沒活動）→ 摸摸視同活動，把牠叫醒。
+        // 只要更新 lastActivityAt，下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
+        if (st._forceHappy || st._forceRefuse) st.lastActivityAt = now;
+        if (st._forceHappy) {
+            if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
+            delete st._forceHappy;
         }
+        if (st._forceRefuse) {
+            if (!(st.refuseStartStep >= 0)) {
+                st.refuseStartStep = step;
+                st.happyStartStep  = -1;   // 生氣蓋掉高興
+            }
+            delete st._forceRefuse;
+        }
+    }
+
+    // ════════ B. 依優先序渲染（第一個命中就 return）════════
+    // ──── B-1. 算 walk 之前：全螢幕表演（不需走路座標）drop → evo → battle ────
+
+    // ── Reset 掉落表演（新 starter 空降；優先於 walk/roar，與 evo/battle 互斥）─────────
+    {
+        const f = runTimedPerformance(st, step, {
+            startField: 'dropStartStep', shownField: 'dropShownElapsed',
+            length: DROP_LENGTH, safety: DROP_LENGTH + 8,
+            onFrame: (shown) => ({ kind: 'drop', elapsed: shown }),
+            onExpired: () => { st.dropStartStep = -1; st.dropShownElapsed = -1; },   // 殘留清理（跨機/跨重啟）
+            onEnd: () => {
+                // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
+                st.dropStartStep = -1; st.dropShownElapsed = -1;
+                st.lastStepSeen = step;
+                const PERIOD    = MAX_POS * 2;
+                const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
+                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+            },
+        });
+        if (f) return f;
     }
 
     // ── 進化表演（最高優先；超越 battle、roar）─────────
-    if (st.evoStartStep != null && st.evoStartStep >= 0) {
-        const targetElapsed = step - st.evoStartStep;
-        // Frame throttle（同 battle）：每 render 最多 +1，保證每拍都被渲染
-        // Commit 由 statusline-agumon-color.js 在「shown 會推進到 EVO_LENGTH」那拍處理
-        const prevShown    = st.evoShownElapsed ?? -1;
-        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
-
-        // 殘留清理（跨機 / 跨重啟導致 target 不連續）
-        if (targetElapsed < 0 || targetElapsed >= EVO_LENGTH + 18) {
-            st.evoStartStep    = -1;
-            st.evoNextCharId   = null;
-            st.evoShownElapsed = -1;
-        } else if (shownElapsed >= 0 && shownElapsed < EVO_LENGTH) {
-            st.evoShownElapsed = shownElapsed;
-            let newF = F;
-            try {
-                const newChar = loadCharacter(st.evoNextCharId);
-                if (newChar?.charDef?.F) newF = newChar.charDef.F;
-            } catch(e) {}
-            return decideEvoFrame(shownElapsed, F, newF, st.lastPos ?? 0);
-        }
-        // shownElapsed >= EVO_LENGTH 且 target 未超 safety → 等 statusline commit
+    // Frame throttle（同 battle）：每 render 最多 +1，保證每拍都被渲染。
+    // 正常播完不清（無 onEnd）→ commit 由 statusline-agumon-color.js 處理。
+    {
+        const f = runTimedPerformance(st, step, {
+            startField: 'evoStartStep', shownField: 'evoShownElapsed',
+            length: EVO_LENGTH, safety: EVO_LENGTH + 18,
+            onFrame: (shown) => {
+                let newF = F;
+                try {
+                    const newChar = loadCharacter(st.evoNextCharId);
+                    if (newChar?.charDef?.F) newF = newChar.charDef.F;
+                } catch(e) {}
+                return decideEvoFrame(shown, F, newF, st.lastPos ?? 0);
+            },
+            onExpired: () => { st.evoStartStep = -1; st.evoNextCharId = null; st.evoShownElapsed = -1; },  // 殘留清理
+        });
+        if (f) return f;
     }
 
     // ── Battle 表演（高優先級；但 ROAR 在它前面播完才啟動）─────────
-    if (allowBattle && st.battleStartStep != null && st.battleStartStep >= 0) {
-        const targetElapsed = step - st.battleStartStep;
-        const useCutIn      = st.battleVersion === 2;
-        const length        = battleLength(st.battleVersion);
-
-        // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
-        // 取樣 aliasing 會跳幀；用 shownElapsed 保證每拍都被渲染。
-        // 代價：render 稀疏時戰鬥 wallclock 會被拉長（最壞 = render 間隔 × length）。
-        const prevShown    = st.battleShownElapsed ?? -1;
-        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
-
-        // 殘留清理：跨機 / 跨重啟導致 target 不連續（startStep 來自很久以前）
-        if (targetElapsed < 0 || targetElapsed >= BATTLE_SAFETY) {
+    // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
+    // 取樣 aliasing 會跳幀；shownElapsed 保證每拍都被渲染（代價：render 稀疏時 wallclock 拉長）。
+    if (allowBattle) {
+        const useCutIn = st.battleVersion === 2;
+        const cleanupBattle = () => {
             st.battleStartStep    = -1;
             st.battleEnemy        = null;
             st.battleVersion      = 1;
@@ -691,33 +880,33 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.pvpOppLabel        = null;
             st.pvpMeLabel         = null;
             st.battleNoCount      = false;
-        } else if (shownElapsed < length) {
-            st.battleShownElapsed = shownElapsed;
-            return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
-        } else {
-            // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
-            // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
-            // 「結束」而重複加計（同 lastBattleTriggerTs 的思路）。
-            // 跨階 PvP（st.battleNoCount）不計勝率；同階/自動/手動戰鬥照常計入
-            if (!st.battleNoCount && st.lastBattleCountedStartStep !== st.battleStartStep) {
-                st.lastBattleCountedStartStep = st.battleStartStep;
-                st.battleTotalCount = (st.battleTotalCount || 0) + 1;
-                if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
-            }
-            st.lastBattleEnemy    = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
-            st.battleStartStep    = -1;
-            st.battleEnemy        = null;
-            st.battleVersion      = 1;
-            st.battleShownElapsed = -1;
-            st.pvpOppLabel        = null;
-            st.pvpMeLabel         = null;
-            st.battleNoCount      = false;
-            st.lastStepSeen       = step;
-            const PERIOD     = MAX_POS * 2;                            // 40
-            const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
-            st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
-        }
+        };
+        const f = runTimedPerformance(st, step, {
+            startField: 'battleStartStep', shownField: 'battleShownElapsed',
+            length: battleLength(st.battleVersion), safety: BATTLE_SAFETY,
+            onFrame: (shown) => decideBattleFrame(shown, st.battleWin, st.battleEnemy, F, useCutIn),
+            onExpired: cleanupBattle,   // 殘留清理：跨機/跨重啟導致 target 不連續
+            onEnd: () => {
+                // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
+                // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
+                // 「結束」而重複加計。跨階 PvP（battleNoCount）不計；同階/自動/手動照常計入。
+                if (!st.battleNoCount && st.lastBattleCountedStartStep !== st.battleStartStep) {
+                    st.lastBattleCountedStartStep = st.battleStartStep;
+                    st.battleTotalCount = (st.battleTotalCount || 0) + 1;
+                    if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
+                }
+                st.lastBattleEnemy = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
+                cleanupBattle();
+                st.lastStepSeen    = step;
+                const PERIOD     = MAX_POS * 2;                            // 40
+                const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
+                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+            },
+        });
+        if (f) return f;
     }
+
+    // （續 A 的觸發：以下兩段仍是「改狀態、不 return」，但必須在 computeWalk 之前跑）
 
     // Token 重置偵測：新 resets_at 嚴格大於 stored + 舊值已過期 → 窗口真的滾過了
     // ⚠ 必須用 `>` 而非 `!==`：搭配下面 Math.max 保留舊值的設計，
@@ -745,6 +934,10 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
 
     const walk = computeWalk(step, st.walkPhaseOffset || 0);
 
+    // ──── B-2. 算 walk 之後：單幀疊在走路上（需 walk.facing/pos）────
+    // 優先序：roar → (roar 結束可 chain) battle → battlePending → happy →
+    //         card(overlay) → tree(overlay) → forceSleep → idle sleep → expr → walk(預設)
+
     // 大吼最優先（hold 確保為偶數，維持 step 奇偶）
     // 動畫播放中繼續走路（不凍結位置），避免位置定格
     if (st.roarStartStep != null && st.roarStartStep >= 0) {
@@ -765,6 +958,19 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     if (allowBattle && st.battlePending) {
         startBattle(st, step, st.characterId, st.lastHookTs);
         return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
+    }
+
+    // 觸碰鬧脾氣（refuse）：整段維持 REFUSE 幀，只切面向 反→正→反→正（甩頭表示不要）。
+    // 與 happy 同長 4 拍、同優先序層級（比 happy 前面：生氣蓋過高興）。
+    if (st.refuseStartStep != null && st.refuseStartStep >= 0) {
+        const elapsed = step - st.refuseStartStep;
+        const refuseHold = evenHold(TOKEN_RESET_FRAMES.length);   // = 4，與 happy 一致
+        if (elapsed < refuseHold) {
+            const away   = (elapsed % 2 === 0);                   // 0 反 / 1 正 / 2 反 / 3 正
+            const facing = away ? (walk.facing === 'left' ? 'right' : 'left') : walk.facing;
+            return { kind: 'single', frameIdx: F.REFUSE ?? F.IDLE_1 ?? 0, facing, pos: walk.pos };
+        }
+        st.refuseStartStep = -1;
     }
 
     // Token 重置高興（hold 確保為偶數）
@@ -1080,9 +1286,9 @@ const BATTLE_CENTER_COL      = (BATTLE_SCENE_WIDTH - 16) / 2;  // 18
 // v2 cut-in settled 位置：兩張各 32 寬，貼在場景兩側 base，再往外「後退」拉開避免交疊。
 // 後退量「動態」：依該 cut-in 前緣（面向中央那側）連續透明欄數 blank 決定，
 //   retreat = max(0, BATTLE_CUTIN_RETREAT - blank)。
-//   → 前段留白已 ≥4 的角色不後退（以原圖自然位置演出）；留白不足者補到共 4 欄的前段淨空。
+//   → 前段留白已 ≥6 的角色不後退（以原圖自然位置演出）；留白不足者補到共 6 欄的前段淨空。
 // 前緣：敵方面左→左緣；我方翻轉面右→右緣（＝原圖左緣，因所有 cut-in 皆左向圖）。
-const BATTLE_CUTIN_RETREAT   = 4;                                       // 前段要騰出的總欄數上限
+const BATTLE_CUTIN_RETREAT   = 6;                                       // 前段要騰出的總欄數上限
 const BATTLE_CUTIN_ME_BASE    = 0;                                     // 我方 base（左側）
 const BATTLE_CUTIN_ENEMY_BASE = BATTLE_SCENE_WIDTH - 32;              // 敵方 base（右側）= 20
 
@@ -1425,7 +1631,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     ANCHOR_GAP,
-    BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT,
+    BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT, MAX_POS,
     hasCutIn, pickBattleVersion, battleLength,
     EVO_LENGTH,
     DROP_LENGTH,
@@ -1434,6 +1640,7 @@ module.exports = {
     composeEvoScene,
     composeDropScene,
     loadState, saveState, atomicWrite,
+    applyForceFlags, applyForceTriggers, clearForceCharacter,
     decideAgumon,
     checkEvolution,
     buildStatusLines,

@@ -7,6 +7,7 @@ const {
     STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH,
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
+    applyForceFlags, applyForceTriggers, clearForceCharacter,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
@@ -15,6 +16,19 @@ const {
 
 const STATE_FILE = path.join(STATE_DIR, 'color-state.json');
 const FORCE_FILE = path.join(STATE_DIR, 'force-char.json');
+const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
+
+// C 方案：daemon 若活著（每秒寫 heartbeat）就由它當唯一寫入者。本 statusLine 偵測到
+// heartbeat 新鮮 → 退「唯讀」：照常算出當前該顯示的畫面，但不觸發指令、不 consume force、
+// 不 saveState（避免與 daemon 搶寫 color-state.json）。heartbeat 過期／不存在 → readOnly=false
+// → 完全等同原本的自寫行為（沒裝 daemon 的人零變化）。
+const DAEMON_FRESH_MS = 4000;   // daemon 每秒寫；4 秒內視為活著
+function daemonIsAuthoritative() {
+    try {
+        const hb = JSON.parse(fs.readFileSync(HEARTBEAT_FILE, 'utf8'));
+        return hb && typeof hb.ts === 'number' && (Date.now() - hb.ts) < DAEMON_FRESH_MS;
+    } catch (e) { return false; }
+}
 
 // 安全讀取角色 art / bullet-art；失敗回 null
 function tryLoadArt(file) {
@@ -86,79 +100,11 @@ process.stdin.on('end', () => {
         const i   = JSON.parse(d);
         const now = Date.now();
         const st  = loadState(STATE_FILE);
+        const readOnly = daemonIsAuthoritative();   // daemon 當家時本行程只顯示、不寫
 
-        // ── 作弊碼：強制切換角色 / 強制戰鬥 ───────────────────────
-        // 角色切換仍是「first-write-wins」（會 consume force.character）
-        // 戰鬥改用 token 制（battleTriggerTs）：每個視窗各自比對，不 consume，可多視窗同時觸發
-        try {
-            const force = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));
-            if (force.character) {
-                const changed = st.characterId !== force.character;
-                st.characterId = force.character;
-                if (changed) {
-                    Object.keys(st).forEach(k => { if (k.startsWith('_evo_') || k === '_r5hPeaked' || k === '_costEvolved') delete st[k]; });
-                    delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
-                    delete st._r5hResetAt;
-                    delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
-                    delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
-                    // 新角色 → 累積花費歸零；下一拍 updateEvoSpend 會以當前 session cost 為新基準（貢獻 0），
-                    // 不會把「切換前已花的 cost」算進新角色的進化進度。
-                    st._evoSpendBySession = {};
-                    delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清掉舊制殘留
-                }
-            }
-            // Battle token：trigger 時間戳不同於本視窗上次看過的，且 10 秒內仍有效，才觸發
-            if (force.battleTriggerTs && force.battleTriggerTs !== st.lastBattleTriggerTs) {
-                const age = Date.now() - force.battleTriggerTs;
-                if (age >= 0 && age < 10000 && !(st.battleStartStep >= 0)) {
-                    st._forceBattle = true;
-                    if (typeof force.forceBattleWin === 'boolean')   st._forceBattleWin   = force.forceBattleWin;
-                    if (typeof force.forceBattleEnemy === 'string')  st._forceBattleEnemy = force.forceBattleEnemy;
-                    // PvP 名牌（戰鬥演出腳下）；非 PvP 戰鬥 force 無此欄 → 清空
-                    st._pvpOppLabel = (typeof force.pvpOppLabel === 'string') ? force.pvpOppLabel : null;
-                    st._pvpMeLabel  = (typeof force.pvpMeLabel  === 'string') ? force.pvpMeLabel  : null;
-                    // 跨階對戰不計勝率旗標（同階/手動/自動戰鬥皆 false → 照常計入）
-                    st._battleNoCount = (force.battleNoCount === true);
-                }
-                st.lastBattleTriggerTs = force.battleTriggerTs;   // 不論是否觸發都記下，避免日後 stale 重觸發
-            }
-            // Evolution token：強制進化（age window 拉長到 5 分鐘，容許 statusline 偶發 idle）
-            if (force.evolveTriggerTs && force.evolveTriggerTs !== st.lastEvolveTriggerTs) {
-                const age = Date.now() - force.evolveTriggerTs;
-                if (age >= 0 && age < 300000 && !(st.evoStartStep >= 0) && typeof force.evolveTarget === 'string') {
-                    st._forceEvolve = force.evolveTarget;
-                }
-                st.lastEvolveTriggerTs = force.evolveTriggerTs;
-            }
-            // Reset 掉落 token：reset 抽到新 starter → 播空降表演（10 秒內有效，不 consume）
-            if (force.dropTriggerTs && force.dropTriggerTs !== st.lastDropTriggerTs) {
-                const age = Date.now() - force.dropTriggerTs;
-                if (age >= 0 && age < 10000 && !(st.dropStartStep >= 0)) st._forceDrop = true;
-                st.lastDropTriggerTs = force.dropTriggerTs;
-            }
-            // Sleep 開關（cheat）：持續到 --wake 才解除，發訊息不會喚醒
-            st._forceSleep = !!force.forceSleep;
-            // Freeze 開關（cheat）：凍結自動進化，持續到 --unfreeze（手動 evolve 不受影響）
-            st._freezeEvolve = !!force.freezeEvolve;
-            // 自動戰鬥開關（cheat）：vpet battle off 停用 prompt 後自動戰鬥（手動 vpet battle 不受影響）
-            st._noAutoBattle = !!force.autoBattleOff;
-            // Card token：cheat 顯示狀態卡（不排隊：trigger 當下若被長動畫擋住直接丟；睡覺不算阻擋）
-            if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
-                const age = Date.now() - force.cardTriggerTs;
-                const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0) || (st.cardStartStep >= 0);
-                if (age >= 0 && age < 10000 && !blocked) {
-                    st._forceCard = true;
-                }
-                st.lastCardTriggerTs = force.cardTriggerTs;
-            }
-            // 進化歷程 tree（vpet tree）：同 card，trigger 當下若被長動畫擋住直接丟
-            if (force.treeTriggerTs && force.treeTriggerTs !== st.lastTreeTriggerTs) {
-                const age = Date.now() - force.treeTriggerTs;
-                const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0);
-                if (age >= 0 && age < 10000 && !blocked) st._forceTree = true;
-                st.lastTreeTriggerTs = force.treeTriggerTs;
-            }
-        } catch(e) {}
+        // ── 作弊碼 / 指令：讀 force-char.json 套用到 st（與 daemon 共用同一份核心邏輯）──
+        // daemon 當家（readOnly）時由 daemon 讀 force、本行程不碰，避免雙寫。
+        if (!readOnly) applyForceFlags(st, FORCE_FILE);
 
         if (!st.characterId) {
             // 診斷 log：disk state 缺 characterId 時記錄上下文，協助日後查 regression 原因
@@ -186,7 +132,7 @@ process.stdin.on('end', () => {
         //    commit 那一步會用舊 charDef 載入 art，render 出舊角色走路 1 幀）
         // 用 shownElapsed 判斷而非 target：搭配 core 的 frame throttle，避免 wallclock 超過
         // 但仍有未播完的拍卡在後面就提前 commit
-        if (st.evoStartStep != null && st.evoStartStep >= 0) {
+        if (!readOnly && st.evoStartStep != null && st.evoStartStep >= 0) {
             const targetElapsed = step - st.evoStartStep;
             const prevShown     = st.evoShownElapsed ?? -1;
             const wouldAdvance  = Math.min(targetElapsed, prevShown + 1);
@@ -198,40 +144,20 @@ process.stdin.on('end', () => {
                 delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
                 delete st.trainingBonus;  // 進化歸零
                 delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
-                // 清掉 force.character，避免下次 refresh 把角色拉回進化前 → 形成「進化→拉回→進化」無限迴圈
-                try {
-                    const f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8'));
-                    delete f.character; delete f.resetCostBase;
-                    fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
-                } catch(e) {}
+                clearForceCharacter(FORCE_FILE);   // 清 force.character，避免「進化→拉回→進化」無限迴圈
             }
         }
 
         const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
 
         // characterId 此刻已定案 → 維護進化歷史（給 vpet tree 用；自然進化 append、斷點重設、空補種）
-        updateEvoHistory(st);
+        if (!readOnly) updateEvoHistory(st);
 
-        // 1.5 cheat trigger：reset 掉落表演（角色已切換成新 starter，演出空降）
-        if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
-            st.dropStartStep = step;
-            st.dropShownElapsed = -1;
-            delete st._forceDrop;
-            st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;  // 互斥
-            delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
-        }
+        // 1.5 + 2. cheat trigger：reset 掉落空降 / 強制進化（與 daemon 共用）
+        if (!readOnly) applyForceTriggers(st, step);
 
-        // 2. cheat trigger：強制進化
-        if (st._forceEvolve && !(st.evoStartStep >= 0)) {
-            st.evoStartStep = step;
-            st.evoNextCharId = st._forceEvolve;
-            st.evoShownElapsed = -1;
-            delete st._forceEvolve;
-            st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
-            delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
-        }
         // 3. 自然觸發：checkEvolution 命中（freeze 凍結時跳過，cost 仍累積，解除後達標即進化）
-        if (!(st.evoStartStep >= 0) && !st._freezeEvolve) {
+        if (!readOnly && !(st.evoStartStep >= 0) && !st._freezeEvolve) {
             const nextChar = checkEvolution(st, i, config);
             if (nextChar) {
                 st.evoStartStep = step;
@@ -245,6 +171,14 @@ process.stdin.on('end', () => {
         const result = decideAgumon(i, st, now, charDef, { allowBattle: true });
 
         const statusLines = buildStatusLines(i);
+
+        // vpet hide：只顯示狀態列、不畫 pet（狀態照常前進，進化/戰鬥計數不受影響）。
+        // 想看 pet 的人到獨立介面（daemon 頁面）看即可。daemon 顯示層不理這旗標。
+        if (st._petHidden) {
+            if (!readOnly) saveState(STATE_FILE, st);
+            process.stdout.write(statusLines.join('\n'));
+            return;
+        }
 
         let outputLines = null;
 
@@ -366,7 +300,7 @@ process.stdin.on('end', () => {
             }
         }
 
-        saveState(STATE_FILE, st);
+        if (!readOnly) saveState(STATE_FILE, st);   // daemon 當家時不寫，避免搶寫
 
         if (!outputLines) {
             process.stdout.write(statusLines.join('\n'));

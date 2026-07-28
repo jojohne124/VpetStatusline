@@ -1,7 +1,7 @@
 {
-  "name": "fujamon",
+  "name": "betamon",
   "stage": "Child",
-  "power": 10,
+  "power": 8,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -62,7 +62,7 @@
   ],
   "evolvesTo": [
     {
-      "character": "coelamon",
+      "character": "seadramon",
       "conditions": [
         {
           "type": "cost_threshold",
@@ -70,7 +70,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 45,
+          "pct": 50,
           "minBattles": 5
         }
       ]

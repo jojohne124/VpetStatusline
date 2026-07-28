@@ -43,6 +43,12 @@ const AUTHORITATIVE = process.argv.includes('--authoritative');
 const STATE_FILE     = path.join(STATE_DIR, AUTHORITATIVE ? 'color-state.json' : 'daemon-state.json');
 const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
 const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令；當家時由 daemon 讀
+
+// release 版 gate：與 statusline-cheat 同一個標記檔。強制戰鬥在 CLI 是開發指令
+// （release 只留 battle on/off），UI 按鈕自然也要一致 → release 不顯示、且伺服器端擋掉。
+// 只隱藏按鈕是不夠的：/cmd 是公開端點，必須在伺服器端一起擋。
+const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
+const DEV_ONLY   = new Set(['battle']);
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
 
@@ -315,6 +321,7 @@ const COMMANDS = {
     battleOn:  () => ({ autoBattleOff: false }),
 };
 function applyCommand(action) {
+    if (IS_RELEASE && DEV_ONLY.has(action)) return { ok: false, error: '此版本未提供此指令' };
     if (action === 'pet') return petTouch();   // 觸碰要即時計數，走專用路徑
     const fn = COMMANDS[action];
     if (!fn) return { ok: false, error: 'unknown action: ' + action };
@@ -346,7 +353,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
     <div id="controls">
       <button data-cmd="pet">🤚 摸摸</button>
-      <button data-cmd="battle">⚔️ 戰鬥</button>
+      ${IS_RELEASE ? '' : '<button data-cmd="battle">⚔️ 戰鬥</button>'}
       <button data-cmd="card">🪪 卡片</button>
       <button data-cmd="tree">🌳 進化樹</button>
       <button data-cmd="drop">🪂 空降</button>

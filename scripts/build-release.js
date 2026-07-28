@@ -55,12 +55,19 @@ copyRel('package.json');
 for (const f of fs.readdirSync(path.join(REPO, 'src', 'runtime')))
     if (f.endsWith('.js')) copyRel(path.join('src', 'runtime', f));
 
+// daemon（獨立介面）：常駐時鐘 + JSONL token 源 + 內建網頁。
+// 屬選配：不跑它就完全是原本的 CLI 行為（statusline 偵測不到 heartbeat → 自寫）。
+const daemonDir = path.join(REPO, 'src', 'daemon');
+if (fs.existsSync(daemonDir))
+    for (const f of fs.readdirSync(daemonDir))
+        if (f.endsWith('.js')) copyRel(path.join('src', 'daemon', f));
+
 // 只留 install / uninstall
 for (const f of ['install.js', 'uninstall.js'])
     if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
 
-// 根目錄雙擊安裝啟動器（免打指令）；.command 由 isShell() 強制 LF
-for (const f of ['install.bat', 'install.command'])
+// 根目錄雙擊啟動器（免打指令）：安裝 + 獨立介面；.command/.sh 由 isShell() 強制 LF
+for (const f of ['install.bat', 'install.command', 'vpet-standalone.bat', 'vpet-standalone.sh'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
 
 // characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）

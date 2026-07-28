@@ -28,9 +28,8 @@ catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js
 const { computeUsage } = require('./token-source');
 
 const {
-    STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH, EVO_LENGTH, MAX_POS,
+    STATE_DIR, EVO_LENGTH, MAX_POS,
     loadState, saveState, decideAgumon, checkEvolution,
-    buildStatusLines, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, composeSleepScene, composeStatusCard, composeTreeScene,
     getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
@@ -83,7 +82,7 @@ function buildInput(usage) {
 
 // 表演分派：忠實複製 statusline-agumon-color.js 的 decide→compose 流程，
 // 但拿掉 cheat/force、pids/watchdog（daemon 是常駐單行程，不需要那套孤兒防護）。
-// 回傳 { kind, petLines(ANSI array|null), statusLines }。
+// 回傳 { kind, petLines(ANSI array|null) }。狀態列不在這演（daemon 有自己的 token 面板）。
 function renderTick(i, st, now) {
     const step = Math.floor(now / STEP_MS);
 
@@ -122,7 +121,6 @@ function renderTick(i, st, now) {
     }
 
     const result = decideAgumon(i, st, now, charDef, { allowBattle: true });
-    const statusLines = buildStatusLines(i);
     let petLines = null;
 
     if (result.kind === 'battle') {
@@ -191,7 +189,7 @@ function renderTick(i, st, now) {
     }
 
     saveState(STATE_FILE, st);
-    return { kind: result.kind, petLines, statusLines };
+    return { kind: result.kind, petLines };
 }
 
 // ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
@@ -225,9 +223,7 @@ startUsageWorker();
 // ── 時鐘 ──
 let tick = 0;
 let startedAt = Date.now();
-let latest = { tick: 0, kind: 'init', petLines: null, statusPlain: [], usage: null, at: startedAt, err: null };
-
-function stripAnsi(s) { return s.replace(/\x1b\[[0-9;]*m/g, ''); }
+let latest = { tick: 0, kind: 'init', petLines: null, usage: null, at: startedAt, err: null };
 
 function doTick() {
     const now = Date.now();
@@ -245,7 +241,6 @@ function doTick() {
             at: now,
             kind: out.kind,
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
-            statusPlain: out.statusLines.map(stripAnsi),
             usage: {
                 activeSession: usage.activeSession,
                 activeCostUSD: usage.activeSessionUsage ? usage.activeSessionUsage.costUSD : 0,
@@ -280,6 +275,29 @@ function writeForce(patch) {
         return true;
     } catch (e) { return false; }
 }
+// ── 觸碰互動：正常摸摸 → happy；短時間連戳 → refuse 鬧脾氣 ─────────────────────
+// 計數必須在這層（HTTP 收到點擊的當下）做：daemon 每秒才 tick 一次，1 秒內連點好幾下
+// 只會被 tick 看到最後一筆 → 放到 tick 層永遠偵測不到連點。
+const TOUCH_WINDOW_MS = 3000;   // 判定窗口
+const TOUCH_LIMIT     = 5;      // 窗口內達此次數 → 生氣
+const SULK_MS         = 3000;   // 生氣後鬧脾氣：這段期間再戳也不理
+let touchTimes = [];
+let sulkUntil  = 0;
+function petTouch() {
+    const now = Date.now();
+    if (now < sulkUntil) return { ok: true, action: 'pet', mood: 'sulking' };   // 鬧脾氣中，不回應
+    touchTimes = touchTimes.filter(t => now - t < TOUCH_WINDOW_MS);
+    touchTimes.push(now);
+    let mood = 'happy';
+    if (touchTimes.length >= TOUCH_LIMIT) {
+        mood = 'refuse';
+        sulkUntil  = now + SULK_MS;
+        touchTimes = [];
+    }
+    writeForce({ petTriggerTs: now, petMood: mood });
+    return { ok: true, action: 'pet', mood };
+}
+
 const COMMANDS = {
     battle:    () => ({ battleTriggerTs: Date.now() }),
     card:      () => ({ cardTriggerTs:   Date.now() }),
@@ -293,6 +311,7 @@ const COMMANDS = {
     battleOn:  () => ({ autoBattleOff: false }),
 };
 function applyCommand(action) {
+    if (action === 'pet') return petTouch();   // 觸碰要即時計數，走專用路徑
     const fn = COMMANDS[action];
     if (!fn) return { ok: false, error: 'unknown action: ' + action };
     return { ok: writeForce(fn()), action };
@@ -318,11 +337,11 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #controls button:hover{background:#30363d;border-color:#8b949e}
   #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px}
 </style></head><body>
-<h1>🥚 agumon daemon — 獨立時鐘 + JSONL token 源（點角色＝戰鬥）</h1>
+<h1>🥚 agumon daemon — 獨立時鐘 + JSONL token 源（點角色＝摸摸，連戳會生氣）</h1>
 <div id="wrap">
   <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
-    <pre id="status"></pre>
     <div id="controls">
+      <button data-cmd="pet">🤚 摸摸</button>
       <button data-cmd="battle">⚔️ 戰鬥</button>
       <button data-cmd="card">🪪 卡片</button>
       <button data-cmd="tree">🌳 進化樹</button>
@@ -410,7 +429,6 @@ async function poll(){
     document.getElementById('char').textContent=s.character;
     document.getElementById('uptime').textContent=Math.round(s.uptimeSec)+'s';
     draw(s.petLines);
-    document.getElementById('status').textContent=(s.statusPlain||[]).join('\\n');
     const u=s.usage||{};
     document.getElementById('asess').textContent=(u.activeSession||'–').slice(0,8);
     document.getElementById('acost').textContent='$'+(u.activeCostUSD||0).toFixed(4);
@@ -430,7 +448,7 @@ async function sendCmd(action){
   }catch(e){el.textContent='送出失敗：'+e.message;el.style.color='#f85149';}
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>sendCmd(b.dataset.cmd)));
-document.getElementById('pet').addEventListener('click',()=>sendCmd('battle'));
+document.getElementById('pet').addEventListener('click',()=>sendCmd('pet'));   // 點角色＝摸摸（連戳會生氣）
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 setInterval(poll,500); poll();
 </script></body></html>`;

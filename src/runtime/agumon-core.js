@@ -123,6 +123,16 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
         if (age >= 0 && age < 10000 && !(st.dropStartStep >= 0)) st._forceDrop = true;
         st.lastDropTriggerTs = force.dropTriggerTs;
     }
+    // 觸碰互動（獨立介面點角色）：petMood 由 daemon 判定（happy / refuse），這裡只轉旗標。
+    // 窗口短（3 秒）：觸碰是即時反應，過期的點擊不該補演。
+    if (force.petTriggerTs && force.petTriggerTs !== st.lastPetTriggerTs) {
+        const age = Date.now() - force.petTriggerTs;
+        if (age >= 0 && age < 3000) {
+            if (force.petMood === 'refuse') st._forceRefuse = true;
+            else                            st._forceHappy  = true;
+        }
+        st.lastPetTriggerTs = force.petTriggerTs;
+    }
     st._forceSleep   = !!force.forceSleep;     // --wake 才解除
     st._freezeEvolve = !!force.freezeEvolve;   // --unfreeze 才解除（手動 evolve 不受影響）
     st._noAutoBattle = !!force.autoBattleOff;  // vpet battle off（手動 vpet battle 不受影響）
@@ -763,6 +773,21 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         delete st._forceBattle; delete st._forceBattleWin; delete st._forceBattleEnemy;
     }
 
+    // ── 觸碰互動（獨立介面點角色）：正常 happy；短時間連點 → refuse 鬧脾氣 ──────
+    // 連點的「次數/時間」判定在 daemon 的 HTTP 層做（1 秒 tick 抓不到連點），
+    // 這裡只負責演出。被擋住就直接丟棄（不排隊），同 card 的作法。
+    if (st._forceHappy) {
+        if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
+        delete st._forceHappy;
+    }
+    if (st._forceRefuse) {
+        if (!(st.refuseStartStep >= 0)) {
+            st.refuseStartStep = step;
+            st.happyStartStep  = -1;   // 生氣蓋掉高興
+        }
+        delete st._forceRefuse;
+    }
+
     // ════════ B. 依優先序渲染（第一個命中就 return）════════
     // ──── B-1. 算 walk 之前：全螢幕表演（不需走路座標）drop → evo → battle ────
 
@@ -896,6 +921,19 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     if (allowBattle && st.battlePending) {
         startBattle(st, step, st.characterId, st.lastHookTs);
         return decideBattleFrame(0, st.battleWin, st.battleEnemy, F, st.battleVersion === 2);
+    }
+
+    // 觸碰鬧脾氣（refuse）：整段維持 REFUSE 幀，只切面向 反→正→反→正（甩頭表示不要）。
+    // 與 happy 同長 4 拍、同優先序層級（比 happy 前面：生氣蓋過高興）。
+    if (st.refuseStartStep != null && st.refuseStartStep >= 0) {
+        const elapsed = step - st.refuseStartStep;
+        const refuseHold = evenHold(TOKEN_RESET_FRAMES.length);   // = 4，與 happy 一致
+        if (elapsed < refuseHold) {
+            const away   = (elapsed % 2 === 0);                   // 0 反 / 1 正 / 2 反 / 3 正
+            const facing = away ? (walk.facing === 'left' ? 'right' : 'left') : walk.facing;
+            return { kind: 'single', frameIdx: F.REFUSE ?? F.IDLE_1 ?? 0, facing, pos: walk.pos };
+        }
+        st.refuseStartStep = -1;
     }
 
     // Token 重置高興（hold 確保為偶數）

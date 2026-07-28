@@ -564,6 +564,33 @@ function startBattle(st, step, myId, seed) {
     delete st._pvpOppLabel; delete st._pvpMeLabel; delete st._battleNoCount;
 }
 
+// ── 計時表演共同骨架（drop / evo / battle 共用）─────────────────────────
+// 三者都是「從 startField 起算、每拍最多前進 1 格、依 過期/進行中/結束 三態分派」。
+// 把最容易出錯的節流（shownElapsed = min(target, prevShown+1)）與門檻判斷收斂到這一處，
+// 各表演只提供自己的欄位名與三個 handler：
+//   cfg.startField / shownField：st 上的欄位名
+//   cfg.length：正常播放長度（shown >= length 視為播完）；cfg.safety：target 超過即當殘留清掉
+//   cfg.onFrame(shown) → 回傳該拍 frame（helper 已先把 shown 寫回 shownField）
+//   cfg.onExpired()：target<0 或 >=safety 的清理
+//   cfg.onEnd?()：正常播完的收尾（可省略＝不清、等外部 commit，如 evo）
+// 回傳 frame（呼叫端要 return）或 undefined（未啟動 / 已結束 / 過期 → 往下一個表演）。
+function runTimedPerformance(st, step, cfg) {
+    const startStep = st[cfg.startField];
+    if (startStep == null || startStep < 0) return undefined;
+    const targetElapsed = step - startStep;
+    const shownElapsed  = Math.min(targetElapsed, (st[cfg.shownField] ?? -1) + 1);
+    if (targetElapsed < 0 || targetElapsed >= cfg.safety) {
+        cfg.onExpired();
+        return undefined;
+    }
+    if (shownElapsed < cfg.length) {
+        st[cfg.shownField] = shownElapsed;
+        return cfg.onFrame(shownElapsed);
+    }
+    if (cfg.onEnd) cfg.onEnd();
+    return undefined;
+}
+
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
 function decideAgumon(i, st, now, charDef, opts = {}) {
     const { F, EXPRS, ROAR_FRAMES, TOKEN_RESET_FRAMES, sleepFrames, SLEEP_PERIOD } = charDef;
@@ -625,65 +652,50 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
 
     // ── Reset 掉落表演（新 starter 空降；優先於 walk/roar，與 evo/battle 互斥）─────────
-    if (st.dropStartStep != null && st.dropStartStep >= 0) {
-        const targetElapsed = step - st.dropStartStep;
-        const prevShown     = st.dropShownElapsed ?? -1;
-        const shownElapsed  = Math.min(targetElapsed, prevShown + 1);   // 每拍最多 +1
-        if (targetElapsed < 0 || targetElapsed >= DROP_LENGTH + 8) {
-            // 殘留清理（跨機/跨重啟）
-            st.dropStartStep = -1; st.dropShownElapsed = -1;
-        } else if (shownElapsed >= 0 && shownElapsed < DROP_LENGTH) {
-            st.dropShownElapsed = shownElapsed;
-            return { kind: 'drop', elapsed: shownElapsed };
-        } else {
-            // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
-            st.dropStartStep = -1; st.dropShownElapsed = -1;
-            st.lastStepSeen = step;
-            const PERIOD    = MAX_POS * 2;
-            const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
-            st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
-        }
+    {
+        const f = runTimedPerformance(st, step, {
+            startField: 'dropStartStep', shownField: 'dropShownElapsed',
+            length: DROP_LENGTH, safety: DROP_LENGTH + 8,
+            onFrame: (shown) => ({ kind: 'drop', elapsed: shown }),
+            onExpired: () => { st.dropStartStep = -1; st.dropShownElapsed = -1; },   // 殘留清理（跨機/跨重啟）
+            onEnd: () => {
+                // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
+                st.dropStartStep = -1; st.dropShownElapsed = -1;
+                st.lastStepSeen = step;
+                const PERIOD    = MAX_POS * 2;
+                const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
+                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+            },
+        });
+        if (f) return f;
     }
 
     // ── 進化表演（最高優先；超越 battle、roar）─────────
-    if (st.evoStartStep != null && st.evoStartStep >= 0) {
-        const targetElapsed = step - st.evoStartStep;
-        // Frame throttle（同 battle）：每 render 最多 +1，保證每拍都被渲染
-        // Commit 由 statusline-agumon-color.js 在「shown 會推進到 EVO_LENGTH」那拍處理
-        const prevShown    = st.evoShownElapsed ?? -1;
-        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
-
-        // 殘留清理（跨機 / 跨重啟導致 target 不連續）
-        if (targetElapsed < 0 || targetElapsed >= EVO_LENGTH + 18) {
-            st.evoStartStep    = -1;
-            st.evoNextCharId   = null;
-            st.evoShownElapsed = -1;
-        } else if (shownElapsed >= 0 && shownElapsed < EVO_LENGTH) {
-            st.evoShownElapsed = shownElapsed;
-            let newF = F;
-            try {
-                const newChar = loadCharacter(st.evoNextCharId);
-                if (newChar?.charDef?.F) newF = newChar.charDef.F;
-            } catch(e) {}
-            return decideEvoFrame(shownElapsed, F, newF, st.lastPos ?? 0);
-        }
-        // shownElapsed >= EVO_LENGTH 且 target 未超 safety → 等 statusline commit
+    // Frame throttle（同 battle）：每 render 最多 +1，保證每拍都被渲染。
+    // 正常播完不清（無 onEnd）→ commit 由 statusline-agumon-color.js 處理。
+    {
+        const f = runTimedPerformance(st, step, {
+            startField: 'evoStartStep', shownField: 'evoShownElapsed',
+            length: EVO_LENGTH, safety: EVO_LENGTH + 18,
+            onFrame: (shown) => {
+                let newF = F;
+                try {
+                    const newChar = loadCharacter(st.evoNextCharId);
+                    if (newChar?.charDef?.F) newF = newChar.charDef.F;
+                } catch(e) {}
+                return decideEvoFrame(shown, F, newF, st.lastPos ?? 0);
+            },
+            onExpired: () => { st.evoStartStep = -1; st.evoNextCharId = null; st.evoShownElapsed = -1; },  // 殘留清理
+        });
+        if (f) return f;
     }
 
     // ── Battle 表演（高優先級；但 ROAR 在它前面播完才啟動）─────────
-    if (allowBattle && st.battleStartStep != null && st.battleStartStep >= 0) {
-        const targetElapsed = step - st.battleStartStep;
-        const useCutIn      = st.battleVersion === 2;
-        const length        = battleLength(st.battleVersion);
-
-        // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
-        // 取樣 aliasing 會跳幀；用 shownElapsed 保證每拍都被渲染。
-        // 代價：render 稀疏時戰鬥 wallclock 會被拉長（最壞 = render 間隔 × length）。
-        const prevShown    = st.battleShownElapsed ?? -1;
-        const shownElapsed = Math.min(targetElapsed, prevShown + 1);
-
-        // 殘留清理：跨機 / 跨重啟導致 target 不連續（startStep 來自很久以前）
-        if (targetElapsed < 0 || targetElapsed >= BATTLE_SAFETY) {
+    // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
+    // 取樣 aliasing 會跳幀；shownElapsed 保證每拍都被渲染（代價：render 稀疏時 wallclock 拉長）。
+    if (allowBattle) {
+        const useCutIn = st.battleVersion === 2;
+        const cleanupBattle = () => {
             st.battleStartStep    = -1;
             st.battleEnemy        = null;
             st.battleVersion      = 1;
@@ -691,32 +703,30 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
             st.pvpOppLabel        = null;
             st.pvpMeLabel         = null;
             st.battleNoCount      = false;
-        } else if (shownElapsed < length) {
-            st.battleShownElapsed = shownElapsed;
-            return decideBattleFrame(shownElapsed, st.battleWin, st.battleEnemy, F, useCutIn);
-        } else {
-            // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
-            // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
-            // 「結束」而重複加計（同 lastBattleTriggerTs 的思路）。
-            // 跨階 PvP（st.battleNoCount）不計勝率；同階/自動/手動戰鬥照常計入
-            if (!st.battleNoCount && st.lastBattleCountedStartStep !== st.battleStartStep) {
-                st.lastBattleCountedStartStep = st.battleStartStep;
-                st.battleTotalCount = (st.battleTotalCount || 0) + 1;
-                if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
-            }
-            st.lastBattleEnemy    = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
-            st.battleStartStep    = -1;
-            st.battleEnemy        = null;
-            st.battleVersion      = 1;
-            st.battleShownElapsed = -1;
-            st.pvpOppLabel        = null;
-            st.pvpMeLabel         = null;
-            st.battleNoCount      = false;
-            st.lastStepSeen       = step;
-            const PERIOD     = MAX_POS * 2;                            // 40
-            const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
-            st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
-        }
+        };
+        const f = runTimedPerformance(st, step, {
+            startField: 'battleStartStep', shownField: 'battleShownElapsed',
+            length: battleLength(st.battleVersion), safety: BATTLE_SAFETY,
+            onFrame: (shown) => decideBattleFrame(shown, st.battleWin, st.battleEnemy, F, useCutIn),
+            onExpired: cleanupBattle,   // 殘留清理：跨機/跨重啟導致 target 不連續
+            onEnd: () => {
+                // 正常結束 → 接續 RESULT 的中央位置，從 col 16 朝左開始走
+                // 勝率累計：以 battleStartStep 當這場戰鬥的唯一識別，避免多視窗同時偵測到
+                // 「結束」而重複加計。跨階 PvP（battleNoCount）不計；同階/自動/手動照常計入。
+                if (!st.battleNoCount && st.lastBattleCountedStartStep !== st.battleStartStep) {
+                    st.lastBattleCountedStartStep = st.battleStartStep;
+                    st.battleTotalCount = (st.battleTotalCount || 0) + 1;
+                    if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
+                }
+                st.lastBattleEnemy = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
+                cleanupBattle();
+                st.lastStepSeen    = step;
+                const PERIOD     = MAX_POS * 2;                            // 40
+                const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
+                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+            },
+        });
+        if (f) return f;
     }
 
     // Token 重置偵測：新 resets_at 嚴格大於 stored + 舊值已過期 → 窗口真的滾過了

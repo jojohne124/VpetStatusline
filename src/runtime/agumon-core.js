@@ -592,10 +592,30 @@ function runTimedPerformance(st, step, cfg) {
 }
 
 // opts.allowBattle: 是否啟用 Thinking 偵測 / battle 表演（預設 false 給 v4）
+// ⭐ decideAgumon —— 桌寵每拍（1 render = 1 tick）的表演決策。結構分兩大段：
+//
+//   【A. 觸發/偵測（每拍必跑，無論最後畫什麼）】
+//     hook(新訊息)→roar+trainingBonus+battleArm、auto-battle pending、force-battle、
+//     r5h token 重置→happy、從睡眠喚醒對齊。這些只「改狀態/武裝旗標」，不 return。
+//
+//   【B. 依優先序渲染（第一個命中就 return 該幀）】以 computeWalk 為分水嶺切兩組：
+//     ── 算 walk 之前（全螢幕表演，不需走路座標）──
+//       1. drop（空降）  2. evo（進化）  3. battle（戰鬥）      ← 皆走 runTimedPerformance
+//     ── 算 walk 之後（單幀疊在走路上，需 walk.facing/pos）──
+//       4. roar（大吼，播完可同拍 chain→battle）  5. battlePending→battle
+//       6. happy（token 重置）  7. card（overlay，蓋睡覺但不中斷 roar/battle/evo）
+//       8. tree（overlay，同 card）  9. forceSleep  10. idle sleep
+//       11. expr（隨機表情，播放中）  12. expr 新觸發  13. walk（預設）
+//
+//   ⚠️ 新增/調整表演時：先決定它屬於 A 還是 B；若是 B，決定在 computeWalk 前/後、
+//      以及在上面優先序的哪個位置插入。動 A 段的次序（trainingBonus++/r5h latch/battleArm）
+//      對多視窗 race 敏感，改前務必想清楚。
 function decideAgumon(i, st, now, charDef, opts = {}) {
     const { F, EXPRS, ROAR_FRAMES, TOKEN_RESET_FRAMES, sleepFrames, SLEEP_PERIOD } = charDef;
     const step = Math.floor(now / STEP_MS);
     const allowBattle = !!opts.allowBattle;
+
+    // ════════ A. 觸發/偵測（每拍必跑，不 return）════════
 
     // 每 tick 累積本 session 花費（即使凍結/表演中也累積，避免漏記 cost 高水位）
     updateEvoSpend(st, i);
@@ -650,6 +670,9 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         }
         delete st._forceBattle; delete st._forceBattleWin; delete st._forceBattleEnemy;
     }
+
+    // ════════ B. 依優先序渲染（第一個命中就 return）════════
+    // ──── B-1. 算 walk 之前：全螢幕表演（不需走路座標）drop → evo → battle ────
 
     // ── Reset 掉落表演（新 starter 空降；優先於 walk/roar，與 evo/battle 互斥）─────────
     {
@@ -729,6 +752,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         if (f) return f;
     }
 
+    // （續 A 的觸發：以下兩段仍是「改狀態、不 return」，但必須在 computeWalk 之前跑）
+
     // Token 重置偵測：新 resets_at 嚴格大於 stored + 舊值已過期 → 窗口真的滾過了
     // ⚠ 必須用 `>` 而非 `!==`：搭配下面 Math.max 保留舊值的設計，
     //   若 input 偶發回傳比 stored 還舊的值（多視窗 race / 邊角 case），
@@ -754,6 +779,10 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
 
     const walk = computeWalk(step, st.walkPhaseOffset || 0);
+
+    // ──── B-2. 算 walk 之後：單幀疊在走路上（需 walk.facing/pos）────
+    // 優先序：roar → (roar 結束可 chain) battle → battlePending → happy →
+    //         card(overlay) → tree(overlay) → forceSleep → idle sleep → expr → walk(預設)
 
     // 大吼最優先（hold 確保為偶數，維持 step 奇偶）
     // 動畫播放中繼續走路（不凍結位置），避免位置定格

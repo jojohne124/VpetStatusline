@@ -17,6 +17,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 const http = require('http');
+const { Worker } = require('worker_threads');
 
 // 優先用「已安裝」的 core（跟 statusLine 同一份權威），抓不到再退回 repo 內。
 let core;
@@ -27,13 +28,14 @@ catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js
 const { computeUsage } = require('./token-source');
 
 const {
-    STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH, EVO_LENGTH,
+    STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH, EVO_LENGTH, MAX_POS,
     loadState, saveState, decideAgumon, checkEvolution,
     buildStatusLines, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, composeSleepScene, composeStatusCard, composeTreeScene,
     getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
     silhouetteArt, updateEvoHistory,
+    applyForceFlags, applyForceTriggers, clearForceCharacter,
 } = core;
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
@@ -41,10 +43,26 @@ const {
 const AUTHORITATIVE = process.argv.includes('--authoritative');
 const STATE_FILE     = path.join(STATE_DIR, AUTHORITATIVE ? 'color-state.json' : 'daemon-state.json');
 const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
+const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令；當家時由 daemon 讀
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
 
 function tryLoadArt(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; } }
+
+// 走路位移：statusline 靠 aguCol+pos 把角色擺到不同欄；daemon 沒有狀態列，改把角色畫到一個
+// 固定寬「舞台」上、左邊墊 pos 個空欄，角色就會左右踱步（pos 0..MAX_POS）。舞台寬固定 →
+// canvas 每幀同寬、不抖動。
+function padWalkStage(rows, pos) {
+    if (!rows || !rows.length) return rows;
+    const spriteW = rows[0].length;
+    const stageW  = MAX_POS + spriteW;   // pos 最大 MAX_POS 時角色右緣 = stageW，剛好放得下
+    const off     = Math.max(0, Math.min(pos | 0, MAX_POS));
+    return rows.map(row => {
+        const out = new Array(stageW).fill(null);
+        for (let c = 0; c < row.length; c++) out[off + c] = row[c];
+        return out;
+    });
+}
 
 // 從 JSONL token-source 合成一份「像 statusLine 輸入」的物件餵給表演管線。
 // 只有 cost / session_id 是玩法真正吃的（updateEvoSpend）；其餘為顯示用。
@@ -69,6 +87,9 @@ function buildInput(usage) {
 function renderTick(i, st, now) {
     const step = Math.floor(now / STEP_MS);
 
+    // 0. 當家模式：讀 force-char.json 套 vpet 指令（與 statusLine 共用同一份核心邏輯）
+    if (AUTHORITATIVE) applyForceFlags(st, FORCE_FILE);
+
     // 1. 進化 commit（必須在 loadCharacter 之前）
     if (st.evoStartStep != null && st.evoStartStep >= 0) {
         const targetElapsed = step - st.evoStartStep;
@@ -79,6 +100,7 @@ function renderTick(i, st, now) {
             delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
             delete st.trainingBonus;
             delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;
+            if (AUTHORITATIVE) clearForceCharacter(FORCE_FILE);   // 清 force.character 免無限迴圈
         }
     }
 
@@ -86,8 +108,11 @@ function renderTick(i, st, now) {
     const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
     updateEvoHistory(st);
 
-    // 2. 自然進化觸發
-    if (!(st.evoStartStep >= 0)) {
+    // 1.5 + 2. force 觸發（drop/強制進化）
+    if (AUTHORITATIVE) applyForceTriggers(st, step);
+
+    // 2. 自然進化觸發（freeze 凍結時跳過，與 statusLine 一致）
+    if (!(st.evoStartStep >= 0) && !st._freezeEvolve) {
         const nextChar = checkEvolution(st, i, config);
         if (nextChar) {
             st.evoStartStep = step; st.evoNextCharId = nextChar; st.evoShownElapsed = -1;
@@ -157,18 +182,45 @@ function renderTick(i, st, now) {
     if (result.kind === 'single' && !petLines) {
         const art = tryLoadArt(artFile);
         if (art) {
-            const rows = getFacingRows(art, result.frameIdx, result.facing, charDef.RIGHT_OFFSET);
+            let rows = getFacingRows(art, result.frameIdx, result.facing, charDef.RIGHT_OFFSET);
             if (rows && result.sleepFx) {
-                petLines = renderCells(composeSleepScene(rows, getSharedFrame(loadShared(), result.sleepFx, 0)));
-            } else if (rows) {
-                petLines = renderCells(rows);
+                rows = composeSleepScene(rows, getSharedFrame(loadShared(), result.sleepFx, 0));
             }
+            if (rows) petLines = renderCells(padWalkStage(rows, result.pos ?? 0));   // 套走路位移
         }
     }
 
     saveState(STATE_FILE, st);
     return { kind: result.kind, petLines, statusLines };
 }
+
+// ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
+// 這是走路跳幀的根治：computeUsage 掃 JSONL ~1.3s > 1s tick，若在主迴圈跑會拖慢每秒
+// render → step 跳 2 → 走路跳幀。改由 worker 算、主迴圈讀 cachedUsage（每 tick <10ms）。
+function emptyBucket() { return { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, tokens: 0, costUSD: 0, messages: 0 }; }
+function emptyUsage() {
+    return {
+        scannedFiles: 0, uniqueMessages: 0, totals: emptyBucket(), byModel: {}, sessions: 0,
+        activeSession: null, activeSessionUsage: null, today: emptyBucket(), last5h: emptyBucket(),
+        burn10m: emptyBucket(), lastActivityAgoSec: null,
+    };
+}
+let cachedUsage = emptyUsage();
+const USAGE_REFRESH_MS = 5000;
+function startUsageWorker() {
+    let worker;
+    try { worker = new Worker(path.join(__dirname, 'token-worker.js')); }
+    catch (e) { console.log('   ⚠️ token worker 起不來，退回主迴圈掃描（可能偶爾跳幀）：' + e.message);
+                setInterval(() => { try { cachedUsage = require('./token-source').computeUsage({ now: Date.now() }); } catch (e2) {} }, USAGE_REFRESH_MS);
+                try { cachedUsage = require('./token-source').computeUsage({}); } catch (e2) {} return; }
+    worker.on('message', (m) => { if (m && m.ok && m.usage) cachedUsage = m.usage; });
+    worker.on('error', () => {});
+    worker.unref();   // 別讓 worker 卡住行程退出
+    const req = () => { try { worker.postMessage({ now: Date.now() }); } catch (e) {} };
+    req();
+    setInterval(req, USAGE_REFRESH_MS).unref();
+}
+startUsageWorker();
 
 // ── 時鐘 ──
 let tick = 0;
@@ -180,7 +232,7 @@ function stripAnsi(s) { return s.replace(/\x1b\[[0-9;]*m/g, ''); }
 function doTick() {
     const now = Date.now();
     try {
-        const usage = computeUsage({ now });
+        const usage = cachedUsage;   // 讀快取，不在主迴圈掃 JSONL → tick 保持輕量、走路不跳幀
         const i  = buildInput(usage);
         const st = loadState(STATE_FILE);
         if (!st.characterId) st.characterId = 'agumon';
@@ -215,26 +267,72 @@ function doTick() {
 doTick();
 setInterval(doTick, STEP_MS);   // ← 獨立時鐘：跟 Claude Code 有沒有呼叫指令無關
 
+// ── UI 指令 → force-char.json（跟 vpet CLI 同一個指令通道）───────────────────
+// 當家時 daemon 自己讀套用；隔離時 statusLine 讀 → UI 等於「圖形版 vpet 指令」，兩模式皆可用。
+// merge 寫入（保留其他欄位），與 statusline-cheat 寫法一致。
+function writeForce(patch) {
+    let f = {};
+    try { f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8')); } catch (e) {}
+    Object.assign(f, patch);
+    try {
+        fs.mkdirSync(path.dirname(FORCE_FILE), { recursive: true });
+        fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
+        return true;
+    } catch (e) { return false; }
+}
+const COMMANDS = {
+    battle:    () => ({ battleTriggerTs: Date.now() }),
+    card:      () => ({ cardTriggerTs:   Date.now() }),
+    tree:      () => ({ treeTriggerTs:   Date.now() }),
+    drop:      () => ({ dropTriggerTs:   Date.now() }),   // 空降演出（非真 reset 抽角色）
+    sleep:     () => ({ forceSleep: true }),
+    wake:      () => ({ forceSleep: false }),
+    freeze:    () => ({ freezeEvolve: true }),
+    unfreeze:  () => ({ freezeEvolve: false }),
+    battleOff: () => ({ autoBattleOff: true }),
+    battleOn:  () => ({ autoBattleOff: false }),
+};
+function applyCommand(action) {
+    const fn = COMMANDS[action];
+    if (!fn) return { ok: false, error: 'unknown action: ' + action };
+    return { ok: writeForce(fn()), action };
+}
+
 // ── HTTP 顯示層 ──
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<title>agumon daemon PoC</title>
+<title>agumon daemon</title>
 <style>
   body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,monospace;margin:0;padding:20px}
   h1{font-size:15px;color:#58a6ff;margin:0 0 12px}
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
   #petbox{background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;image-rendering:pixelated}
-  canvas{image-rendering:pixelated;display:block}
+  canvas{image-rendering:pixelated;display:block;cursor:pointer}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
   .big{font-size:22px;color:#3fb950}
   .warn{color:#d29922}
   pre{margin:6px 0 0;color:#8b949e;font-size:12px;white-space:pre}
   .badge{display:inline-block;padding:1px 8px;border-radius:10px;background:#1f6feb;color:#fff;font-size:12px}
+  #controls{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;max-width:480px}
+  #controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
+  #controls button:hover{background:#30363d;border-color:#8b949e}
+  #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px}
 </style></head><body>
-<h1>🥚 agumon daemon PoC — 獨立時鐘 + JSONL token 資料源</h1>
+<h1>🥚 agumon daemon — 獨立時鐘 + JSONL token 源（點角色＝戰鬥）</h1>
 <div id="wrap">
   <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
-    <pre id="status"></pre></div>
+    <pre id="status"></pre>
+    <div id="controls">
+      <button data-cmd="battle">⚔️ 戰鬥</button>
+      <button data-cmd="card">🪪 卡片</button>
+      <button data-cmd="tree">🌳 進化樹</button>
+      <button data-cmd="drop">🪂 空降</button>
+      <button data-cmd="sleep">😴 睡</button>
+      <button data-cmd="wake">☀️ 醒</button>
+      <button data-cmd="freeze">❄️ 凍結進化</button>
+      <button data-cmd="unfreeze">🔥 解凍</button>
+    </div>
+    <div id="cmdmsg"></div></div>
   <div class="panel">
     <div>daemon tick：<span class="big" id="tick">–</span> <span class="badge" id="kind">–</span></div>
     <div class="k">（背景／切走這個分頁再回來，tick 仍持續跳 = 時鐘不依賴前景）</div>
@@ -254,8 +352,11 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   </div>
 </div>
 <script>
-const CW=8, CH=8;   // 每個終端字元 = 8px 寬、8px 高（上下各 4px 半格）
+// 每個終端字元 = 1px 寬 × 2px 高（▀ 把字元切成上/下兩個像素）。要像素方正 → CH = 2×CW，
+// 否則每個半格 8×4 會把角色壓扁（太扁）。CW=8 → 半格 8×8 方正。
+const CW=8, CH=16;
 function parseAnsi(line){
+  // 回傳每個 cell：半格 {top,bot}、真文字 {ch,col}（卡片數值/PvP名牌）、空白 null。
   const cells=[]; let fg=null,bg=null,idx=0;
   while(idx<line.length){
     if(line[idx]==='\\x1b'){
@@ -269,9 +370,10 @@ function parseAnsi(line){
       }
     }
     const ch=line[idx];
-    if(ch==='▀'){cells.push([fg,bg]);}
-    else if(ch==='▄'){cells.push([null,fg]);}
-    else {cells.push([null,null]);}
+    if(ch==='▀'){cells.push({top:fg,bot:bg});}
+    else if(ch==='▄'){cells.push({top:null,bot:fg});}
+    else if(ch==='⠀'||ch===' '){cells.push(null);}   // 空白
+    else {cells.push({ch:ch,col:fg});}               // 真文字（半格以外一律當文字畫）
     idx++;
   }
   return cells;
@@ -283,12 +385,18 @@ function draw(petLines){
   const rows=petLines.map(parseAnsi);
   const maxW=Math.max(0,...rows.map(r=>r.length));
   cv.width=Math.max(1,maxW*CW); cv.height=Math.max(1,rows.length*CH);
+  ctx.textBaseline='top'; ctx.font='13px ui-monospace, Consolas, monospace';
   for(let r=0;r<rows.length;r++){
     for(let c=0;c<rows[r].length;c++){
-      const [top,bot]=rows[r][c];
+      const cell=rows[r][c]; if(!cell)continue;
       const x=c*CW,y=r*CH;
-      if(top){ctx.fillStyle='rgb('+top.join(',')+')';ctx.fillRect(x,y,CW,CH/2);}
-      if(bot){ctx.fillStyle='rgb('+bot.join(',')+')';ctx.fillRect(x,y+CH/2,CW,CH/2);}
+      if(cell.ch!==undefined){   // 真文字：畫字（卡片數值 / 名牌）
+        ctx.fillStyle=cell.col?('rgb('+cell.col.join(',')+')'):'#c9d1d9';
+        ctx.fillText(cell.ch,x,y+1);
+      }else{                     // 半格像素
+        if(cell.top){ctx.fillStyle='rgb('+cell.top.join(',')+')';ctx.fillRect(x,y,CW,CH/2);}
+        if(cell.bot){ctx.fillStyle='rgb('+cell.bot.join(',')+')';ctx.fillRect(x,y+CH/2,CW,CH/2);}
+      }
     }
   }
 }
@@ -313,6 +421,16 @@ async function poll(){
     document.getElementById('err').textContent=s.err?('⚠️ '+s.err):'';
   }catch(e){document.getElementById('err').textContent='fetch fail: '+e.message;}
 }
+async function sendCmd(action){
+  const el=document.getElementById('cmdmsg');
+  try{
+    const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
+    el.textContent = r.ok ? ('已送出：'+action) : ('失敗：'+(r.error||action));
+    el.style.color = r.ok ? '#3fb950' : '#f85149';
+  }catch(e){el.textContent='送出失敗：'+e.message;el.style.color='#f85149';}
+}
+document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>sendCmd(b.dataset.cmd)));
+document.getElementById('pet').addEventListener('click',()=>sendCmd('battle'));
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 setInterval(poll,500); poll();
 </script></body></html>`;
@@ -321,6 +439,18 @@ const server = http.createServer((req, res) => {
     if (req.url === '/state') {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(Object.assign({}, latest, { uptimeSec: (Date.now() - startedAt) / 1000 })));
+        return;
+    }
+    if (req.method === 'POST' && req.url === '/cmd') {
+        let body = '';
+        req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
+        req.on('end', () => {
+            let action = '';
+            try { action = JSON.parse(body).action; } catch (e) {}
+            const r = applyCommand(action);
+            res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(r));
+        });
         return;
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

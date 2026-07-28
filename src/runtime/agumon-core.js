@@ -79,6 +79,97 @@ function saveState(stateFile, s) {
     atomicWrite(stateFile, JSON.stringify(s));
 }
 
+// ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────
+// 讀 force-char.json 把 cheat/指令轉成 st 上的 _force* 旗標與持續開關；每拍都要跑
+// （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
+const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
+function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
+    let force;
+    try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
+    if (force.character) {
+        const changed = st.characterId !== force.character;
+        st.characterId = force.character;
+        if (changed) {
+            Object.keys(st).forEach(k => { if (k.startsWith('_evo_') || k === '_r5hPeaked' || k === '_costEvolved') delete st[k]; });
+            delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
+            delete st._r5hResetAt;
+            delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
+            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
+            st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
+            delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
+        }
+    }
+    if (force.battleTriggerTs && force.battleTriggerTs !== st.lastBattleTriggerTs) {
+        const age = Date.now() - force.battleTriggerTs;
+        if (age >= 0 && age < 10000 && !(st.battleStartStep >= 0)) {
+            st._forceBattle = true;
+            if (typeof force.forceBattleWin === 'boolean')   st._forceBattleWin   = force.forceBattleWin;
+            if (typeof force.forceBattleEnemy === 'string')  st._forceBattleEnemy = force.forceBattleEnemy;
+            st._pvpOppLabel = (typeof force.pvpOppLabel === 'string') ? force.pvpOppLabel : null;
+            st._pvpMeLabel  = (typeof force.pvpMeLabel  === 'string') ? force.pvpMeLabel  : null;
+            st._battleNoCount = (force.battleNoCount === true);
+        }
+        st.lastBattleTriggerTs = force.battleTriggerTs;   // 不論是否觸發都記下，避免日後 stale 重觸發
+    }
+    if (force.evolveTriggerTs && force.evolveTriggerTs !== st.lastEvolveTriggerTs) {
+        const age = Date.now() - force.evolveTriggerTs;
+        if (age >= 0 && age < 300000 && !(st.evoStartStep >= 0) && typeof force.evolveTarget === 'string') {
+            st._forceEvolve = force.evolveTarget;
+        }
+        st.lastEvolveTriggerTs = force.evolveTriggerTs;
+    }
+    if (force.dropTriggerTs && force.dropTriggerTs !== st.lastDropTriggerTs) {
+        const age = Date.now() - force.dropTriggerTs;
+        if (age >= 0 && age < 10000 && !(st.dropStartStep >= 0)) st._forceDrop = true;
+        st.lastDropTriggerTs = force.dropTriggerTs;
+    }
+    st._forceSleep   = !!force.forceSleep;     // --wake 才解除
+    st._freezeEvolve = !!force.freezeEvolve;   // --unfreeze 才解除（手動 evolve 不受影響）
+    st._noAutoBattle = !!force.autoBattleOff;  // vpet battle off（手動 vpet battle 不受影響）
+    st._petHidden    = !!force.petHidden;      // vpet hide：statusline 只顯示狀態列（daemon 顯示層不受影響）
+    if (force.cardTriggerTs && force.cardTriggerTs !== st.lastCardTriggerTs) {
+        const age = Date.now() - force.cardTriggerTs;
+        const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0) || (st.cardStartStep >= 0);
+        if (age >= 0 && age < 10000 && !blocked) st._forceCard = true;
+        st.lastCardTriggerTs = force.cardTriggerTs;
+    }
+    if (force.treeTriggerTs && force.treeTriggerTs !== st.lastTreeTriggerTs) {
+        const age = Date.now() - force.treeTriggerTs;
+        const blocked = (st.battleStartStep >= 0) || (st.evoStartStep >= 0);
+        if (age >= 0 && age < 10000 && !blocked) st._forceTree = true;
+        st.lastTreeTriggerTs = force.treeTriggerTs;
+    }
+}
+
+// force 觸發 → 表演起始（drop 空降 / 強制進化）；在 loadCharacter+updateEvoHistory 之後、
+// decideAgumon 之前跑。與 evo/battle 互斥。
+function applyForceTriggers(st, step) {
+    if (st._forceDrop && !(st.dropStartStep >= 0) && !(st.evoStartStep >= 0)) {
+        st.dropStartStep = step;
+        st.dropShownElapsed = -1;
+        delete st._forceDrop;
+        st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;  // 互斥
+        delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
+    }
+    if (st._forceEvolve && !(st.evoStartStep >= 0)) {
+        st.evoStartStep = step;
+        st.evoNextCharId = st._forceEvolve;
+        st.evoShownElapsed = -1;
+        delete st._forceEvolve;
+        st.battleStartStep = -1; st.battleEnemy = null; st.battlePending = false;
+        delete st.exprStartStep; delete st.roarStartStep; delete st.happyStartStep;
+    }
+}
+
+// 進化 commit 後清掉 force.character（避免下次 refresh 把角色拉回進化前 → 無限迴圈）
+function clearForceCharacter(forceFile = FORCE_FILE_DEFAULT) {
+    try {
+        const f = JSON.parse(fs.readFileSync(forceFile, 'utf8'));
+        delete f.character; delete f.resetCostBase;
+        fs.writeFileSync(forceFile, JSON.stringify(f));
+    } catch (e) {}
+}
+
 // 取得當前 git 分支名：直接讀 .git/HEAD（不 spawn 子行程，杜絕同步卡死與 AV 掃描成本）。
 // 從 startDir 往上找 .git；支援 .git 為目錄(一般 repo)或檔案(worktree → gitdir 指向)。
 // detached HEAD（HEAD 直接是 SHA）回 null，行為同舊版 branch !== 'HEAD' 的跳過。
@@ -1465,7 +1556,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     ANCHOR_GAP,
-    BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT,
+    BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT, MAX_POS,
     hasCutIn, pickBattleVersion, battleLength,
     EVO_LENGTH,
     DROP_LENGTH,
@@ -1474,6 +1565,7 @@ module.exports = {
     composeEvoScene,
     composeDropScene,
     loadState, saveState, atomicWrite,
+    applyForceFlags, applyForceTriggers, clearForceCharacter,
     decideAgumon,
     checkEvolution,
     buildStatusLines,

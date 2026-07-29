@@ -1,5 +1,5 @@
 {
-  "name": "godzilla_1999",
+  "name": "GodZilla_1999",
   "stage": "Ultimate",
   "power": 180,
   "frameCount": 12,
@@ -60,5 +60,9 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [],
+  "tags": [
+    "GodZilla",
+    "G-cell"
+  ]
 }

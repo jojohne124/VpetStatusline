@@ -46,6 +46,24 @@
   .edgeCard .top b { font-size: 13px; }
   .edgeCard .del { background: #5a2d2d; border: none; color: #f0b0b0; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
   .edgeCard .warn { color: #e88; font-size: 11px; margin-top: 4px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; align-items: center; justify-content: center; }
+  .modalBox { background: #23272e; border: 1px solid #4a515a; border-radius: 9px; padding: 16px; width: 460px; max-height: 78vh; overflow-y: auto; box-shadow: 0 10px 40px #000a; }
+  .modalBox h3 { margin: 0 0 6px; font-size: 15px; }
+  .modalBox input[type=text] { flex: 1; background: #1a1d21; border: 1px solid #4a515a; color: #e6e6e6; border-radius: 4px; padding: 5px 8px; font-size: 13px; }
+  .modalBox button { background: #3a4048; color: #e6e6e6; border: 1px solid #4a515a; border-radius: 5px; padding: 5px 11px; cursor: pointer; font-size: 13px; }
+  .modalBox button:hover:not(:disabled) { background: #464d57; }
+  .modalBox button:disabled { opacity: .35; cursor: default; }
+  .tagList { display: flex; flex-direction: column; gap: 4px; }
+  .tagRow { display: flex; align-items: center; gap: 6px; background: #1e2228; border: 1px solid #3a4048; border-radius: 5px; padding: 5px 8px; }
+  .tagRow .ord { color: #7f868e; font-size: 11px; width: 20px; }
+  .tagRow .nm { flex: 1; font-size: 13px; }
+  .tagRow .cnt { color: #7f868e; font-size: 11px; margin-right: 4px; }
+  .tagRow button { padding: 1px 7px; font-size: 12px; }
+  .tagRow button.del { background: #5a2d2d; color: #f0b0b0; border-color: #6d3a3a; }
+  .tagbox { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; min-height: 20px; align-items: center; }
+  .tag { background: #2f4a63; border: 1px solid #46708f; color: #cfe3f5; border-radius: 10px; padding: 1px 4px 1px 8px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+  .tag b { cursor: pointer; color: #8fb8d8; font-weight: 700; padding: 0 3px; }
+  .tag b:hover { color: #ff8a80; }
   .addEdge { margin-top: 8px; }
   .hint { color: #7f868e; font-size: 11px; line-height: 1.5; margin-top: 8px; }
   .legend { position: absolute; bottom: 10px; left: 10px; background: rgba(35,39,46,.9); border: 1px solid #333; border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.7; }
@@ -66,6 +84,7 @@
       <button id="starterBtn" onclick="toggleStarterMenu(event)">🧬 顯示 starter 鏈 ▾</button>
       <div id="starterMenu" class="menu" style="display:none"></div>
     </div>
+    <button onclick="openTagManager()">🏷 標籤管理</button>
     <input type="text" id="search" placeholder="搜尋角色…" oninput="render()">
     <span id="deadBadge"></span>
     <span id="status">載入中…</span>
@@ -81,6 +100,18 @@
       </div>
     </div>
     <div id="panel"><div class="empty">點選節點以編輯<br>或用「連線模式」新增進化邊</div></div>
+  </div>
+</div>
+<div id="tagModal" class="modal" style="display:none">
+  <div class="modalBox">
+    <h3>🏷 標籤管理</h3>
+    <div class="hint" style="margin:0 0 10px">上下箭頭調顯示順序；✎ 改名、× 刪除都會<b>同步套用到所有角色</b>。變更需按「💾 儲存」才寫入。</div>
+    <div id="tagList" class="tagList"></div>
+    <div class="row" style="display:flex;gap:8px;margin-top:10px">
+      <input type="text" id="newTag" placeholder="新增 tag…" onkeydown="if(event.key==='Enter')addTagToRegistry()">
+      <button onclick="addTagToRegistry()">加入</button>
+    </div>
+    <div style="text-align:right;margin-top:12px"><button onclick="closeTagManager()">關閉</button></div>
   </div>
 </div>
 <script>
@@ -147,10 +178,12 @@ function spriteDataURL(sp) {
 }
 
 // 送 server 的精簡圖（sprite 不必送，server 從磁碟重讀）
+// ⚠️ 這裡是「白名單」：沒列到的欄位存檔時會被靜默丟掉。新增節點屬性時務必同步加進來。
 function payload() {
   return {
-    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, weight:n.weight, highTier:n.highTier, x:n.x, y:n.y })),
+    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, weight:n.weight, highTier:n.highTier, tags:n.tags||[], x:n.x, y:n.y })),
     edges: G.edges,
+    tagOrder: G.tagOrder || [],
   };
 }
 
@@ -415,6 +448,14 @@ function openPanel(id) {
       <div class="field"><label>&nbsp;</label>
         <label style="display:flex;align-items:center;gap:5px;height:29px"><input type="checkbox" ${n.highTier?'checked':''} onchange="upd('${id}','highTier',this.checked)"> 高階(reset 用 dust_hi)</label></div>
     </div>` : ''}
+    <div class="field"><label>標籤 tags <span class="hint" style="font-weight:400">（內部分類，不對玩家顯示）</span></label>
+      <div id="tagChips" class="tagbox">
+        ${(n.tags||[]).map(t=>`<span class="tag">${t}<b onclick="rmTag('${id}','${t}')" title="移除">×</b></span>`).join('') || '<span class="hint">（無）</span>'}
+      </div>
+      <input id="tagInput" list="allTags" placeholder="輸入或選既有 tag，Enter 加入"
+             onkeydown="if(event.key==='Enter'){addTag('${id}',this.value);this.value='';}">
+      <datalist id="allTags">${allTags().map(t=>`<option value="${t}">`).join('')}</datalist>
+    </div>
     <div class="field"><label>進化到 (evolvesTo)</label></div>
     ${outEdges.map(e=>edgeCardHtml(id,e)).join('') || '<div class="hint">（無 — 終點角色）</div>'}
     <div class="addEdge field">
@@ -450,9 +491,118 @@ function edgeCardHtml(from, e) {
           <option value="night" ${e.time==='night'?'selected':''}>🌙 夜</option>
         </select></div>
     </div>
+    <div class="row">
+      <div class="field"><label>tag 交戰</label>
+        <select onchange="updEdge('${from}','${e.to}','tag',this.value||null)">
+          <option value="" ${!e.tag?'selected':''}>—</option>
+          ${allTags().map(t=>`<option value="${t}" ${e.tag===t?'selected':''}>${t}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>次數 ≥</label>
+        <input type="number" min="1" placeholder="1" value="${e.tagCount==null?'':e.tagCount}" ${e.tag?'':'disabled'}
+               onchange="updEdge('${from}','${e.to}','tagCount',this.value===''?null:+this.value)"></div>
+      <div class="field"><label>該 tag 勝率%</label>
+        <input type="number" min="0" max="100" placeholder="不限" value="${e.tagPct==null?'':e.tagPct}" ${e.tag?'':'disabled'}
+               onchange="updEdge('${from}','${e.to}','tagPct',this.value===''?null:+this.value)"></div>
+    </div>
+    ${e.tag?`<div class="hint" style="margin-top:2px">與帶「${e.tag}」的對手交戰 ≥ ${e.tagCount??1} 次${e.tagPct!=null?`，且對該 tag 勝率 ≥ ${e.tagPct}%`:''}（敗場也算交戰；進化後歸零）</div>`:''}
     ${dead?'<div class="warn">⚠ 死路：調高此邊 win% 或降低較弱分支</div>':''}
   </div>`;
 }
+// ── tags：內部分類標籤 ───────────────────────────────────────────────────
+// 候選清單＝全庫既有 tag 的聯集（不另開登錄檔）。用 datalist 給既有值，
+// 避免 dragon / Dragon / drgaon 這種拼字漂移讓日後的 tag 條件靜默失效。
+// 顯示順序＝登錄檔 tags.json 的順序；未登錄的（手改 config 加的）排在後面、字母序。
+function allTags() {
+  const order = G.tagOrder || [];
+  const s = new Set(order);
+  for (const n of G.nodes) for (const t of (n.tags || [])) s.add(t);
+  return [...s].sort(tagCmp);
+}
+function tagCmp(a, b) {
+  const order = G.tagOrder || [];
+  const ia = order.indexOf(a), ib = order.indexOf(b);
+  if (ia !== -1 && ib !== -1) return ia - ib;      // 都登錄 → 照登錄順序
+  if (ia !== -1) return -1;                        // 已登錄的排前面
+  if (ib !== -1) return 1;
+  return a.localeCompare(b);                       // 都未登錄 → 字母序
+}
+function tagUsage(t) { return G.nodes.filter(n => (n.tags || []).includes(t)).length; }
+
+// ── tag 管理面板：新增／改名／刪除／排序 ─────────────────────────────────
+// 改名與刪除會「同步套用到所有角色」——這是登錄檔真正的價值（可一次修掉全庫拼字錯誤）。
+// 所有變更只改記憶體，跟其他編輯一樣要按 💾 儲存才寫檔。
+function openTagManager() {
+  G.tagOrder = G.tagOrder || [];
+  for (const t of allTags()) if (!G.tagOrder.includes(t)) G.tagOrder.push(t);  // 未登錄的先收編
+  renderTagManager();
+  document.getElementById('tagModal').style.display = 'flex';
+}
+function closeTagManager() { document.getElementById('tagModal').style.display = 'none'; render(); if (selected) openPanel(selected); }
+function renderTagManager() {
+  const list = G.tagOrder || [];
+  document.getElementById('tagList').innerHTML = list.length ? list.map((t, i) => `
+    <div class="tagRow">
+      <span class="ord">${i + 1}</span>
+      <span class="nm">${t}</span>
+      <span class="cnt">${tagUsage(t)} 隻</span>
+      <button onclick="moveTag(${i},-1)" ${i === 0 ? 'disabled' : ''} title="上移">↑</button>
+      <button onclick="moveTag(${i},1)" ${i === list.length - 1 ? 'disabled' : ''} title="下移">↓</button>
+      <button onclick="renameTag('${t}')" title="改名（套用到所有角色）">✎</button>
+      <button class="del" onclick="deleteTag('${t}')" title="刪除（從所有角色移除）">×</button>
+    </div>`).join('') : '<div class="hint">（尚無 tag。下方可新增，或在角色面板直接輸入。）</div>';
+}
+function moveTag(i, d) {
+  const a = G.tagOrder, j = i + d;
+  if (j < 0 || j >= a.length) return;
+  [a[i], a[j]] = [a[j], a[i]];
+  dirty = true; renderTagManager();
+}
+function addTagToRegistry() {
+  const el = document.getElementById('newTag');
+  const t = String(el.value || '').trim();
+  if (!t) return;
+  G.tagOrder = G.tagOrder || [];
+  if (G.tagOrder.includes(t)) { setStatus(`已存在：${t}`); return; }
+  G.tagOrder.push(t); el.value = '';
+  dirty = true; renderTagManager(); setStatus(`新增 tag：${t}`);
+}
+function renameTag(oldName) {
+  const t = String(prompt(`把「${oldName}」改名為：（會同步套用到 ${tagUsage(oldName)} 隻角色）`, oldName) || '').trim();
+  if (!t || t === oldName) return;
+  const merging = G.tagOrder.includes(t);
+  if (merging && !confirm(`「${t}」已存在 → 會把兩者合併。確定？`)) return;
+  for (const n of G.nodes) {
+    if (!(n.tags || []).includes(oldName)) continue;
+    n.tags = [...new Set(n.tags.map(x => x === oldName ? t : x))].sort(tagCmp);
+  }
+  const i = G.tagOrder.indexOf(oldName);
+  if (merging) G.tagOrder.splice(i, 1); else G.tagOrder[i] = t;
+  dirty = true; renderTagManager(); setStatus(`改名：${oldName} → ${t}`);
+}
+function deleteTag(t) {
+  const used = tagUsage(t);
+  if (used && !confirm(`「${t}」目前有 ${used} 隻角色在用，刪除會一併從牠們身上移除。確定？`)) return;
+  for (const n of G.nodes) if ((n.tags || []).includes(t)) n.tags = n.tags.filter(x => x !== t);
+  G.tagOrder = G.tagOrder.filter(x => x !== t);
+  dirty = true; renderTagManager(); setStatus(`刪除 tag：${t}`);
+}
+function addTag(id, raw) {
+  const t = String(raw || '').trim();
+  if (!t) return;
+  const n = byId[id];
+  n.tags = n.tags || [];
+  if (n.tags.includes(t)) { setStatus(`已有 tag：${t}`); return; }
+  n.tags.push(t); n.tags.sort(tagCmp);
+  G.tagOrder = G.tagOrder || [];
+  if (!G.tagOrder.includes(t)) G.tagOrder.push(t);   // 新 tag 自動登錄（排最後，可到管理面板調）
+  dirty = true; openPanel(id); setStatus(`加上 tag：${t}`);
+}
+function rmTag(id, t) {
+  const n = byId[id];
+  n.tags = (n.tags || []).filter(x => x !== t);
+  dirty = true; openPanel(id); setStatus(`移除 tag：${t}`);
+}
+
 function upd(id, key, val) {
   byId[id][key] = val; dirty = true;
   if (selected === id) openPanel(id);   // starter/高階 等結構變動即時反映面板

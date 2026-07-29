@@ -1,5 +1,5 @@
 {
-  "name": "biollante",
+  "name": "Biollante",
   "stage": "Adult",
   "power": 65,
   "frameCount": 12,
@@ -60,5 +60,8 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [],
+  "tags": [
+    "GodZilla"
+  ]
 }

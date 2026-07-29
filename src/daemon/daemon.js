@@ -35,6 +35,7 @@ const {
     getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
     silhouetteArt, updateEvoHistory,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
+    getCharacterStage, computeInheritedPower,
 } = core;
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
@@ -100,11 +101,18 @@ function renderTick(i, st, now) {
         const targetElapsed = step - st.evoStartStep;
         const wouldAdvance  = Math.min(targetElapsed, (st.evoShownElapsed ?? -1) + 1);
         if (wouldAdvance >= EVO_LENGTH) {
+            const prevCharId = st.characterId;
             st.characterId = st.evoNextCharId || st.characterId;
+            // SU：戰力繼承「進化前基礎 power + 訓練值」（須在 delete trainingBonus 之前算）
+            if (getCharacterStage(st.characterId) === 'Super-Ultimate') {
+                st.inheritedPower = computeInheritedPower(st, prevCharId);
+            } else {
+                delete st.inheritedPower;
+            }
             st.evoStartStep = -1; st.evoNextCharId = null; st.evoShownElapsed = -1;
             delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
             delete st.trainingBonus;
-            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;
+            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;
             if (AUTHORITATIVE) clearForceCharacter(FORCE_FILE);   // 清 force.character 免無限迴圈
         }
     }
@@ -335,8 +343,10 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,monospace;margin:0;padding:20px}
   h1{font-size:15px;color:#58a6ff;margin:0 0 12px}
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
-  #petbox{background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;image-rendering:pixelated}
-  canvas{image-rendering:pixelated;display:block;cursor:pointer}
+  #petbox{background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
+  /* 進化樹在 SU 後是 5 格（92 字元寬 ≈ 736px），比一般表演寬得多 →
+     讓 canvas 自動縮到容器內，避免被裁切或撐破版面。pixelated 保持像素感。 */
+  canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
   .big{font-size:22px;color:#3fb950}

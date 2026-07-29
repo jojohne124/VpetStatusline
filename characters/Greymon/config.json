@@ -1,5 +1,5 @@
 {
-  "name": "greymon",
+  "name": "Greymon",
   "stage": "Adult",
   "power": 70,
   "frameCount": 12,
@@ -86,6 +86,25 @@
           "type": "win_rate",
           "pct": 65,
           "minBattles": 8
+        }
+      ]
+    },
+    {
+      "character": "g-metalgreymon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 8
+        },
+        {
+          "type": "tag_battles",
+          "tag": "G-cell",
+          "count": 2
         }
       ]
     }

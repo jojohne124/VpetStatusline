@@ -1,5 +1,5 @@
 {
-  "name": "godzilla_1954",
+  "name": "GodZilla_1954",
   "stage": "Perfect",
   "power": 130,
   "frameCount": 12,
@@ -75,5 +75,9 @@
         }
       ]
     }
+  ],
+  "tags": [
+    "GodZilla",
+    "G-cell"
   ]
 }

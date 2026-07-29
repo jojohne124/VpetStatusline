@@ -16,6 +16,9 @@ const PORT = 3001;
 const REPO_ROOT   = path.resolve(__dirname, '..', '..');
 const CHARS_ROOT  = path.join(REPO_ROOT, 'characters');
 const ROSTER_PATH = path.join(CHARS_ROOT, 'roster.json');
+// tag 登錄檔：只存「有哪些 tag、以什麼順序顯示」。角色身上的 tag 仍住在各自的 config.json，
+// 這裡純粹是編輯器的排序/管理清單 → 不部署、不進 release（runtime 判定 tag 只需 config.tags）。
+const TAGS_PATH   = path.join(CHARS_ROOT, 'tags.json');
 const LAYOUT_PATH = path.join(CHARS_ROOT, 'evo-layout.json');
 const HTML_PATH   = path.join(__dirname, 'route_editor.html');
 
@@ -55,6 +58,15 @@ function loadRoster() {
 function loadLayout() {
     try { return JSON.parse(fs.readFileSync(LAYOUT_PATH, 'utf8')); } catch(e) { return {}; }
 }
+// tag 顯示順序。檔案不存在（首次使用）→ 回空陣列，前端會把「實際用到但未登錄」的 tag
+// 補在後面，所以手改過 config.json 的 tag 不會消失、也不必先建檔。
+function loadTagOrder() {
+    try {
+        const t = JSON.parse(fs.readFileSync(TAGS_PATH, 'utf8'));
+        const list = Array.isArray(t) ? t : (t.order || []);
+        return list.map(String).filter(Boolean);
+    } catch(e) { return []; }
+}
 
 // 讀一條邊的 conditions 取 pct / cost / minBattles
 function edgeParams(evo) {
@@ -62,11 +74,16 @@ function edgeParams(evo) {
     const cost = conds.find(c => c.type === 'cost_threshold');
     const win  = conds.find(c => c.type === 'win_rate');
     const tod  = conds.find(c => c.type === 'time_of_day');
+    const tb   = conds.find(c => c.type === 'tag_battles');
     return {
         pct: win ? win.pct : null,
         cost: cost ? cost.usd : null,
         minBattles: win ? win.minBattles : null,
         time: tod ? tod.period : null,
+        // tag_battles：與帶指定 tag 的對手交戰 N 次（tagPct = 對該 tag 的勝率門檻，可空）
+        tag: tb ? tb.tag : null,
+        tagCount: tb ? tb.count : null,
+        tagPct: tb && tb.pct != null ? tb.pct : null,
     };
 }
 
@@ -102,6 +119,8 @@ function buildGraph() {
             // 否則存檔會替它們套上 tier cap / 被當該階敵人配對。
             stage: cfg.stage || 'UnStage',
             power: cfg.power ?? 10,
+            // 內部分類標籤（不對玩家顯示）。可多可無；日後給「擊倒帶 X tag 的怪 N 隻」這類條件用。
+            tags: Array.isArray(cfg.tags) ? cfg.tags.slice() : [],
             starter: starterSet.has(id),
             implanted: rosterSet.has(id),
             weight: starterWeights[id] ?? 1,
@@ -115,10 +134,11 @@ function buildGraph() {
             edges.push({
                 from: id, to: evo.character,
                 pct: p.pct, cost: p.cost, minBattles: p.minBattles, time: p.time,
+                tag: p.tag, tagCount: p.tagCount, tagPct: p.tagPct,
             });
         }
     }
-    return { nodes, edges };
+    return { nodes, edges, tagOrder: loadTagOrder() };
 }
 
 // ── 驗證：補建議 pct + 死路 ─────────────────────────────────────────────────
@@ -133,14 +153,16 @@ function validate(graph) {
         const src = nodeById[from]; if (!src) continue;
         const kids = byParent[from].map(e => ({
             tgt: e.to, power: (nodeById[e.to] || {}).power ?? 0,
-            pct: e.pct, isNew: e.pct == null, time: e.time,
+            pct: e.pct, isNew: e.pct == null, time: e.time, tag: e.tag,
         }));
         const resolved = RULES.resolvePcts(kids, src.stage, src.power);
         resolved.forEach(k => { suggestions[from + '>' + k.tgt] = k.pct; });
     }
     // 死路用「已定案 pct」（前端有填就用填的，沒填用建議）
+    // ⚠️ 這裡重建邊物件 → 沒帶上的欄位 findDeadPaths 就看不到。tag 必須帶，
+    // 否則 tag 分歧會被誤判成死路（tag 是另一個軸，不需要 win% 遞增）。
     const effEdges = graph.edges.map(e => ({
-        from: e.from, to: e.to, time: e.time,
+        from: e.from, to: e.to, time: e.time, tag: e.tag,
         pct: e.pct != null ? e.pct : suggestions[e.from + '>' + e.to],
     }));
     const dead = RULES.findDeadPaths({ nodes: graph.nodes, edges: effEdges });
@@ -168,6 +190,9 @@ function save(graph) {
         // 只有選了真階段才寫；UnStage（特殊 boss 的 sentinel）維持 config 原樣
         // （原本無 stage 就保持無、原本寫 "UnStage" 就保留），runtime 兩者等價。
         if (n.stage && n.stage !== 'UnStage') cfg.stage = n.stage;
+        // tags：去重 + 去空白，空陣列就整個移除（避免 120+ 個 config 多出無意義的 "tags": []）
+        const tags = [...new Set((n.tags || []).map(t => String(t).trim()).filter(Boolean))];
+        if (tags.length) cfg.tags = tags; else delete cfg.tags;
         const kids = (byParent[n.id] || []).slice()
             .sort((a, b) => ((nodeById[a.to] || {}).power ?? 0) - ((nodeById[b.to] || {}).power ?? 0));
         cfg.evolvesTo = kids.map(e => {
@@ -178,6 +203,12 @@ function save(graph) {
                   minBattles: e.minBattles != null ? e.minBattles : RULES.minBattlesFor(n.stage) },
             ];
             if (e.time) conds.push({ type: 'time_of_day', period: e.time });
+            // tag_battles：與帶指定 tag 的對手交戰達 N 次（可再加對該 tag 的勝率門檻）
+            if (e.tag) {
+                const tb = { type: 'tag_battles', tag: e.tag, count: e.tagCount != null ? e.tagCount : 1 };
+                if (e.tagPct != null && e.tagPct !== '') tb.pct = e.tagPct;
+                conds.push(tb);
+            }
             return { character: e.to, conditions: conds };
         });
 
@@ -210,6 +241,17 @@ function save(graph) {
     writeText(ROSTER_PATH, rosterOut);
     try { writeText(path.join(ASSETS_DIR, 'roster.json'), rosterOut); }
     catch(e) { deployErrors.push(`roster: ${e.message}`); }
+
+    // tag 登錄檔（顯示順序）— 只寫 source，不部署（runtime 用不到順序）。
+    // 未登錄但實際有人在用的 tag 一律補進來，避免「手改 config 加的 tag」永遠排在雜項區。
+    if (Array.isArray(graph.tagOrder)) {
+        const order = [...new Set(graph.tagOrder.map(t => String(t).trim()).filter(Boolean))];
+        const used  = new Set();
+        for (const n of graph.nodes) for (const t of (n.tags || [])) used.add(t);
+        for (const t of [...used].sort()) if (!order.includes(t)) order.push(t);
+        if (fs.existsSync(TAGS_PATH)) fs.copyFileSync(TAGS_PATH, TAGS_PATH + '.bak');
+        writeText(TAGS_PATH, JSON.stringify({ order }, null, 2) + '\n');
+    }
 
     // layout（座標）— 只寫 source，不部署
     const layout = {};

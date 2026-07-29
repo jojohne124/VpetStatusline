@@ -40,8 +40,9 @@ function resolvePcts(kids, srcStage, srcPower) {
         pct: k.pct != null ? k.pct : suggestPct(srcStage, srcPower, k.power),
     })).sort((x, y) => x.power - y.power);
 
-    const timeGated = a.some(k => k.time);
-    if (!timeGated) {
+    // 日夜／tag 互斥分歧不需要 win% 遞增：它們靠別的軸區分，不是「取強者」的競爭關係。
+    const altGated = a.some(k => k.time || k.tag);
+    if (!altGated) {
         for (let i = 1; i < a.length; i++) {
             if (a[i].power > a[i - 1].power && a[i].pct <= a[i - 1].pct) {
                 if (a[i].isNew)        a[i].pct     = a[i - 1].pct + 5;   // 強分支(新)升
@@ -67,8 +68,8 @@ function findDeadPaths(graph) {
     for (const from in byParent) {
         const kids = byParent[from];
         if (kids.length < 2) continue;
-        // 日夜互斥分歧不需遞增
-        if (kids.some(k => k.time)) continue;
+        // 日夜／tag 互斥分歧不需遞增（靠別的軸區分，非「取強者」競爭）
+        if (kids.some(k => k.time || k.tag)) continue;
         const a = kids
             .map(k => ({ tgt: k.to, pct: k.pct, pow: (nodeById[k.to] || {}).power ?? 0 }))
             .sort((x, y) => x.pow - y.pow);

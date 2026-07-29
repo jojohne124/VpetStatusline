@@ -8,6 +8,7 @@ const {
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
+    getCharacterStage, computeInheritedPower,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
@@ -137,13 +138,21 @@ process.stdin.on('end', () => {
             const prevShown     = st.evoShownElapsed ?? -1;
             const wouldAdvance  = Math.min(targetElapsed, prevShown + 1);
             if (wouldAdvance >= EVO_LENGTH) {
+                const prevCharId = st.characterId;
                 st.characterId = st.evoNextCharId || st.characterId;
+                // Super-Ultimate：戰力繼承「進化前的基礎 power + 訓練值」當新的 base（上限改 210）。
+                // 必須在 delete trainingBonus 之前算。非 SU 目標則清掉舊繼承值，回歸 config.power。
+                if (getCharacterStage(st.characterId) === 'Super-Ultimate') {
+                    st.inheritedPower = computeInheritedPower(st, prevCharId);
+                } else {
+                    delete st.inheritedPower;
+                }
                 st.evoStartStep = -1;
                 st.evoNextCharId = null;
                 st.evoShownElapsed = -1;
                 delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
                 delete st.trainingBonus;  // 進化歸零
-                delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
+                delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
                 clearForceCharacter(FORCE_FILE);   // 清 force.character，避免「進化→拉回→進化」無限迴圈
             }
         }

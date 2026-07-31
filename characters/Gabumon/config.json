@@ -93,6 +93,24 @@
           "minBattles": 5
         }
       ]
+    },
+    {
+      "character": "gabumon_kizuna",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 0
+        },
+        {
+          "type": "win_rate",
+          "pct": 76,
+          "minBattles": 5
+        },
+        {
+          "type": "power_at_least",
+          "power": 50
+        }
+      ]
     }
   ]
 }

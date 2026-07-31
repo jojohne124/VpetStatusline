@@ -63,5 +63,6 @@
   ],
   "directSample": true,
   "evolvesTo": [],
-  "_note": "Super-Ultimate。目前僅實裝為敵方（沒有任何角色 evolvesTo 指向它，也不在 starters）；我方進化條件待討論。power=200 為敵方戰力。"
+  "_note": "Super-Ultimate 隱藏彩蛋。我方進化條件＝Child 練到戰力 50（本階上限）且總勝率 >75%，原則上要先 vpet freeze 擋住一般進化才養得到。evolvePower=200：進化當下 base 直接給 200（不繼承，上限仍 210）。power=200 為敵方戰力。",
+  "evolvePower": 200
 }

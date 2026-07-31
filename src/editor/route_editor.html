@@ -46,6 +46,11 @@
   .edgeCard .top b { font-size: 13px; }
   .edgeCard .del { background: #5a2d2d; border: none; color: #f0b0b0; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
   .edgeCard .warn { color: #e88; font-size: 11px; margin-top: 4px; }
+  /* 特規邊（目標角色有 evolvePower）：橘紅框 + 徽章，且無關欄位鎖起來防誤改 */
+  .edgeCard.special { border-color: #d1442f; background: #241d1b; }
+  .edgeCard .sp { background: #d1442f; color: #fff; border-radius: 3px; padding: 1px 6px; font-size: 10px; margin-left: 6px; vertical-align: middle; }
+  .edgeCard .spnote { color: #e0916f; font-size: 11px; line-height: 1.5; margin-top: 5px; }
+  .edgeCard input:disabled, .edgeCard select:disabled { opacity: .35; cursor: not-allowed; }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; align-items: center; justify-content: center; }
   .modalBox { background: #23272e; border: 1px solid #4a515a; border-radius: 9px; padding: 16px; width: 460px; max-height: 78vh; overflow-y: auto; box-shadow: 0 10px 40px #000a; }
   .modalBox h3 { margin: 0 0 6px; font-size: 15px; }
@@ -473,38 +478,49 @@ function edgeCardHtml(from, e) {
   const t = byId[e.to];
   const dead = deadSet.has(from+'>'+e.to);
   const sug = suggestions[from+'>'+e.to];
-  return `<div class="edgeCard ${dead?'dead':''}">
-    <div class="top"><b>→ ${t?t.dir:e.to}</b><button class="del" onclick="removeEdge('${from}','${e.to}')">刪除</button></div>
+  // 特規邊＝目標角色有 evolvePower（進化後戰力固定、不繼承）。這類線只吃 win%/minBattles/戰力，
+  // 其餘欄位一律鎖住：花費對彩蛋線沒意義（設 0 只是因為 save 一定會 emit 一條 cost_threshold），
+  // 日夜/tag 沒用到，開放編輯只會讓人誤填而讓彩蛋觸發不了。
+  const sp   = t && t.evolvePower != null ? t.evolvePower : null;
+  const lock = sp != null ? 'disabled' : '';
+  return `<div class="edgeCard ${dead?'dead':''} ${sp!=null?'special':''}">
+    <div class="top"><b>→ ${t?t.dir:e.to}${sp!=null?'<span class="sp">特規</span>':''}</b><button class="del" onclick="removeEdge('${from}','${e.to}')">刪除</button></div>
     <div class="row">
       <div class="field"><label>win% ${e.pct==null?`(建議 ${sug??'?'})`:''}</label>
         <input type="number" placeholder="${sug??''}" value="${e.pct==null?'':e.pct}" onchange="updEdge('${from}','${e.to}','pct',this.value===''?null:+this.value)"></div>
       <div class="field"><label>花費 usd</label>
-        <input type="number" placeholder="stage 預設" value="${e.cost==null?'':e.cost}" onchange="updEdge('${from}','${e.to}','cost',this.value===''?null:+this.value)"></div>
+        <input type="number" placeholder="stage 預設" value="${e.cost==null?'':e.cost}" ${lock}
+               onchange="updEdge('${from}','${e.to}','cost',this.value===''?null:+this.value)"></div>
     </div>
     <div class="row">
       <div class="field"><label>minBattles</label>
         <input type="number" placeholder="stage 預設" value="${e.minBattles==null?'':e.minBattles}" onchange="updEdge('${from}','${e.to}','minBattles',this.value===''?null:+this.value)"></div>
       <div class="field"><label>日夜 time</label>
-        <select onchange="updEdge('${from}','${e.to}','time',this.value||null)">
+        <select ${lock} onchange="updEdge('${from}','${e.to}','time',this.value||null)">
           <option value="" ${!e.time?'selected':''}>—</option>
           <option value="day" ${e.time==='day'?'selected':''}>☀ 日</option>
           <option value="night" ${e.time==='night'?'selected':''}>🌙 夜</option>
         </select></div>
+      <div class="field"><label>戰力 ≥</label>
+        <input type="number" min="0" placeholder="不限" value="${e.power==null?'':e.power}"
+               onchange="updEdge('${from}','${e.to}','power',this.value===''?null:+this.value)"></div>
     </div>
     <div class="row">
       <div class="field"><label>tag 交戰</label>
-        <select onchange="updEdge('${from}','${e.to}','tag',this.value||null)">
+        <select ${lock} onchange="updEdge('${from}','${e.to}','tag',this.value||null)">
           <option value="" ${!e.tag?'selected':''}>—</option>
           ${allTags().map(t=>`<option value="${t}" ${e.tag===t?'selected':''}>${t}</option>`).join('')}
         </select></div>
       <div class="field"><label>次數 ≥</label>
-        <input type="number" min="1" placeholder="1" value="${e.tagCount==null?'':e.tagCount}" ${e.tag?'':'disabled'}
+        <input type="number" min="1" placeholder="1" value="${e.tagCount==null?'':e.tagCount}" ${e.tag&&sp==null?'':'disabled'}
                onchange="updEdge('${from}','${e.to}','tagCount',this.value===''?null:+this.value)"></div>
       <div class="field"><label>該 tag 勝率%</label>
-        <input type="number" min="0" max="100" placeholder="不限" value="${e.tagPct==null?'':e.tagPct}" ${e.tag?'':'disabled'}
+        <input type="number" min="0" max="100" placeholder="不限" value="${e.tagPct==null?'':e.tagPct}" ${e.tag&&sp==null?'':'disabled'}
                onchange="updEdge('${from}','${e.to}','tagPct',this.value===''?null:+this.value)"></div>
     </div>
-    ${e.tag?`<div class="hint" style="margin-top:2px">與帶「${e.tag}」的對手交戰 ≥ ${e.tagCount??1} 次${e.tagPct!=null?`，且對該 tag 勝率 ≥ ${e.tagPct}%`:''}（敗場也算交戰；進化後歸零）</div>`:''}
+    ${sp!=null?`<div class="spnote">🥚 <b>特規隱藏線</b>：進化後戰力固定 <b>${sp}</b>（不繼承原戰力）${t.stage==='Super-Ultimate'?'，上限 210；卡片階級顯示 Ultimate，vpet tree 依實際血緣長度縮短':''}。<br>只吃 <b>win% / minBattles / 戰力 ≥</b>，其餘欄位已鎖以免誤填讓彩蛋觸發不了。固定戰力要改請直接編 <code>${t.dir}/config.json</code> 的 <code>evolvePower</code>。</div>`:''}
+    ${e.tag&&sp==null?`<div class="hint" style="margin-top:2px">與帶「${e.tag}」的對手交戰 ≥ ${e.tagCount??1} 次${e.tagPct!=null?`，且對該 tag 勝率 ≥ ${e.tagPct}%`:''}（敗場也算交戰；進化後歸零）</div>`:''}
+    ${e.power!=null?`<div class="hint" style="margin-top:2px">當前戰力（base + 訓練值）需 ≥ ${e.power}；填本階 cap＝練滿才給進</div>`:''}
     ${dead?'<div class="warn">⚠ 死路：調高此邊 win% 或降低較弱分支</div>':''}
   </div>`;
 }

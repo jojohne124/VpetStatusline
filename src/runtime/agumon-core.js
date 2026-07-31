@@ -298,6 +298,18 @@ function evalCondition(cond, ns, st, input, nowSec) {
         return (w / b) * 100 >= cond.pct;
     }
 
+    if (cond.type === 'power_at_least') {
+        // 當前戰力達標。算法與狀態卡顯示的戰力完全一致（base + 訓練值，受本階 cap 約束），
+        // 所以玩家看到卡片上的數字到了，條件就到了 —— 所見即所得，不 latch。
+        //
+        // 注意 trainingBonus 的成長本身就被 cap 擋住（base + train < cap 才 +1），
+        // 所以「練到本階上限」是會自然停在剛好等於 cap 的，不會錯過門檻。
+        const id  = st.characterId;
+        const cur = Math.min(getBasePower(st, id) + (st.trainingBonus ?? 0),
+                             getTierCap(getCharacterStage(id)));
+        return cur >= (cond.power ?? Infinity);
+    }
+
     if (cond.type === 'time_of_day') {
         // 日夜分歧：06:00–18:00 為日，其餘為夜。即時 gate（不 latch，同 win_rate），
         // 用當地時間 getHours()。多視窗同一時刻判定一致 → 無 race。
@@ -481,9 +493,23 @@ function getBasePower(st, charId) {
     return getCharacterPower(charId);
 }
 
+// 特規：config.evolvePower = 「一進化成這隻，base 就固定是這個數」，不走繼承。
+// 給 Child 直跳 SU 的彩蛋線用（繼承的話 base 只有 50，跟 SU 的定位不符）。
+// 只影響我方；敵方戰力一律讀 config.power。
+function getCharacterEvolvePower(name) {
+    if (!name) return null;
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        return typeof config.evolvePower === 'number' ? config.evolvePower : null;
+    } catch(e) { return null; }
+}
+
 // 進化到 SU 時計算要繼承的戰力：舊角色「基礎 + 訓練」並受舊階上限約束（＝當下的實際戰力）。
 // 進化後 trainingBonus 照常歸零，於是新的 base 就是進化前的實力，再往 210 練。
-function computeInheritedPower(st, oldCharId) {
+// newCharId 省略時取 st.characterId（兩個 commit 點都是先寫好 characterId 才呼叫）。
+function computeInheritedPower(st, oldCharId, newCharId) {
+    const fixed = getCharacterEvolvePower(newCharId || (st && st.characterId));
+    if (fixed != null) return fixed;      // 特規角色：不繼承，直接給定值
     const oldStage = getCharacterStage(oldCharId);
     const oldCap   = getTierCap(oldStage);
     return Math.min(getBasePower(st, oldCharId) + (st.trainingBonus ?? 0), oldCap);
@@ -1565,8 +1591,10 @@ function composeTreeScene(st, opts = {}) {
     if (stageIdx < 0) slots = [{ name: cur, cells: _treeIdleCells(cur) }];
     else {
         slots = [];
-        // 已達 SU（stageIdx 4）才畫 5 格；其餘一律 4 格，維持 SU 的隱藏性
-        const slotCount = stageIdx >= 4 ? 5 : 4;
+        // 已達 SU（stageIdx 4）才多畫格子；其餘一律 4 格，維持 SU 的隱藏性。
+        // SU 的格數＝實際走過的血緣長度，而不是固定 5：彩蛋線是 Child 直跳 SU（長度 2），
+        // 硬畫 5 格會多出三個永遠不會填的 ???。正常 U→SU 鏈長度就是 5，行為不變。
+        const slotCount = stageIdx >= 4 ? Math.max(2, reached.length) : 4;
         for (let i = 0; i < slotCount; i++) {
             if (i <= stageIdx && reached[i]) slots.push({ name: reached[i], cells: _treeIdleCells(reached[i]) });
             else slots.push({ name: '???', cells: qCells });
@@ -1577,14 +1605,15 @@ function composeTreeScene(st, opts = {}) {
     const center16 = s => { s = String(s).slice(0, 16); const l = Math.floor((16 - s.length) / 2); return ' '.repeat(l) + s + ' '.repeat(16 - s.length - l); };
     const blocks = slots.map(sl => renderCells(dim ? dimCellRows(sl.cells || qCells, 0.5) : (sl.cells || qCells)));
 
-    // Ultimate → Super-Ultimate 這一段用橘紅箭頭標示強度差（其餘維持一般白箭頭）。
-    // 第 5 格只在已達 SU 時才存在，所以 i===4 必為 SU。
+    // 指向 Super-Ultimate 的那一段用橘紅箭頭標示強度差（其餘維持一般白箭頭）。
+    // 不能寫死 i===4：彩蛋線（Child 直跳 SU）的 SU 落在 i===1，所以看格子自己的階段。
     const SU_ARROW = ` ${'\x1b[38;2;255;94;43m'}→${R} `;
+    const isSUSlot = slots.map(sl => sl.name !== '???' && getCharacterStage(sl.name) === 'Super-Ultimate');
     const lines = [];
     for (let r = 0; r < 8; r++) {
         const parts = [];
         for (let i = 0; i < blocks.length; i++) {
-            if (i > 0) parts.push(r === 3 ? (i === 4 ? SU_ARROW : ' → ') : '   ');
+            if (i > 0) parts.push(r === 3 ? (isSUSlot[i] ? SU_ARROW : ' → ') : '   ');
             parts.push(blocks[i][r] || '⠀'.repeat(16));
         }
         lines.push(parts.join(''));

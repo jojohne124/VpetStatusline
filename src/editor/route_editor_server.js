@@ -75,11 +75,15 @@ function edgeParams(evo) {
     const win  = conds.find(c => c.type === 'win_rate');
     const tod  = conds.find(c => c.type === 'time_of_day');
     const tb   = conds.find(c => c.type === 'tag_battles');
+    const pw   = conds.find(c => c.type === 'power_at_least');
     return {
         pct: win ? win.pct : null,
         cost: cost ? cost.usd : null,
         minBattles: win ? win.minBattles : null,
         time: tod ? tod.period : null,
+        // power_at_least：當前戰力（base + 訓練值，受本階 cap 約束）達標才進化。
+        // 填本階 cap 就是「練滿才給進」，常用於彩蛋線。
+        power: pw && pw.power != null ? pw.power : null,
         // tag_battles：與帶指定 tag 的對手交戰 N 次（tagPct = 對該 tag 的勝率門檻，可空）
         tag: tb ? tb.tag : null,
         tagCount: tb ? tb.count : null,
@@ -119,6 +123,9 @@ function buildGraph() {
             // 否則存檔會替它們套上 tier cap / 被當該階敵人配對。
             stage: cfg.stage || 'UnStage',
             power: cfg.power ?? 10,
+            // 特規固定戰力：進化成這隻時 base 直接給這個值（不繼承）。給前端標「特規」用。
+            // 唯讀 —— 刻意不進 payload()，編輯器不寫它，只有手改 config.json 能動。
+            evolvePower: cfg.evolvePower ?? null,
             // 內部分類標籤（不對玩家顯示）。可多可無；日後給「擊倒帶 X tag 的怪 N 隻」這類條件用。
             tags: Array.isArray(cfg.tags) ? cfg.tags.slice() : [],
             starter: starterSet.has(id),
@@ -131,10 +138,13 @@ function buildGraph() {
         });
         for (const evo of (cfg.evolvesTo || [])) {
             const p = edgeParams(evo);
+            // ⚠️ 欄位白名單：新增條件型別時這裡、edgeParams、save 的 conds 三處都要補，
+            //    漏了會「讀得到但存檔後消失」（前端 payload 送回來的就沒有這個欄位）。
             edges.push({
                 from: id, to: evo.character,
                 pct: p.pct, cost: p.cost, minBattles: p.minBattles, time: p.time,
                 tag: p.tag, tagCount: p.tagCount, tagPct: p.tagPct,
+                power: p.power,
             });
         }
     }
@@ -154,15 +164,16 @@ function validate(graph) {
         const kids = byParent[from].map(e => ({
             tgt: e.to, power: (nodeById[e.to] || {}).power ?? 0,
             pct: e.pct, isNew: e.pct == null, time: e.time, tag: e.tag,
+            powerGate: e.power,   // 邊上的戰力門檻（≠ 上面的 power ＝目標角色戰力）
         }));
         const resolved = RULES.resolvePcts(kids, src.stage, src.power);
         resolved.forEach(k => { suggestions[from + '>' + k.tgt] = k.pct; });
     }
     // 死路用「已定案 pct」（前端有填就用填的，沒填用建議）
-    // ⚠️ 這裡重建邊物件 → 沒帶上的欄位 findDeadPaths 就看不到。tag 必須帶，
-    // 否則 tag 分歧會被誤判成死路（tag 是另一個軸，不需要 win% 遞增）。
+    // ⚠️ 這裡重建邊物件 → 沒帶上的欄位 findDeadPaths 就看不到。tag / powerGate 必須帶，
+    // 否則這些分歧會被誤判成死路（它們是另一個軸，不需要 win% 遞增）。
     const effEdges = graph.edges.map(e => ({
-        from: e.from, to: e.to, time: e.time, tag: e.tag,
+        from: e.from, to: e.to, time: e.time, tag: e.tag, powerGate: e.power,
         pct: e.pct != null ? e.pct : suggestions[e.from + '>' + e.to],
     }));
     const dead = RULES.findDeadPaths({ nodes: graph.nodes, edges: effEdges });
@@ -203,6 +214,8 @@ function save(graph) {
                   minBattles: e.minBattles != null ? e.minBattles : RULES.minBattlesFor(n.stage) },
             ];
             if (e.time) conds.push({ type: 'time_of_day', period: e.time });
+            // power_at_least：戰力門檻（空＝不設）
+            if (e.power != null && e.power !== '') conds.push({ type: 'power_at_least', power: e.power });
             // tag_battles：與帶指定 tag 的對手交戰達 N 次（可再加對該 tag 的勝率門檻）
             if (e.tag) {
                 const tb = { type: 'tag_battles', tag: e.tag, count: e.tagCount != null ? e.tagCount : 1 };

@@ -1620,10 +1620,18 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     const total   = (st && st.battleTotalCount) || 0;
     const wins    = (st && st.battleWinCount) || 0;
     const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
-    const pad = (s) => s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
+    // 文字欄一律「補滿或截斷」到 TEXT_W。只補不截的話，長名字（Name: BurningGodzilla
+    // ＝21 字元 > 18）會把那一列撐寬，右邊的 CutIn 就只有該列右移，看起來像圖歪掉。
+    const pad = (s) => {
+        if (visLen(s) > TEXT_W) s = [...s].slice(0, TEXT_W - 1).join('') + '…';
+        return s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
+    };
+    // 名字放不下「Name: 」標籤時就捨棄標籤（第一列本來就是名字，不會誤解），
+    // 讓 18 格全給名字 —— BurningGodzilla(15) 因此能完整顯示而不必截斷。
+    const nameLine = visLen(`Name: ${displayName}`) <= TEXT_W ? `Name: ${displayName}` : displayName;
     const textRaw = [
         '',
-        `Name: ${displayName}`,
+        nameLine,
         `Power: ${displayPower}`,
         `Stage: ${stage}`,
         `Win Rate: ${winRate}%`,

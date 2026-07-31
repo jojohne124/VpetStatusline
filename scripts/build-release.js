@@ -66,9 +66,16 @@ if (fs.existsSync(daemonDir))
 for (const f of ['install.js', 'uninstall.js'])
     if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
 
-// 根目錄雙擊啟動器（免打指令）：安裝 + 獨立介面；.command/.sh 由 isShell() 強制 LF
-for (const f of ['install.bat', 'install.command', 'vpet-standalone.bat', 'vpet-standalone.sh'])
+// 根目錄雙擊啟動器（免打指令）：安裝 + 獨立介面
+//   .vbs = Windows 免小黑窗（收進工作列 tray），.bat = 保留 console 版（看得到錯誤訊息）
+//   .command/.sh 由 isShell() 強制 LF
+for (const f of ['install.bat', 'install.command',
+                 'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
+
+// tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）
+for (const f of ['vpet-tray.ps1', 'vpet.ico'])
+    if (fs.existsSync(path.join(REPO, 'tools', f))) copyRel(path.join('tools', f));
 
 // characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）
 copyRel(path.join('characters', 'roster.json'));

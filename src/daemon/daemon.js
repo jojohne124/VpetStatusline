@@ -343,7 +343,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,monospace;margin:0;padding:20px}
   h1{font-size:15px;color:#58a6ff;margin:0 0 12px}
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
-  #petbox{background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
+  /* 深灰而非純黑：角色有黑色描邊，純黑背景會讓輪廓糊掉分不出來 */
+  #petbox{background:#2d333b;border:1px solid #444c56;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
   /* 進化樹在 SU 後是 5 格（92 字元寬 ≈ 736px），比一般表演寬得多 →
      讓 canvas 自動縮到容器內，避免被裁切或撐破版面。pixelated 保持像素感。 */
   canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}

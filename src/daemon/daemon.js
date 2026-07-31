@@ -50,6 +50,16 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 // 只隱藏按鈕是不夠的：/cmd 是公開端點，必須在伺服器端一起擋。
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 const DEV_ONLY   = new Set(['battle']);
+
+// UI 上要露出的按鈕。**只影響版面，不影響功能** —— 沒列在這裡的指令照樣能用
+// （CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
+//   摸摸 → 直接點角色就好，按鈕多餘
+//   battle → dev-only，另外被 DEV_ONLY 擋
+//   drop/sleep/wake/freeze/unfreeze → 走 CLI，平常用不到
+const UI_BUTTONS = [
+    ['card', '🪪 卡片'],
+    ['tree', '🌳 進化樹'],
+];
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
 
@@ -356,7 +366,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   .badge{display:inline-block;padding:1px 8px;border-radius:10px;background:#1f6feb;color:#fff;font-size:12px}
   /* 按鈕列暫時隱藏（試乾淨版面）。要拿回來：把 display:none 改成 flex。
      隱藏不影響功能——按鈕仍在 DOM、事件照綁，點角色摸摸也照常運作。 */
-  #controls{display:none;margin-top:10px;gap:6px;flex-wrap:wrap;max-width:480px}
+  #controls{display:flex;margin-top:10px;gap:6px;flex-wrap:wrap;max-width:480px}
   #controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
   #controls button:hover{background:#30363d;border-color:#8b949e}
   /* 提示字 3 秒後淡出；min-height 保留讓版面不會跳動 */
@@ -366,15 +376,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="wrap">
   <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
     <div id="controls">
-      <button data-cmd="pet">🤚 摸摸</button>
-      ${IS_RELEASE ? '' : '<button data-cmd="battle">⚔️ 戰鬥</button>'}
-      <button data-cmd="card">🪪 卡片</button>
-      <button data-cmd="tree">🌳 進化樹</button>
-      <button data-cmd="drop">🪂 空降</button>
-      <button data-cmd="sleep">😴 睡</button>
-      <button data-cmd="wake">☀️ 醒</button>
-      <button data-cmd="freeze">❄️ 凍結進化</button>
-      <button data-cmd="unfreeze">🔥 解凍</button>
+      ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
+                  .map(([c, label]) => `<button data-cmd="${c}">${label}</button>`).join('\n      ')}
     </div>
     <div id="cmdmsg"></div></div>
   <div class="panel">

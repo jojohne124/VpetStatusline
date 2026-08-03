@@ -1,5 +1,5 @@
 {
-  "name": "mechagodzilla",
+  "name": "Mechagodzilla",
   "stage": "Ultimate",
   "power": 170,
   "frameCount": 12,
@@ -61,5 +61,9 @@
     }
   ],
   "evolvesTo": [],
-  "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補"
+  "_placeholder": "power/stage/evolvesTo TODO — 美術已轉，數值與進化鏈待補",
+  "tags": [
+    "GodZilla",
+    "G-cell"
+  ]
 }

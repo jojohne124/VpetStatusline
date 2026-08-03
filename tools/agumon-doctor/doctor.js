@@ -23,23 +23,27 @@ function scanAgumonNodes() {
 }
 
 function scanWin() {
-    // 只對每個 node 逐一查 CommandLine（per-PID CIM 快又穩；整表查 CommandLine 在高負載會逾時）。
     // 分類在 PowerShell 端完成，只回傳 agumon 相關，node 端拿到的清單很小。
+    // ⚠️ 一定要用「單次批量」CIM 查詢（-Filter Name='node.exe' 一次抓完 CommandLine +
+    // CreationDate + ThreadCount）。舊版對每個 node 逐一 per-PID 查 CommandLine，行程一多
+    // （實測 122 個 node）就會超過逾時 → 整個掃描失敗退回 pids/ → 誤報「0 孤兒」，非常危險。
+    // 批量查一次就好，速度與行程數幾乎無關。CreationDate 由 CIM 給正確 DateTime，直接算齡。
     const psScript = [
         "$ErrorActionPreference='SilentlyContinue'",
         "$now=Get-Date",
-        "Get-Process node | ForEach-Object {",
-        "  $p=$_; $st=$null; try{$st=$p.StartTime}catch{}",
-        "  $age= if($st){[int]($now-$st).TotalSeconds}else{-1}",
-        "  $cl=(Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.Id)\").CommandLine",
+        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ForEach-Object {",
+        "  $cl=$_.CommandLine",
         "  $k= if($cl -match 'statusline-agumon-color'){'statusline'} elseif($cl -match 'agumon-hook'){'hook'} else {'other'}",
-        "  if($k -ne 'other'){ \"$($p.Id)|$age|$($p.Threads.Count)|$k\" }",
+        "  if($k -ne 'other'){",
+        "    $age=[int]($now - $_.CreationDate).TotalSeconds",
+        "    \"$($_.ProcessId)|$age|$($_.ThreadCount)|$k\"",
+        "  }",
         "}",
     ].join('\n');
     let out;
     try {
         out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript],
-            { encoding: 'utf8', timeout: 25000 });
+            { encoding: 'utf8', timeout: 30000 });
     } catch (e) { return null; }
     return out.trim().split(/\r?\n/).filter(Boolean).map(line => {
         const [pid, age, threads, kind] = line.split('|');

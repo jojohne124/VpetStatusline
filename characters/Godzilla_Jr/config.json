@@ -1,5 +1,5 @@
 {
-  "name": "godzilla_jr",
+  "name": "Godzilla_Jr",
   "stage": "Perfect",
   "power": 125,
   "frameCount": 12,
@@ -75,5 +75,9 @@
         }
       ]
     }
+  ],
+  "tags": [
+    "GodZilla",
+    "G-cell"
   ]
 }

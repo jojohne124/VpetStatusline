@@ -1,5 +1,5 @@
 {
-  "name": "burninggodzilla",
+  "name": "BurningGodzilla",
   "stage": "Super-Ultimate",
   "power": 200,
   "frameCount": 12,
@@ -61,5 +61,9 @@
     }
   ],
   "evolvesTo": [],
-  "_note": "第一隻 Super-Ultimate。目前僅實裝為「敵方」：沒有任何角色 evolvesTo 指向它，也不在 starters，故玩家取得不到。我方進化條件（特規）待定，屆時再補 evolvesTo 來源。"
+  "_note": "第一隻 Super-Ultimate。power=200 是「作為敵方」的戰力（SU 敵方規格暫定 200）；玩家進化成牠時不看這個值，改用 state.inheritedPower（進化前的 base+訓練，上限 210）。",
+  "tags": [
+    "GodZilla",
+    "G-cell"
+  ]
 }

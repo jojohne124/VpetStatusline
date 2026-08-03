@@ -1,5 +1,5 @@
 {
-  "name": "agumon",
+  "name": "Agumon",
   "stage": "Child",
   "power": 20,
   "frameCount": 12,
@@ -86,6 +86,24 @@
           "type": "win_rate",
           "pct": 50,
           "minBattles": 5
+        }
+      ]
+    },
+    {
+      "character": "agumon_kizuna",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 0
+        },
+        {
+          "type": "win_rate",
+          "pct": 76,
+          "minBattles": 5
+        },
+        {
+          "type": "power_at_least",
+          "power": 50
         }
       ]
     }

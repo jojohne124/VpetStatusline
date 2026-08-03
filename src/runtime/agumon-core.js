@@ -94,7 +94,8 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
             delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
             delete st._r5hResetAt;
             delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
-            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;  // 勝率歸零
+            delete st.inheritedPower; // SU 繼承戰力：換角色即失效，改用新角色 config.power
+            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
             st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
             delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
         }
@@ -285,6 +286,30 @@ function evalCondition(cond, ns, st, input, nowSec) {
         return (wins / total) * 100 >= (cond.pct ?? 100);
     }
 
+    if (cond.type === 'tag_battles') {
+        // 與帶有指定 tag 的對手「交戰」次數（含敗場）達標；可選 pct = 對該 tag 的勝率門檻。
+        // 注意 pct 算的是「對這個 tag 的勝率」，不是總勝率；要總勝率請另外加一條 win_rate。
+        // 與 battleTotalCount 同步：進化 / 換角色時一併歸零（＝本階段內的戰績）。
+        const s = (st.tagStats || {})[cond.tag];
+        const b = (s && s.b) || 0;
+        const w = (s && s.w) || 0;
+        if (b < (cond.count ?? 1)) return false;
+        if (cond.pct == null) return true;
+        return (w / b) * 100 >= cond.pct;
+    }
+
+    if (cond.type === 'power_at_least') {
+        // 當前戰力達標。算法與狀態卡顯示的戰力完全一致（base + 訓練值，受本階 cap 約束），
+        // 所以玩家看到卡片上的數字到了，條件就到了 —— 所見即所得，不 latch。
+        //
+        // 注意 trainingBonus 的成長本身就被 cap 擋住（base + train < cap 才 +1），
+        // 所以「練到本階上限」是會自然停在剛好等於 cap 的，不會錯過門檻。
+        const id  = st.characterId;
+        const cur = Math.min(getBasePower(st, id) + (st.trainingBonus ?? 0),
+                             getTierCap(getCharacterStage(id)));
+        return cur >= (cond.power ?? Infinity);
+    }
+
     if (cond.type === 'time_of_day') {
         // 日夜分歧：06:00–18:00 為日，其餘為夜。即時 gate（不 latch，同 win_rate），
         // 用當地時間 getHours()。多視窗同一時刻判定一致 → 無 race。
@@ -427,12 +452,67 @@ function isHighTierStarter(id) { return !!id && getHighTierStarterSet().has(id);
 const TIER_CAP = { Child: 50, Adult: 100, Perfect: 150, Ultimate: 200, 'Super-Ultimate': 210, UnStage: Infinity };
 function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 
+// 顯示用角色名：runtime 的 id 一律小寫（assets/<lc>/），大小寫真相在 config.name
+// （＝原始資料夾名，如 BurningGodzilla / BabyGodZilla / Godzilla_Jr）。
+// 舊資料 name 是小寫或缺漏時，退回「首字大寫」的舊行為，不會壞。
+function getDisplayName(name) {
+    if (!name) return '';
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        if (typeof config.name === 'string' && config.name && config.name.toLowerCase() === String(name).toLowerCase()) {
+            return config.name;   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
+        }
+    } catch(e) {}
+    return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+// 角色的內部分類標籤（config.tags）。給 tag_battles 進化條件判斷對手屬性用；不對玩家顯示。
+function getCharacterTags(name) {
+    if (!name) return [];
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        return Array.isArray(config.tags) ? config.tags : [];
+    } catch(e) { return []; }
+}
+
 // 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
 function getCharacterPower(name) {
     try {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
         return typeof config.power === 'number' ? config.power : 10;
     } catch(e) { return 10; }
+}
+
+// 我方「基礎戰力」：一般情況＝config.power；進化到 Super-Ultimate 時改用繼承值。
+// SU 規格是「戰力繼承原戰力（基礎 power + 訓練值），只是上限變 210」，而 config.power 是
+// 靜態的、且同一隻 SU 還要兼任敵人（敵方用 config 的 200）→ 繼承值只能存在 state。
+// 進化 commit 當下寫入 st.inheritedPower，換角色/reset 時與 trainingBonus 一起清掉。
+function getBasePower(st, charId) {
+    const inh = st && st.inheritedPower;
+    if (typeof inh === 'number' && inh > 0 && getCharacterStage(charId) === 'Super-Ultimate') return inh;
+    return getCharacterPower(charId);
+}
+
+// 特規：config.evolvePower = 「一進化成這隻，base 就固定是這個數」，不走繼承。
+// 給 Child 直跳 SU 的彩蛋線用（繼承的話 base 只有 50，跟 SU 的定位不符）。
+// 只影響我方；敵方戰力一律讀 config.power。
+function getCharacterEvolvePower(name) {
+    if (!name) return null;
+    try {
+        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        return typeof config.evolvePower === 'number' ? config.evolvePower : null;
+    } catch(e) { return null; }
+}
+
+// 進化到 SU 時計算要繼承的戰力：舊角色「基礎 + 訓練」並受舊階上限約束（＝當下的實際戰力）。
+// 進化後 trainingBonus 照常歸零，於是新的 base 就是進化前的實力，再往 210 練。
+// newCharId 省略時取 st.characterId（兩個 commit 點都是先寫好 characterId 才呼叫）。
+function computeInheritedPower(st, oldCharId, newCharId) {
+    const fixed = getCharacterEvolvePower(newCharId || (st && st.characterId));
+    if (fixed != null) return fixed;      // 特規角色：不繼承，直接給定值
+    const oldStage = getCharacterStage(oldCharId);
+    const oldCap   = getTierCap(oldStage);
+    return Math.min(getBasePower(st, oldCharId) + (st.trainingBonus ?? 0), oldCap);
 }
 
 // seed → 決定性 [0, 1) 隨機數（給多視窗用同一個 seed 算出同一機率擲骰）
@@ -459,7 +539,7 @@ function winProbFromStr(myStr, eStr, expBonus = WIN_EXP_BONUS) {
 }
 function computeWinProb(myId, st, enemyId) {
     const myCap = getTierCap(getCharacterStage(myId));
-    const myStr = Math.min(getCharacterPower(myId) + (st.trainingBonus ?? 0), myCap);
+    const myStr = Math.min(getBasePower(st, myId) + (st.trainingBonus ?? 0), myCap);
     const eStr  = getCharacterPower(enemyId);
     return winProbFromStr(myStr, eStr);
 }
@@ -763,7 +843,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                 // 訓練補正：每則新訊息 +1，受階段上限約束（UnStage 無上限）
                 // 多視窗 race-safe：每個視窗讀同一 disk 狀態都得到 train+1，最後一個寫的 wins，淨增 +1
                 const cap   = getTierCap(getCharacterStage(st.characterId));
-                const base  = getCharacterPower(st.characterId);
+                const base  = getBasePower(st, st.characterId);
                 const train = st.trainingBonus ?? 0;
                 if (base + train < cap) st.trainingBonus = train + 1;
             }
@@ -894,6 +974,19 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                     st.lastBattleCountedStartStep = st.battleStartStep;
                     st.battleTotalCount = (st.battleTotalCount || 0) + 1;
                     if (st.battleWin) st.battleWinCount = (st.battleWinCount || 0) + 1;
+                    // 分 tag 戰績（給 tag_battles 進化條件用）：這場對手身上每個 tag 各記一筆。
+                    // 與上面同一個去重 guard 內 → 多視窗不會重複加計。
+                    // 對手本機沒安裝（黑影 fallback）讀不到 tag → 該場不計入任何 tag。
+                    const etags = getCharacterTags(st.battleEnemy);
+                    if (etags.length) {
+                        if (!st.tagStats || typeof st.tagStats !== 'object') st.tagStats = {};
+                        for (const tg of etags) {
+                            const s = st.tagStats[tg] || { b: 0, w: 0 };
+                            s.b += 1;
+                            if (st.battleWin) s.w += 1;
+                            st.tagStats[tg] = s;
+                        }
+                    }
                 }
                 st.lastBattleEnemy = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
                 cleanupBattle();
@@ -1454,7 +1547,10 @@ function captionRow(items) {
 
 // ── 進化歷程 tree 場景（vpet tree → statusline 顯示）─────────────────
 // 1×4 橫排：走過的階段彩色 Idle_1、未到的黑影問號，中間箭頭、下方名字。dim 用於 fade。
-const _TREE_STAGE_ORDER = ['Child', 'Adult', 'Perfect', 'Ultimate'];
+// Super-Ultimate 是隱藏第 5 階：列在這裡才有第 5 格可畫（否則 indexOf 回 -1，
+// composeTreeScene 會掉進「只畫一格」的分支，整棵樹塌掉）。
+// 但第 5 格只在「已經進化到 SU」時才出現 —— 未達成前維持 4 格，不劇透隱藏階。
+const _TREE_STAGE_ORDER = ['Child', 'Adult', 'Perfect', 'Ultimate', 'Super-Ultimate'];
 const _TREE_Q_PAT = [
     '................','....DDDDDDDD....','..DDDDDDDDDDDD..','.DDDWWWWWWWDDDD.',
     '.DDWWDDDDDWWDDD.','.DDDDDDDDDWWDDD.','.DDDDDDDDWWDDDD.','.DDDDDDDWWDDDDD.',
@@ -1495,7 +1591,11 @@ function composeTreeScene(st, opts = {}) {
     if (stageIdx < 0) slots = [{ name: cur, cells: _treeIdleCells(cur) }];
     else {
         slots = [];
-        for (let i = 0; i < 4; i++) {
+        // 已達 SU（stageIdx 4）才多畫格子；其餘一律 4 格，維持 SU 的隱藏性。
+        // SU 的格數＝實際走過的血緣長度，而不是固定 5：彩蛋線是 Child 直跳 SU（長度 2），
+        // 硬畫 5 格會多出三個永遠不會填的 ???。正常 U→SU 鏈長度就是 5，行為不變。
+        const slotCount = stageIdx >= 4 ? Math.max(2, reached.length) : 4;
+        for (let i = 0; i < slotCount; i++) {
             if (i <= stageIdx && reached[i]) slots.push({ name: reached[i], cells: _treeIdleCells(reached[i]) });
             else slots.push({ name: '???', cells: qCells });
         }
@@ -1505,12 +1605,20 @@ function composeTreeScene(st, opts = {}) {
     const center16 = s => { s = String(s).slice(0, 16); const l = Math.floor((16 - s.length) / 2); return ' '.repeat(l) + s + ' '.repeat(16 - s.length - l); };
     const blocks = slots.map(sl => renderCells(dim ? dimCellRows(sl.cells || qCells, 0.5) : (sl.cells || qCells)));
 
+    // 指向 Super-Ultimate 的那一段用橘紅箭頭標示強度差（其餘維持一般白箭頭）。
+    // 不能寫死 i===4：彩蛋線（Child 直跳 SU）的 SU 落在 i===1，所以看格子自己的階段。
+    const SU_ARROW = ` ${'\x1b[38;2;255;94;43m'}→${R} `;
+    const isSUSlot = slots.map(sl => sl.name !== '???' && getCharacterStage(sl.name) === 'Super-Ultimate');
     const lines = [];
     for (let r = 0; r < 8; r++) {
-        const sep = (r === 3) ? ' → ' : '   ';
-        lines.push(blocks.map(b => b[r] || '⠀'.repeat(16)).join(sep));
+        const parts = [];
+        for (let i = 0; i < blocks.length; i++) {
+            if (i > 0) parts.push(r === 3 ? (isSUSlot[i] ? SU_ARROW : ' → ') : '   ');
+            parts.push(blocks[i][r] || '⠀'.repeat(16));
+        }
+        lines.push(parts.join(''));
     }
-    lines.push(slots.map(sl => center16(cap(sl.name))).join('   '));
+    lines.push(slots.map(sl => center16(sl.name === '???' ? '???' : getDisplayName(sl.name))).join('   '));
     return lines;
 }
 
@@ -1521,11 +1629,13 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     const TEXT_W = 18;
 
     // 顯示用 power = my power + trainingBonus，受階段 cap 約束（與戰力公式一致）
-    const myPower      = getCharacterPower(charId);
+    const myPower      = getBasePower(st, charId);            // SU 用繼承值
     const myCap        = getTierCap(getCharacterStage(charId));
     const train        = (st && st.trainingBonus) || 0;
-    const displayPower = Math.min(myPower + train, myCap);
-    const stage        = getCharacterStage(charId);
+    const displayPower = Math.min(myPower + train, myCap);     // 上限仍吃 210
+    // Super-Ultimate 是隱藏階：卡片一律顯示 Ultimate，不對玩家露出 SU 字樣（power 上限仍用 210）
+    const realStage    = getCharacterStage(charId);
+    const stage        = realStage === 'Super-Ultimate' ? 'Ultimate' : realStage;
 
     // CutIn 32×8 cell（無 CutIn 留空）
     let cutInRows = cutInArt?.frames?.[0]
@@ -1534,15 +1644,23 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     if (dim) cutInRows = dimCellRows(cutInRows);
     const cutInLines = renderCells(cutInRows);
 
-    const displayName = charId ? charId.charAt(0).toUpperCase() + charId.slice(1) : '';
+    const displayName = getDisplayName(charId);
     // 勝率：勝場 / 總戰鬥場數；0 場顯示 0%（不顯示 NaN）
     const total   = (st && st.battleTotalCount) || 0;
     const wins    = (st && st.battleWinCount) || 0;
     const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
-    const pad = (s) => s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
+    // 文字欄一律「補滿或截斷」到 TEXT_W。只補不截的話，長名字（Name: BurningGodzilla
+    // ＝21 字元 > 18）會把那一列撐寬，右邊的 CutIn 就只有該列右移，看起來像圖歪掉。
+    const pad = (s) => {
+        if (visLen(s) > TEXT_W) s = [...s].slice(0, TEXT_W - 1).join('') + '…';
+        return s + '⠀'.repeat(Math.max(0, TEXT_W - visLen(s)));
+    };
+    // 名字放不下「Name: 」標籤時就捨棄標籤（第一列本來就是名字，不會誤解），
+    // 讓 18 格全給名字 —— BurningGodzilla(15) 因此能完整顯示而不必截斷。
+    const nameLine = visLen(`Name: ${displayName}`) <= TEXT_W ? `Name: ${displayName}` : displayName;
     const textRaw = [
         '',
-        `Name: ${displayName}`,
+        nameLine,
         `Power: ${displayPower}`,
         `Stage: ${stage}`,
         `Win Rate: ${winRate}%`,
@@ -1648,6 +1766,9 @@ module.exports = {
     visLen,
     loadCharacter,
     getCharacterStage,
+    getBasePower, computeInheritedPower,
+    getDisplayName,
+    getCharacterTags,
     getCharacterPower,
     getTierCap,
     characterExists,

@@ -35,6 +35,7 @@ const {
     getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
     silhouetteArt, updateEvoHistory,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
+    getCharacterStage, computeInheritedPower,
 } = core;
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
@@ -49,6 +50,16 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 // 只隱藏按鈕是不夠的：/cmd 是公開端點，必須在伺服器端一起擋。
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 const DEV_ONLY   = new Set(['battle']);
+
+// UI 上要露出的按鈕。**只影響版面，不影響功能** —— 沒列在這裡的指令照樣能用
+// （CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
+//   摸摸 → 直接點角色就好，按鈕多餘
+//   battle → dev-only，另外被 DEV_ONLY 擋
+//   drop/sleep/wake/freeze/unfreeze → 走 CLI，平常用不到
+const UI_BUTTONS = [
+    ['card', '🪪 卡片'],
+    ['tree', '🌳 進化樹'],
+];
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
 
@@ -100,11 +111,18 @@ function renderTick(i, st, now) {
         const targetElapsed = step - st.evoStartStep;
         const wouldAdvance  = Math.min(targetElapsed, (st.evoShownElapsed ?? -1) + 1);
         if (wouldAdvance >= EVO_LENGTH) {
+            const prevCharId = st.characterId;
             st.characterId = st.evoNextCharId || st.characterId;
+            // SU：戰力繼承「進化前基礎 power + 訓練值」（須在 delete trainingBonus 之前算）
+            if (getCharacterStage(st.characterId) === 'Super-Ultimate') {
+                st.inheritedPower = computeInheritedPower(st, prevCharId);
+            } else {
+                delete st.inheritedPower;
+            }
             st.evoStartStep = -1; st.evoNextCharId = null; st.evoShownElapsed = -1;
             delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
             delete st.trainingBonus;
-            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep;
+            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;
             if (AUTHORITATIVE) clearForceCharacter(FORCE_FILE);   // 清 force.character 免無限迴圈
         }
     }
@@ -330,37 +348,36 @@ function applyCommand(action) {
 
 // ── HTTP 顯示層 ──
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<title>agumon daemon</title>
+<title>Vpet daemon</title>
 <style>
   body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,monospace;margin:0;padding:20px}
   h1{font-size:15px;color:#58a6ff;margin:0 0 12px}
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
-  #petbox{background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;image-rendering:pixelated}
-  canvas{image-rendering:pixelated;display:block;cursor:pointer}
+  /* 深灰而非純黑：角色有黑色描邊，純黑背景會讓輪廓糊掉分不出來 */
+  #petbox{background:rgb(30,30,30);border:1px solid #444c56;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
+  /* 進化樹在 SU 後是 5 格（92 字元寬 ≈ 736px），比一般表演寬得多 →
+     讓 canvas 自動縮到容器內，避免被裁切或撐破版面。pixelated 保持像素感。 */
+  canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
   .big{font-size:22px;color:#3fb950}
   .warn{color:#d29922}
   pre{margin:6px 0 0;color:#8b949e;font-size:12px;white-space:pre}
   .badge{display:inline-block;padding:1px 8px;border-radius:10px;background:#1f6feb;color:#fff;font-size:12px}
-  #controls{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;max-width:480px}
+  /* 按鈕列暫時隱藏（試乾淨版面）。要拿回來：把 display:none 改成 flex。
+     隱藏不影響功能——按鈕仍在 DOM、事件照綁，點角色摸摸也照常運作。 */
+  #controls{display:flex;margin-top:10px;gap:6px;flex-wrap:wrap;max-width:480px}
   #controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
   #controls button:hover{background:#30363d;border-color:#8b949e}
-  #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px}
+  /* 提示字 3 秒後淡出；min-height 保留讓版面不會跳動 */
+  #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px;opacity:0;transition:opacity .5s}
 </style></head><body>
-<h1>🥚 agumon daemon — 獨立時鐘 + JSONL token 源（點角色＝摸摸，連戳會生氣）</h1>
+<h1>🥚 Vpet daemon</h1>
 <div id="wrap">
   <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
     <div id="controls">
-      <button data-cmd="pet">🤚 摸摸</button>
-      ${IS_RELEASE ? '' : '<button data-cmd="battle">⚔️ 戰鬥</button>'}
-      <button data-cmd="card">🪪 卡片</button>
-      <button data-cmd="tree">🌳 進化樹</button>
-      <button data-cmd="drop">🪂 空降</button>
-      <button data-cmd="sleep">😴 睡</button>
-      <button data-cmd="wake">☀️ 醒</button>
-      <button data-cmd="freeze">❄️ 凍結進化</button>
-      <button data-cmd="unfreeze">🔥 解凍</button>
+      ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
+                  .map(([c, label]) => `<button data-cmd="${c}">${label}</button>`).join('\n      ')}
     </div>
     <div id="cmdmsg"></div></div>
   <div class="panel">
@@ -416,17 +433,39 @@ function draw(petLines){
   const maxW=Math.max(0,...rows.map(r=>r.length));
   cv.width=Math.max(1,maxW*CW); cv.height=Math.max(1,rows.length*CH);
   ctx.textBaseline='top'; ctx.font='13px ui-monospace, Consolas, monospace';
+  // 半格像素
   for(let r=0;r<rows.length;r++){
     for(let c=0;c<rows[r].length;c++){
-      const cell=rows[r][c]; if(!cell)continue;
+      const cell=rows[r][c]; if(!cell||cell.ch!==undefined)continue;
       const x=c*CW,y=r*CH;
-      if(cell.ch!==undefined){   // 真文字：畫字（卡片數值 / 名牌）
-        ctx.fillStyle=cell.col?('rgb('+cell.col.join(',')+')'):'#c9d1d9';
-        ctx.fillText(cell.ch,x,y+1);
-      }else{                     // 半格像素
-        if(cell.top){ctx.fillStyle='rgb('+cell.top.join(',')+')';ctx.fillRect(x,y,CW,CH/2);}
-        if(cell.bot){ctx.fillStyle='rgb('+cell.bot.join(',')+')';ctx.fillRect(x,y+CH/2,CW,CH/2);}
+      if(cell.top){ctx.fillStyle='rgb('+cell.top.join(',')+')';ctx.fillRect(x,y,CW,CH/2);}
+      if(cell.bot){ctx.fillStyle='rgb('+cell.bot.join(',')+')';ctx.fillRect(x,y+CH/2,CW,CH/2);}
+    }
+  }
+  // 文字（卡片欄位 / 進化樹名稱 / PvP 名牌）：整段一起畫，再水平縮放到剛好 = 該段格數×CW。
+  // 逐字 fillText 會壞掉：格距只有 8px，但 13px 字型的字寬更寬 → 互相擠壓，
+  // 且最後一個字會超出 canvas 右緣被切掉（進化樹名字被截就是這個原因）。
+  const colOf = c => c && c.col ? 'rgb('+c.col.join(',')+')' : '#c9d1d9';
+  for(let r=0;r<rows.length;r++){
+    let c=0;
+    while(c<rows[r].length){
+      const cell=rows[r][c];
+      if(!cell||cell.ch===undefined){c++;continue;}
+      const start=c, style=colOf(cell);
+      let txt='';
+      while(c<rows[r].length){
+        const k=rows[r][c];
+        if(!k||k.ch===undefined||colOf(k)!==style)break;   // 換色就斷段
+        txt+=k.ch; c++;
       }
+      const target=(c-start)*CW;
+      const w=ctx.measureText(txt).width;
+      ctx.save();
+      ctx.translate(start*CW, r*CH+1);
+      if(w>0)ctx.scale(target/w,1);        // 精準塞進格子寬度
+      ctx.fillStyle=style;
+      ctx.fillText(txt,0,0);
+      ctx.restore();
     }
   }
 }
@@ -450,14 +489,21 @@ async function poll(){
     document.getElementById('err').textContent=s.err?('⚠️ '+s.err):'';
   }catch(e){document.getElementById('err').textContent='fetch fail: '+e.message;}
 }
-async function sendCmd(action){
+// 提示字 3 秒後自動淡出（每次新訊息都重設計時，連續操作不會被前一則的倒數提前清掉）
+let cmdMsgTimer=null;
+function flashCmdMsg(text,color){
   const el=document.getElementById('cmdmsg');
+  el.textContent=text; el.style.color=color; el.style.opacity='1';
+  if(cmdMsgTimer)clearTimeout(cmdMsgTimer);
+  cmdMsgTimer=setTimeout(()=>{ el.style.opacity='0'; },3000);
+}
+async function sendCmd(action){
   try{
     const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
     const MOOD={happy:'摸摸 ♥',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
-    el.textContent = r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action));
-    el.style.color = r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149';
-  }catch(e){el.textContent='送出失敗：'+e.message;el.style.color='#f85149';}
+    flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action)),
+                r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
+  }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); }
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>sendCmd(b.dataset.cmd)));
 document.getElementById('pet').addEventListener('click',()=>sendCmd('pet'));   // 點角色＝摸摸（連戳會生氣）

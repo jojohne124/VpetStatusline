@@ -1,5 +1,5 @@
 {
-  "name": "kiryu",
+  "name": "Kiryu",
   "stage": "Perfect",
   "power": 120,
   "frameCount": 12,
@@ -75,5 +75,8 @@
         }
       ]
     }
+  ],
+  "tags": [
+    "GodZilla"
   ]
 }

@@ -1,8 +1,14 @@
 @echo off
 REM ============================================================
-REM  agumon standalone - one-click launcher (Windows)
+REM  agumon standalone - one-click launcher (Windows, console mode)
 REM  Starts the daemon (authoritative) and opens the browser UI.
 REM  Close this window to stop the daemon.
+REM
+REM  TIP: don't want this black console window?
+REM       Double-click vpet-standalone.vbs instead - it runs the
+REM       daemon hidden and puts an icon in the tray (bottom-right).
+REM       This .bat is still handy for seeing error messages.
+REM
 REM  ASCII-only on purpose (cmd mis-parses non-ASCII -> crash).
 REM ============================================================
 setlocal

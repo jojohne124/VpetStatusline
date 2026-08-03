@@ -1,5 +1,5 @@
 {
-  "name": "godzilla_1994",
+  "name": "Godzilla_1994",
   "stage": "Ultimate",
   "power": 180,
   "frameCount": 12,
@@ -60,5 +60,29 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "burninggodzilla",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 0
+        },
+        {
+          "type": "win_rate",
+          "pct": 0,
+          "minBattles": 0
+        },
+        {
+          "type": "tag_battles",
+          "tag": "Destoroyah",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "tags": [
+    "GodZilla",
+    "G-cell"
+  ]
 }

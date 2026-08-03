@@ -68,7 +68,7 @@ function main() {
 
 由 scripts/publish-release.js 自動產出。
 
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`;
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`;
     git(['commit', '-m', msg], WT);
     console.log('\n[4/5] 已 commit。');
 

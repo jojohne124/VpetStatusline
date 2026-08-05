@@ -347,6 +347,19 @@ function applyCommand(action) {
 }
 
 // ── HTTP 顯示層 ──
+// 畫布格點：每個終端字元 = 1px 寬 × 2px 高（▀ 把字元切成上/下兩個像素）。
+// 要像素方正 → CH = 2×CW，否則每個半格 8×4 會把角色壓扁。CW=8 → 半格 8×8 方正。
+// BASE_COLS/BASE_ROWS = 一般表演的尺寸，用來當舞台底盤的下限（見 #stage 的說明）：
+//   走路 52×8、卡片 52×8、戰鬥 52×8（BATTLE_SCENE_WIDTH/HEIGHT）都是這個大小，
+//   進化表演只有 16×8（比較小 → 置中），進化樹 35~92×9（比較大 → 撐寬底盤）。
+// 這些值同時給 CSS 與前端 JS 用，只有這一份，不要在下面的 <script> 裡另外寫死。
+const CW = 8, CH = 16;
+const BASE_COLS = 52, BASE_ROWS = 8;
+
+// 舞台底圖（選配）。放了就當灰白面板用，沒放就維持原本的深灰純色。
+const BG_FILE   = path.join(core.INSTALL_ROOT, 'bg.png');
+const HAS_BG    = fs.existsSync(BG_FILE);
+
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>Vpet daemon</title>
 <style>
@@ -355,8 +368,17 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
   /* 深灰而非純黑：角色有黑色描邊，純黑背景會讓輪廓糊掉分不出來 */
   #petbox{background:rgb(30,30,30);border:1px solid #444c56;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
-  /* 進化樹在 SU 後是 5 格（92 字元寬 ≈ 736px），比一般表演寬得多 →
-     讓 canvas 自動縮到容器內，避免被裁切或撐破版面。pixelated 保持像素感。 */
+  /* 舞台底線：canvas 每幀依內容大小重建，直接放進 petbox 會讓深灰底盤忽大忽小
+     （最明顯的是進化表演只有 16 字元寬，底盤瞬間縮到三分之一）。
+     用 min-width/min-height 釘住一般表演的尺寸（52×8 = 走路／卡片／戰鬥），
+     canvas 維持原生大小置中；只有進化樹（35~92×9）需要時才把底盤撐寬。
+     不用固定 width：那會讓一般表演永遠佔著五格進化樹的寬度，版面太空。 */
+  #stage{min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;max-width:100%;
+         display:flex;align-items:center;justify-content:center;
+         border-radius:4px;overflow:hidden;${HAS_BG ? `
+         /* 灰白面板（比照原版）：底圖已在 make-bg.js 壓好亮度帶，這裡不再加濾鏡。
+            要現場微調就在 devtools 加 filter，定案後回去改 make-bg.js 的 lo/hi 重烘。 */
+         background:#d2d2d2 url(/bg) center/cover;` : ''}}
   canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
@@ -374,7 +396,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 </style></head><body>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
                   .map(([c, label]) => `<button data-cmd="${c}">${label}</button>`).join('\n      ')}
@@ -399,9 +421,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   </div>
 </div>
 <script>
-// 每個終端字元 = 1px 寬 × 2px 高（▀ 把字元切成上/下兩個像素）。要像素方正 → CH = 2×CW，
-// 否則每個半格 8×4 會把角色壓扁（太扁）。CW=8 → 半格 8×8 方正。
-const CW=8, CH=16;
+const CW=${CW}, CH=${CH};   // 由伺服器端同一組常數帶入（見 daemon.js 頂部）
 function parseAnsi(line){
   // 回傳每個 cell：半格 {top,bot}、真文字 {ch,col}（卡片數值/PvP名牌）、空白 null。
   const cells=[]; let fg=null,bg=null,idx=0;
@@ -512,6 +532,19 @@ setInterval(poll,500); poll();
 </script></body></html>`;
 
 const server = http.createServer((req, res) => {
+    // 舞台底圖：使用者自己放的圖（scripts/make-bg.js 產出）。沒放就 404，CSS 退回純色。
+    // 刻意不內嵌進 js、也不隨 release 出貨 —— 底圖是個人化的東西，每個人的照片不一樣，
+    // 塞進 repo 只會讓 daemon.js 或 release 無謂變肥。
+    if (req.url === '/bg') {
+        try {
+            const buf = fs.readFileSync(BG_FILE);
+            res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+            res.end(buf);
+        } catch (e) {
+            res.writeHead(404); res.end();
+        }
+        return;
+    }
     if (req.url === '/state') {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(Object.assign({}, latest, { uptimeSec: (Date.now() - startedAt) / 1000 })));

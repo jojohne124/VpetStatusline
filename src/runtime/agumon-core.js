@@ -59,24 +59,61 @@ function sweepStaleTmps(file) {
     } catch(_) {}
 }
 // atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write
+// ⚠️ rename 只保證「別的行程不會讀到寫到一半的檔」，**不保證斷電後檔案還在**。
+// 少了 fsync 的話，NTFS 可能先把 rename 這個 metadata 落盤、資料區塊還留在 page cache，
+// 非正常關機後就生出「大小正確、內容全 NUL」的檔案 —— 實際發生過 4 次
+// （2026-05-21 / 06-02 / 08-04×2，見 state/color-state.json.corrupt.log），
+// 每次都害角色被當成新玩家重發。所以 rename 前一定要 fsync。
 function atomicWrite(file, data) {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         sweepStaleTmps(file);
-        fs.writeFileSync(tmp, data);
+        const fd = fs.openSync(tmp, 'w');
+        try {
+            fs.writeFileSync(fd, data);
+            // fsync 在少數檔案系統會丟 EINVAL；失敗也要繼續 rename，
+            // 否則反而連「有寫到」都做不到，比原本更糟。
+            try { fs.fsyncSync(fd); } catch(_) {}
+        } finally {
+            fs.closeSync(fd);
+        }
         fs.renameSync(tmp, file);
     } catch(e) {
         try { fs.unlinkSync(tmp); } catch(_) {}
     }
 }
+// last-known-good 備援：主檔壞掉時的退路。節流寫入（不是每秒都寫），理由有兩個 ——
+// 一是省 I/O，二更重要：備份必須是「早就穩穩躺在磁碟上」的舊資料才有意義，
+// 跟主檔同一瞬間寫的話，同一次斷電會把兩份一起弄壞。代價是最多回退 BAK_INTERVAL_MS 的進度。
+const BAK_INTERVAL_MS = 60000;
+
 function loadState(stateFile) {
-    try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch(e) {}
+    try {
+        const s = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        if (s && s.characterId) return s;
+    } catch(e) {}
+    // 主檔壞掉或缺角色 → 退回上一份 known-good，而不是直接當新玩家重發 starter。
+    // 讀不到就回 {}，行為與原本一致（首次啟動也是走這條）。
+    try {
+        const b = JSON.parse(fs.readFileSync(`${stateFile}.bak`, 'utf8'));
+        if (b && b.characterId) return b;
+    } catch(e) {}
     return {};
 }
+
 function saveState(stateFile, s) {
     if (!s || !s.characterId) return;   // 防護：state 被弄空時不覆蓋 disk，避免角色倒退
-    atomicWrite(stateFile, JSON.stringify(s));
+    const data = JSON.stringify(s);
+    atomicWrite(stateFile, data);
+    // 用 .bak 的 mtime 節流。statusline 是「一次 render 一個行程」，
+    // 記憶體裡的計時器留不住，只能問檔案系統。
+    try {
+        const bak = `${stateFile}.bak`;
+        let stale = true;
+        try { stale = (Date.now() - fs.statSync(bak).mtimeMs) > BAK_INTERVAL_MS; } catch(_) {}
+        if (stale) atomicWrite(bak, data);
+    } catch(e) {}
 }
 
 // ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────

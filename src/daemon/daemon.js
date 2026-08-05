@@ -484,6 +484,14 @@ function draw(petLines){
       ctx.translate(start*CW, r*CH+1);
       if(w>0)ctx.scale(target/w,1);        // 精準塞進格子寬度
       ctx.fillStyle=style;
+      // 深色 halo：卡片欄位與進化樹名字都沒帶 ANSI 顏色，走的是預設淺灰 —— 那是為
+      // 深色底盤挑的，一旦鋪了灰白底圖就等於隱形。描邊讓文字在任何亮度的底圖上都讀得到。
+      // shadowBlur 走裝置座標、不受上面的水平 scale 影響；連畫兩次是為了把 halo 加厚
+      // （單次的 alpha 太淡壓不住亮底），最後一次關掉 shadow 畫出乾淨的字面。
+      ctx.shadowColor='rgba(0,0,0,.95)'; ctx.shadowBlur=4;
+      ctx.fillText(txt,0,0);
+      ctx.fillText(txt,0,0);
+      ctx.shadowBlur=0; ctx.shadowColor='transparent';
       ctx.fillText(txt,0,0);
       ctx.restore();
     }

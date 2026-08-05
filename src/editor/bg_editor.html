@@ -1,0 +1,396 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>vpet 底圖編輯器</title>
+<style>
+  body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,"Microsoft JhengHei",monospace;margin:0;padding:18px}
+  h1{font-size:15px;color:#58a6ff;margin:0 0 4px}
+  .sub{color:#7f868e;font-size:12px;margin-bottom:14px}
+  #wrap{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
+  .card h2{font-size:13px;margin:0 0 10px;color:#e6edf3}
+  /* 預覽區用跟 daemon 一樣的深色外框，這樣看到的對比關係跟實機一致 */
+  #petbox{background:rgb(30,30,30);border:1px solid #444c56;border-radius:8px;padding:12px;display:inline-block}
+  #stage{border-radius:4px;overflow:hidden;display:block;cursor:grab;image-rendering:pixelated}
+  #stage.drag{cursor:grabbing}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .row label{width:82px;font-size:12px;color:#8b949e;flex:none}
+  .row input[type=range]{flex:1}
+  .row .val{width:52px;text-align:right;font-size:12px;color:#e6edf3}
+  select,button,input[type=file]{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:5px 9px;font:inherit;font-size:12px}
+  button{cursor:pointer}
+  button:hover{background:#30363d;border-color:#8b949e}
+  button.primary{background:#238636;border-color:#2ea043;color:#fff}
+  button.primary:hover{background:#2ea043}
+  button.danger{background:#5a2d2d;border-color:#7a3b3b;color:#f0b0b0}
+  .hint{color:#7f868e;font-size:11px;line-height:1.6;margin-top:10px}
+  .msg{font-size:12px;min-height:17px;margin-top:8px;color:#3fb950}
+  .msg.err{color:#f85149}
+  .presets button{margin:0 5px 5px 0}
+  .warn{color:#d29922;font-size:11px;line-height:1.6;margin-top:8px}
+  code{background:#21262d;padding:1px 5px;border-radius:3px}
+  #mini{width:300px;border:1px solid #30363d;border-radius:5px;display:block;cursor:crosshair;background:#21262d}
+</style></head><body>
+<h1>🖼 vpet 底圖編輯器</h1>
+<div class="sub">拖曳預覽圖可平移；滾輪縮放。存檔會寫到 <code>~/.claude/agumon-statusline/bg.png</code></div>
+
+<div id="wrap">
+  <div class="card">
+    <h2>預覽（實際尺寸）</h2>
+    <div id="petbox"><canvas id="stage" width="416" height="128"></canvas></div>
+    <div class="row" style="margin-top:12px">
+      <label>舞台寬度</label>
+      <select id="stageW">
+        <option value="416">416 — 走路／卡片／戰鬥</option>
+        <option value="584">584 — 進化樹 4 格</option>
+        <option value="736">736 — 進化樹 5 格</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>疊角色</label>
+      <select id="charSel"></select>
+    </div>
+    <div class="warn">角色只是預覽疊圖，不會被烘進底圖。<br>
+      你調的是<b>整張 736×144 的底圖</b>；daemon 會再用 cover 裁到當下舞台寬度，
+      所以選 416 時左右會被裁掉。建議<b>切到 736 決定構圖</b>，再切回 416 確認主體沒被裁掉。</div>
+  </div>
+
+  <div class="card" style="min-width:340px">
+    <h2>來源照片</h2>
+    <input type="file" id="file" accept="image/*">
+    <div id="srcInfo" class="hint">尚未選擇照片</div>
+
+    <h2 style="margin-top:18px">構圖</h2>
+    <canvas id="mini" width="300" height="200"></canvas>
+    <div class="hint" style="margin-top:2px">白框＝目前取用範圍，可直接在縮圖上拖曳</div>
+    <div class="row"><label>縮放</label><input type="range" id="zoom" min="0" max="1000" value="0"><span class="val" id="zoomV">1.00×</span></div>
+    <div class="row"><label>水平</label><input type="range" id="panX" min="-100" max="100" value="0"><span class="val" id="panXV">0</span></div>
+    <div class="row"><label>垂直</label><input type="range" id="panY" min="-100" max="100" value="0"><span class="val" id="panYV">0</span></div>
+    <div class="row"><label></label>
+      <span style="font-size:11px;color:#7f868e">滾輪＝以游標為中心縮放　拖曳＝1:1 平移　方向鍵＝微調　雙擊＝回全幅</span>
+    </div>
+
+    <h2 style="margin-top:18px">色調</h2>
+    <div class="row"><label>彩度</label><input type="range" id="sat" min="0" max="100" value="45"><span class="val" id="satV">0.45</span></div>
+    <div class="row"><label>亮度下限</label><input type="range" id="lo" min="0" max="255" value="150"><span class="val" id="loV">150</span></div>
+    <div class="row"><label>亮度上限</label><input type="range" id="hi" min="0" max="255" value="225"><span class="val" id="hiV">225</span></div>
+    <div class="row"><label>模糊</label><input type="range" id="blur" min="0" max="80" value="20"><span class="val" id="blurV">2.0</span></div>
+
+    <div class="presets" style="margin-top:12px">
+      <button data-p="lcd">原版灰白</button>
+      <button data-p="color">保留色彩</button>
+      <button data-p="dark">深色底紋</button>
+      <button data-p="reset">重設構圖</button>
+    </div>
+
+    <div style="margin-top:14px">
+      <button class="primary" id="save">💾 存成底圖</button>
+      <button class="danger" id="remove">移除底圖</button>
+    </div>
+    <div class="msg" id="msg"></div>
+
+    <div class="hint">
+      <b>亮度帶</b>是關鍵：把照片的 0–255 壓進「下限–上限」之間。帶越窄越像紋理、越寬越像照片。<br>
+      太白亮就把<b>上限</b>拉低；想更有顏色就把<b>彩度</b>拉高。<br>
+      存檔後 <b>daemon 要重開</b>才會吃到。
+    </div>
+  </div>
+</div>
+
+<script>
+// 底圖是「一張固定 736×144 的圖」，daemon 再用 CSS cover 把它裁到當下的舞台寬度。
+// 縮放/平移一律定義在這個 LOGICAL 框上，預覽必須照著「先產圖、再 cover 裁」兩段模擬，
+// 否則預覽跟成品的裁切框不同 → 調出來的縮放對不上（這正是第一版的 bug）。
+const LOGICAL_W = 736, LOGICAL_H = 144;
+const EXPORT_SCALE = 2;                  // 匯出 1472×288，高 DPI 不糊
+const LOGICAL_AR = LOGICAL_W / LOGICAL_H;
+const STAGE_H  = 128;                    // 預覽高度（一般表演）；進化樹時 daemon 會變 144
+let img = null, sprite = null;
+const off = document.createElement('canvas');   // 產「整張底圖」用的離屏畫布
+const $ = id => document.getElementById(id);
+const stage = $('stage'), ctx = stage.getContext('2d', { willReadFrequently: true });
+const mini  = $('mini');
+
+const S = { zoom:1, panX:0, panY:0, sat:0.45, lo:150, hi:225, blur:2 };
+
+function syncLabels(){
+  $('zoomV').textContent = S.zoom.toFixed(2)+'×';
+  $('panXV').textContent = Math.round(S.panX*100);
+  $('panYV').textContent = Math.round(S.panY*100);
+  $('satV').textContent  = S.sat.toFixed(2);
+  $('loV').textContent   = S.lo;
+  $('hiV').textContent   = S.hi;
+  $('blurV').textContent = S.blur.toFixed(1);
+}
+
+// 由 zoom/pan 算出「來源影像座標」的裁切框。
+// ⚠️ 比例固定用 LOGICAL_AR，不能用傳進來的 W/H —— 預覽(416寬)與匯出(1472寬)的比例不同，
+//    若各自用自己的比例算，就會得到兩個不一樣的裁切框（第一版縮放對不上的原因）。
+function cropRect(){
+  const ar = LOGICAL_AR;
+  let cw, ch;
+  if (img.width / img.height > ar) { ch = img.height; cw = ch * ar; }
+  else                             { cw = img.width;  ch = cw / ar; }
+  cw /= S.zoom; ch /= S.zoom;
+  const maxX = Math.max(0, img.width  - cw), maxY = Math.max(0, img.height - ch);
+  return { cx: maxX*(0.5+S.panX/2), cy: maxY*(0.5+S.panY/2), cw, ch, maxX, maxY };
+}
+
+// 由「想要的來源座標左上角」反推 pan（游標定錨縮放與縮圖拖曳都靠這個）
+function setCropOrigin(cx, cy){
+  const r = cropRect();
+  S.panX = r.maxX > 0 ? Math.max(-1, Math.min(1, (cx/r.maxX)*2 - 1)) : 0;
+  S.panY = r.maxY > 0 ? Math.max(-1, Math.min(1, (cy/r.maxY)*2 - 1)) : 0;
+}
+
+// 縮放滑桿走對數刻度：低倍率區間才有足夠解析度可微調（線性的話 1~2× 只佔滑桿 1/7）
+const ZOOM_MIN = 1, ZOOM_MAX = 8;
+const zoomToSlider = z => Math.round(1000 * Math.log(z/ZOOM_MIN) / Math.log(ZOOM_MAX/ZOOM_MIN));
+const sliderToZoom = v => ZOOM_MIN * Math.pow(ZOOM_MAX/ZOOM_MIN, v/1000);
+
+// 預覽的 cover 參數（螢幕座標 ↔ logical 座標換算用），每次 render 更新
+let cover = { sx:0, sy:0, sw:LOGICAL_W, sh:LOGICAL_H, W:416, H:128 };
+function stageToLogical(px, py){
+  return { lx: cover.sx + px*cover.sw/cover.W, ly: cover.sy + py*cover.sh/cover.H };
+}
+
+// 彩度 + 亮度帶。sat 用「往灰度靠攏」的線性插值（sat=0 全灰、1 原色）；
+// 亮度帶 out = a*in + b 把 0–255 壓進 lo–hi。
+function applyTone(c, W, H){
+  const d = c.getImageData(0,0,W,H), p = d.data;
+  const a = (S.hi - S.lo)/255, b = S.lo, s = S.sat;
+  for (let i=0;i<p.length;i+=4){
+    const lum = 0.2126*p[i] + 0.7152*p[i+1] + 0.0722*p[i+2];
+    p[i]   = a*(lum + (p[i]  -lum)*s) + b;
+    p[i+1] = a*(lum + (p[i+1]-lum)*s) + b;
+    p[i+2] = a*(lum + (p[i+2]-lum)*s) + b;
+  }
+  c.putImageData(d,0,0);
+}
+
+// 產「整張底圖」（不含角色）—— 存檔走的就是這條。
+// scale = 相對於 LOGICAL 的倍率；模糊半徑要跟著放大，成品才跟預覽同一個觀感。
+function renderBg(c, scale){
+  const W = Math.round(LOGICAL_W*scale), H = Math.round(LOGICAL_H*scale);
+  c.canvas.width = W; c.canvas.height = H;
+  c.clearRect(0,0,W,H);
+  if (!img){ c.fillStyle='#2b2b2b'; c.fillRect(0,0,W,H); return {W,H}; }
+  const r = cropRect();
+  c.filter = S.blur>0 ? `blur(${(S.blur*scale).toFixed(2)}px)` : 'none';
+  c.drawImage(img, r.cx, r.cy, r.cw, r.ch, 0, 0, W, H);
+  c.filter = 'none';
+  applyTone(c, W, H);
+  return {W,H};
+}
+
+// 模擬 CSS background-size:cover —— 把整張底圖裁到當下舞台大小
+function coverDraw(dst, src, W, H){
+  const sAR = src.width/src.height, dAR = W/H;
+  let sw, sh;
+  if (sAR > dAR){ sh = src.height; sw = sh*dAR; }   // 來源較寬 → 裁左右
+  else          { sw = src.width;  sh = sw/dAR; }   // 來源較高 → 裁上下
+  const sx = (src.width-sw)/2, sy = (src.height-sh)/2;
+  // 換算成 logical 座標（src 這張畫布就是 logical 尺寸），供滑鼠互動用
+  cover = { sx: sx*LOGICAL_W/src.width, sy: sy*LOGICAL_H/src.height,
+            sw: sw*LOGICAL_W/src.width, sh: sh*LOGICAL_H/src.height, W, H };
+  dst.drawImage(src, sx, sy, sw, sh, 0, 0, W, H);
+}
+
+// 縮圖導覽：整張原圖 + 目前裁切框
+function renderMini(){
+  const c = mini.getContext('2d'), MW = mini.width;
+  c.clearRect(0,0,mini.width,mini.height);
+  if (!img){ c.fillStyle='#21262d'; c.fillRect(0,0,mini.width,mini.height); return; }
+  const h = Math.round(MW * img.height/img.width);
+  if (mini.height !== h){ mini.height = h; return renderMini(); }
+  c.drawImage(img, 0, 0, MW, h);
+  c.fillStyle = 'rgba(0,0,0,.45)'; c.fillRect(0,0,MW,h);          // 未取用區壓暗
+  const r = cropRect(), k = MW/img.width;
+  const x=r.cx*k, y=r.cy*k, w=r.cw*k, ht=r.ch*k;
+  c.save(); c.beginPath(); c.rect(x,y,w,ht); c.clip();
+  c.drawImage(img, 0, 0, MW, h);                                   // 取用區還原亮度
+  c.restore();
+  c.strokeStyle='#fff'; c.lineWidth=2; c.strokeRect(x,y,w,ht);
+}
+
+// 角色疊圖（半格：每格 8×16，上下各 8px）
+function drawSprite(c, W, H){
+  if (!sprite) return;
+  const CW=8, CH=16;
+  const cells = sprite.cells;
+  const sw = cells[0].length*CW, sh = cells.length*CH;
+  const ox = Math.round(W*0.18), oy = H - sh;
+  cells.forEach((row,ry)=>row.forEach((cell,cx)=>{
+    if(!cell) return;
+    const [tr,tg,tb,br,bg,bb] = cell;
+    if(tr>=0){ c.fillStyle=`rgb(${tr},${tg},${tb})`; c.fillRect(ox+cx*CW, oy+ry*CH,      CW, CH/2); }
+    if(br>=0){ c.fillStyle=`rgb(${br},${bg},${bb})`; c.fillRect(ox+cx*CW, oy+ry*CH+CH/2, CW, CH/2); }
+  }));
+}
+
+function render(){
+  const W = +$('stageW').value;
+  // 進化樹（584/736）在 daemon 是 144 高，一般表演是 128 —— 預覽跟著切，
+  // 這樣 cover 裁掉多少上下才會跟實機一致。
+  const H = W > 416 ? 144 : STAGE_H;
+  stage.width = W; stage.height = H;
+  renderBg(off.getContext('2d', {willReadFrequently:true}), 1);   // ① 產整張底圖
+  ctx.clearRect(0,0,W,H);
+  if (img) coverDraw(ctx, off, W, H);                             // ② 照 CSS cover 裁
+  else { ctx.fillStyle='#2b2b2b'; ctx.fillRect(0,0,W,H); }
+  drawSprite(ctx, W, H);
+  renderMini();
+  syncLabels();
+}
+
+// 三個滑桿要跟著程式改動同步（游標縮放／拖曳／縮圖都會改 S）
+function syncInputs(){
+  $('zoom').value = zoomToSlider(S.zoom);
+  $('panX').value = S.panX*100;
+  $('panY').value = S.panY*100;
+}
+
+// ── 控制項 ──
+const bind = (id, key, f=v=>+v) => $(id).addEventListener('input', e => { S[key]=f(e.target.value); render(); });
+bind('zoom','zoom', sliderToZoom);
+bind('panX','panX', v=>v/100);
+bind('panY','panY', v=>v/100);
+bind('sat','sat',   v=>v/100);
+bind('lo','lo');
+bind('hi','hi');
+bind('blur','blur', v=>v/10);
+$('stageW').addEventListener('change', render);
+
+const PRESETS = {
+  lcd:   { sat:0.08, lo:205, hi:235, blur:2 },
+  color: { sat:0.55, lo:120, hi:210, blur:1.5 },
+  dark:  { sat:0.35, lo:18,  hi:52,  blur:2 },
+};
+document.querySelectorAll('.presets button').forEach(b => b.addEventListener('click', () => {
+  const p = b.dataset.p;
+  if (p === 'reset') Object.assign(S, { zoom:1, panX:0, panY:0 });
+  else Object.assign(S, PRESETS[p]);
+  syncInputs();
+  $('sat').value=S.sat*100; $('lo').value=S.lo; $('hi').value=S.hi; $('blur').value=S.blur*10;
+  render();
+}));
+
+// 螢幕像素 → canvas 像素（CSS 可能縮放過畫布）
+function toCanvas(el, e){
+  const b = el.getBoundingClientRect();
+  return { x:(e.clientX-b.left)*(el.width/b.width), y:(e.clientY-b.top)*(el.height/b.height) };
+}
+
+// ── 預覽區：1:1 拖曳平移 ──
+// 舊版是「拖 200px = 走完整個 pan 範圍」，跟縮放無關 → 高倍率時飛出去、低倍率時動不了。
+// 改成把螢幕位移換算成來源影像位移，圖就會確實黏在游標上。
+let dragging=false, lastX=0, lastY=0;
+stage.addEventListener('mousedown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; stage.classList.add('drag'); });
+addEventListener('mouseup', ()=>{ dragging=false; stage.classList.remove('drag'); });
+addEventListener('mousemove', e=>{
+  if(!dragging||!img) return;
+  const r = cropRect();
+  const kx = (cover.sw/cover.W) * (r.cw/LOGICAL_W) * (stage.width/stage.getBoundingClientRect().width);
+  const ky = (cover.sh/cover.H) * (r.ch/LOGICAL_H) * (stage.height/stage.getBoundingClientRect().height);
+  setCropOrigin(r.cx - (e.clientX-lastX)*kx, r.cy - (e.clientY-lastY)*ky);
+  lastX=e.clientX; lastY=e.clientY;
+  syncInputs(); render();
+});
+
+// ── 預覽區：以游標為中心縮放 ──
+// 記住游標下的「來源座標」，改完 zoom 再反推 pan 讓同一點回到同一位置。
+stage.addEventListener('wheel', e=>{
+  e.preventDefault(); if(!img) return;
+  const p = toCanvas(stage, e);
+  const { lx, ly } = stageToLogical(p.x, p.y);
+  const fx = lx/LOGICAL_W, fy = ly/LOGICAL_H;
+  const b = cropRect();
+  const srcX = b.cx + fx*b.cw, srcY = b.cy + fy*b.ch;
+  S.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, S.zoom * (e.deltaY<0 ? 1.1 : 1/1.1)));
+  const a = cropRect();                      // 新 zoom 下的裁切框大小
+  setCropOrigin(srcX - fx*a.cw, srcY - fy*a.ch);
+  syncInputs(); render();
+}, {passive:false});
+
+stage.addEventListener('dblclick', ()=>{ S.zoom=1; S.panX=0; S.panY=0; syncInputs(); render(); });
+
+// ── 縮圖導覽：拖曳直接搬裁切框 ──
+let miniDrag=false;
+function miniMove(e){
+  if(!img) return;
+  const p = toCanvas(mini, e), k = img.width/mini.width;
+  const r = cropRect();
+  setCropOrigin(p.x*k - r.cw/2, p.y*k - r.ch/2);   // 點擊處＝裁切框中心
+  syncInputs(); render();
+}
+mini.addEventListener('mousedown', e=>{ miniDrag=true; miniMove(e); });
+addEventListener('mouseup', ()=>{ miniDrag=false; });
+addEventListener('mousemove', e=>{ if(miniDrag) miniMove(e); });
+
+// ── 方向鍵微調（Shift = 10 倍步進）──
+addEventListener('keydown', e=>{
+  if(!img) return;
+  if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+  if(/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  e.preventDefault();
+  const r = cropRect(), step = (e.shiftKey?10:1) * (r.cw/LOGICAL_W);   // 1 logical px
+  setCropOrigin(
+    r.cx + (e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0),
+    r.cy + (e.key==='ArrowUp'  ?-step:e.key==='ArrowDown' ?step:0));
+  syncInputs(); render();
+});
+
+// 檔案載入（瀏覽器本機讀取，不經過伺服器）
+$('file').addEventListener('change', e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const i = new Image();
+    i.onload = () => {
+      img = i;
+      $('srcInfo').textContent = `${f.name} — ${i.width}×${i.height}（${(i.width/i.height).toFixed(2)}:1）`;
+      render();
+    };
+    i.src = r.result;
+  };
+  r.readAsDataURL(f);
+});
+
+function msg(t, err){ const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':''); }
+
+$('save').addEventListener('click', async ()=>{
+  if(!img) return msg('還沒選照片', true);
+  // 匯出 = 同一個裁切框、同一組色調，只是解析度 ×2（模糊半徑跟著 ×2）
+  const c = document.createElement('canvas');
+  renderBg(c.getContext('2d', {willReadFrequently:true}), EXPORT_SCALE);
+  msg('存檔中…');
+  try{
+    const r = await fetch('/save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ png: c.toDataURL('image/png') })});
+    const j = await r.json();
+    msg(j.ok ? `✅ 已存檔 ${(j.size/1024).toFixed(0)} KB — 重開 daemon 生效` : '失敗：'+j.error, !j.ok);
+  }catch(e){ msg('失敗：'+e.message, true); }
+});
+
+$('remove').addEventListener('click', async ()=>{
+  await fetch('/remove', {method:'POST'});
+  msg('已移除底圖 — 重開 daemon 後回到純色');
+});
+
+// 角色清單
+(async ()=>{
+  try{
+    const { chars } = await (await fetch('/chars')).json();
+    const sel = $('charSel');
+    sel.innerHTML = chars.map(c=>`<option value="${c}">${c}</option>`).join('');
+    sel.value = chars.includes('agumon') ? 'agumon' : chars[0];
+    const load = async () => {
+      try{ sprite = await (await fetch('/sprite?char='+encodeURIComponent(sel.value))).json(); }
+      catch(e){ sprite = null; }
+      render();
+    };
+    sel.addEventListener('change', load);
+    await load();
+  }catch(e){ render(); }
+})();
+
+render();
+</script></body></html>

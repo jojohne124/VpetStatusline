@@ -1707,7 +1707,9 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     const textLines = textRaw.map(s => wrap(pad(s)));
 
     // text(18) + gap(2) + cutin(32) = 52
-    return textLines.map((t, i) => t + '⠀⠀' + (cutInLines[i] || ''));
+    // 左邊留 1 格再開始寫字（原本貼齊最左緣，看起來太擠）。
+    // 從文字與 CutIn 之間的 2 格間距挪一格過來，卡片總寬維持 52 不變。
+    return textLines.map((t, i) => '⠀' + t + '⠀' + (cutInLines[i] || ''));
 }
 
 // ── 進化場景合成（單角色 + DNA overlay）─────────────────────────

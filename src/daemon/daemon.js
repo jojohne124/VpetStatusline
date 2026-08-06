@@ -68,11 +68,17 @@ function tryLoadArt(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8'
 // 走路位移：statusline 靠 aguCol+pos 把角色擺到不同欄；daemon 沒有狀態列，改把角色畫到一個
 // 固定寬「舞台」上、左邊墊 pos 個空欄，角色就會左右踱步（pos 0..MAX_POS）。舞台寬固定 →
 // canvas 每幀同寬、不抖動。
+// 舞台寬度必須是「固定值」，不能算成 MAX_POS + spriteW。
+// 睡覺場景經 composeSleepScene 後是 24 欄（角色 16 + Zzz 8），算出來會變 60 欄 = 480px，
+// 超過 #stage 的 416px → canvas 的 max-width:100% 把它縮到 86.7%，而 height:auto 讓高度
+// 跟著縮成 111px，置中後角色就浮起來約 2 dot（地平線對不上，看起來像飄在半空）。
+// 固定 BASE_COLS 後所有 single 場景同寬同高，地平線永遠貼齊 padding 的那 1 dot。
 function padWalkStage(rows, pos) {
     if (!rows || !rows.length) return rows;
     const spriteW = rows[0].length;
-    const stageW  = MAX_POS + spriteW;   // pos 最大 MAX_POS 時角色右緣 = stageW，剛好放得下
-    const off     = Math.max(0, Math.min(pos | 0, MAX_POS));
+    const stageW  = Math.max(BASE_COLS, spriteW);
+    // 較寬的場景（睡覺）可移動範圍相應變小，避免右緣溢出舞台
+    const off     = Math.max(0, Math.min(pos | 0, stageW - spriteW));
     return rows.map(row => {
         const out = new Array(stageW).fill(null);
         for (let c = 0; c < row.length; c++) out[off + c] = row[c];
@@ -213,7 +219,9 @@ function renderTick(i, st, now) {
     }
 
     saveState(STATE_FILE, st);
-    return { kind: result.kind, petLines };
+    // cutIn：只有真正在演 cut-in 的那幾拍才是 true（decideBattleFrame 的 elapsed 0~4），
+    // 打鬥過程的拍數不算。前端據此決定要不要塗上下黑邊 —— 用 kind 判斷會整場戰鬥都塗到。
+    return { kind: result.kind, petLines, cutIn: !!(result.meCutIn || result.enemyCutIn) };
 }
 
 // ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
@@ -265,6 +273,7 @@ function doTick() {
             tick: ++tick,
             at: now,
             kind: out.kind,
+            cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
             usage: {
                 activeSession: usage.activeSession,
@@ -355,6 +364,7 @@ function applyCommand(action) {
 // 這些值同時給 CSS 與前端 JS 用，只有這一份，不要在下面的 <script> 裡另外寫死。
 const CW = 8, CH = 16;
 const BASE_COLS = 52, BASE_ROWS = 8;
+const PAD_DOTS  = 1;    // 舞台上下各留幾個 dot（1 dot = 半格 = CH/2 px）
 
 // 舞台底圖（選配）。放了就當灰白面板用，沒放就維持原本的深灰純色。
 const BG_FILE   = path.join(core.INSTALL_ROOT, 'bg.png');
@@ -374,12 +384,22 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      canvas 維持原生大小置中；只有進化樹（35~92×9）需要時才把底盤撐寬。
      不用固定 width：那會讓一般表演永遠佔著五格進化樹的寬度，版面太空。 */
   #stage{min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;max-width:100%;
+         /* 上下各留 ${PAD_DOTS} dot（1 dot = 半格 = ${CH / 2}px）。用 padding 而不是墊高 min-height，
+            這樣進化樹那種比較高的場景也一樣有留白，不會頂到邊。底圖會鋪滿含 padding 的範圍。 */
+         padding:${PAD_DOTS * (CH / 2)}px 0;
+         position:relative;
          display:flex;align-items:center;justify-content:center;
          border-radius:4px;overflow:hidden;${HAS_BG ? `
          /* 灰白面板（比照原版）：底圖已在 make-bg.js 壓好亮度帶，這裡不再加濾鏡。
             要現場微調就在 devtools 加 filter，定案後回去改 make-bg.js 的 lo/hi 重烘。 */
          background:#d2d2d2 url(/bg) center/cover;` : ''}}
   canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
+  /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
+     仍然看得到底圖，只有邊緣被收乾淨。用偽元素而不是換整片 background，
+     否則整個舞台會變黑、底圖在戰鬥期間整段消失。 */
+  #stage.letterbox::before,#stage.letterbox::after{
+    content:'';position:absolute;left:0;right:0;height:${PAD_DOTS * (CH / 2)}px;background:#000;z-index:1}
+  #stage.letterbox::before{top:0} #stage.letterbox::after{bottom:0}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
   .big{font-size:22px;color:#3fb950}
@@ -504,6 +524,10 @@ async function poll(){
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
+    // cut-in 想吃滿整個畫面，上下那 1 dot 留白會透出底圖，看起來像沒對齊 → 塗黑當黑邊。
+    // 戰鬥只在真正演 cut-in 的那幾拍套（打鬥過程不套，那時留白透出底圖是正常的）；
+    // 卡片右半整片都是 CutIn 圖，所以整段顯示期間都套。
+    document.getElementById('stage').classList.toggle('letterbox', !!s.cutIn || s.kind==='card');
     document.getElementById('char').textContent=s.character;
     document.getElementById('uptime').textContent=Math.round(s.uptimeSec)+'s';
     draw(s.petLines);

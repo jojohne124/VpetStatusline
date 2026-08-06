@@ -68,11 +68,17 @@ function tryLoadArt(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8'
 // 走路位移：statusline 靠 aguCol+pos 把角色擺到不同欄；daemon 沒有狀態列，改把角色畫到一個
 // 固定寬「舞台」上、左邊墊 pos 個空欄，角色就會左右踱步（pos 0..MAX_POS）。舞台寬固定 →
 // canvas 每幀同寬、不抖動。
+// 舞台寬度必須是「固定值」，不能算成 MAX_POS + spriteW。
+// 睡覺場景經 composeSleepScene 後是 24 欄（角色 16 + Zzz 8），算出來會變 60 欄 = 480px，
+// 超過 #stage 的 416px → canvas 的 max-width:100% 把它縮到 86.7%，而 height:auto 讓高度
+// 跟著縮成 111px，置中後角色就浮起來約 2 dot（地平線對不上，看起來像飄在半空）。
+// 固定 BASE_COLS 後所有 single 場景同寬同高，地平線永遠貼齊 padding 的那 1 dot。
 function padWalkStage(rows, pos) {
     if (!rows || !rows.length) return rows;
     const spriteW = rows[0].length;
-    const stageW  = MAX_POS + spriteW;   // pos 最大 MAX_POS 時角色右緣 = stageW，剛好放得下
-    const off     = Math.max(0, Math.min(pos | 0, MAX_POS));
+    const stageW  = Math.max(BASE_COLS, spriteW);
+    // 較寬的場景（睡覺）可移動範圍相應變小，避免右緣溢出舞台
+    const off     = Math.max(0, Math.min(pos | 0, stageW - spriteW));
     return rows.map(row => {
         const out = new Array(stageW).fill(null);
         for (let c = 0; c < row.length; c++) out[off + c] = row[c];
@@ -213,7 +219,9 @@ function renderTick(i, st, now) {
     }
 
     saveState(STATE_FILE, st);
-    return { kind: result.kind, petLines };
+    // cutIn：只有真正在演 cut-in 的那幾拍才是 true（decideBattleFrame 的 elapsed 0~4），
+    // 打鬥過程的拍數不算。前端據此決定要不要塗上下黑邊 —— 用 kind 判斷會整場戰鬥都塗到。
+    return { kind: result.kind, petLines, cutIn: !!(result.meCutIn || result.enemyCutIn) };
 }
 
 // ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
@@ -265,6 +273,7 @@ function doTick() {
             tick: ++tick,
             at: now,
             kind: out.kind,
+            cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
             usage: {
                 activeSession: usage.activeSession,
@@ -347,6 +356,20 @@ function applyCommand(action) {
 }
 
 // ── HTTP 顯示層 ──
+// 畫布格點：每個終端字元 = 1px 寬 × 2px 高（▀ 把字元切成上/下兩個像素）。
+// 要像素方正 → CH = 2×CW，否則每個半格 8×4 會把角色壓扁。CW=8 → 半格 8×8 方正。
+// BASE_COLS/BASE_ROWS = 一般表演的尺寸，用來當舞台底盤的下限（見 #stage 的說明）：
+//   走路 52×8、卡片 52×8、戰鬥 52×8（BATTLE_SCENE_WIDTH/HEIGHT）都是這個大小，
+//   進化表演只有 16×8（比較小 → 置中），進化樹 35~92×9（比較大 → 撐寬底盤）。
+// 這些值同時給 CSS 與前端 JS 用，只有這一份，不要在下面的 <script> 裡另外寫死。
+const CW = 8, CH = 16;
+const BASE_COLS = 52, BASE_ROWS = 8;
+const PAD_DOTS  = 1;    // 舞台上下各留幾個 dot（1 dot = 半格 = CH/2 px）
+
+// 舞台底圖（選配）。放了就當灰白面板用，沒放就維持原本的深灰純色。
+const BG_FILE   = path.join(core.INSTALL_ROOT, 'bg.png');
+const HAS_BG    = fs.existsSync(BG_FILE);
+
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>Vpet daemon</title>
 <style>
@@ -355,9 +378,28 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
   /* 深灰而非純黑：角色有黑色描邊，純黑背景會讓輪廓糊掉分不出來 */
   #petbox{background:rgb(30,30,30);border:1px solid #444c56;border-radius:8px;padding:12px;image-rendering:pixelated;max-width:100%;overflow:hidden}
-  /* 進化樹在 SU 後是 5 格（92 字元寬 ≈ 736px），比一般表演寬得多 →
-     讓 canvas 自動縮到容器內，避免被裁切或撐破版面。pixelated 保持像素感。 */
+  /* 舞台底線：canvas 每幀依內容大小重建，直接放進 petbox 會讓深灰底盤忽大忽小
+     （最明顯的是進化表演只有 16 字元寬，底盤瞬間縮到三分之一）。
+     用 min-width/min-height 釘住一般表演的尺寸（52×8 = 走路／卡片／戰鬥），
+     canvas 維持原生大小置中；只有進化樹（35~92×9）需要時才把底盤撐寬。
+     不用固定 width：那會讓一般表演永遠佔著五格進化樹的寬度，版面太空。 */
+  #stage{min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;max-width:100%;
+         /* 上下各留 ${PAD_DOTS} dot（1 dot = 半格 = ${CH / 2}px）。用 padding 而不是墊高 min-height，
+            這樣進化樹那種比較高的場景也一樣有留白，不會頂到邊。底圖會鋪滿含 padding 的範圍。 */
+         padding:${PAD_DOTS * (CH / 2)}px 0;
+         position:relative;
+         display:flex;align-items:center;justify-content:center;
+         border-radius:4px;overflow:hidden;${HAS_BG ? `
+         /* 灰白面板（比照原版）：底圖已在 make-bg.js 壓好亮度帶，這裡不再加濾鏡。
+            要現場微調就在 devtools 加 filter，定案後回去改 make-bg.js 的 lo/hi 重烘。 */
+         background:#d2d2d2 url(/bg) center/cover;` : ''}}
   canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
+  /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
+     仍然看得到底圖，只有邊緣被收乾淨。用偽元素而不是換整片 background，
+     否則整個舞台會變黑、底圖在戰鬥期間整段消失。 */
+  #stage.letterbox::before,#stage.letterbox::after{
+    content:'';position:absolute;left:0;right:0;height:${PAD_DOTS * (CH / 2)}px;background:#000;z-index:1}
+  #stage.letterbox::before{top:0} #stage.letterbox::after{bottom:0}
   .panel{font-size:13px;line-height:1.7}
   .k{color:#8b949e} .v{color:#e6edf3;font-weight:600}
   .big{font-size:22px;color:#3fb950}
@@ -374,7 +416,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 </style></head><body>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><canvas id="pet" width="480" height="200"></canvas>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
                   .map(([c, label]) => `<button data-cmd="${c}">${label}</button>`).join('\n      ')}
@@ -399,9 +441,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   </div>
 </div>
 <script>
-// 每個終端字元 = 1px 寬 × 2px 高（▀ 把字元切成上/下兩個像素）。要像素方正 → CH = 2×CW，
-// 否則每個半格 8×4 會把角色壓扁（太扁）。CW=8 → 半格 8×8 方正。
-const CW=8, CH=16;
+const CW=${CW}, CH=${CH};   // 由伺服器端同一組常數帶入（見 daemon.js 頂部）
 function parseAnsi(line){
   // 回傳每個 cell：半格 {top,bot}、真文字 {ch,col}（卡片數值/PvP名牌）、空白 null。
   const cells=[]; let fg=null,bg=null,idx=0;
@@ -464,6 +504,14 @@ function draw(petLines){
       ctx.translate(start*CW, r*CH+1);
       if(w>0)ctx.scale(target/w,1);        // 精準塞進格子寬度
       ctx.fillStyle=style;
+      // 深色 halo：卡片欄位與進化樹名字都沒帶 ANSI 顏色，走的是預設淺灰 —— 那是為
+      // 深色底盤挑的，一旦鋪了灰白底圖就等於隱形。描邊讓文字在任何亮度的底圖上都讀得到。
+      // shadowBlur 走裝置座標、不受上面的水平 scale 影響；連畫兩次是為了把 halo 加厚
+      // （單次的 alpha 太淡壓不住亮底），最後一次關掉 shadow 畫出乾淨的字面。
+      ctx.shadowColor='rgba(0,0,0,.95)'; ctx.shadowBlur=4;
+      ctx.fillText(txt,0,0);
+      ctx.fillText(txt,0,0);
+      ctx.shadowBlur=0; ctx.shadowColor='transparent';
       ctx.fillText(txt,0,0);
       ctx.restore();
     }
@@ -476,6 +524,10 @@ async function poll(){
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
+    // cut-in 想吃滿整個畫面，上下那 1 dot 留白會透出底圖，看起來像沒對齊 → 塗黑當黑邊。
+    // 戰鬥只在真正演 cut-in 的那幾拍套（打鬥過程不套，那時留白透出底圖是正常的）；
+    // 卡片右半整片都是 CutIn 圖，所以整段顯示期間都套。
+    document.getElementById('stage').classList.toggle('letterbox', !!s.cutIn || s.kind==='card');
     document.getElementById('char').textContent=s.character;
     document.getElementById('uptime').textContent=Math.round(s.uptimeSec)+'s';
     draw(s.petLines);
@@ -512,6 +564,19 @@ setInterval(poll,500); poll();
 </script></body></html>`;
 
 const server = http.createServer((req, res) => {
+    // 舞台底圖：使用者自己放的圖（scripts/make-bg.js 產出）。沒放就 404，CSS 退回純色。
+    // 刻意不內嵌進 js、也不隨 release 出貨 —— 底圖是個人化的東西，每個人的照片不一樣，
+    // 塞進 repo 只會讓 daemon.js 或 release 無謂變肥。
+    if (req.url === '/bg') {
+        try {
+            const buf = fs.readFileSync(BG_FILE);
+            res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+            res.end(buf);
+        } catch (e) {
+            res.writeHead(404); res.end();
+        }
+        return;
+    }
     if (req.url === '/state') {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(Object.assign({}, latest, { uptimeSec: (Date.now() - startedAt) / 1000 })));

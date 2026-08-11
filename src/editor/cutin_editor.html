@@ -1,0 +1,190 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>vpet CutIn 裁切編輯器</title>
+<style>
+  body{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Consolas,"Microsoft JhengHei",monospace;margin:0;padding:18px}
+  h1{font-size:15px;color:#58a6ff;margin:0 0 4px}
+  .sub{color:#7f868e;font-size:12px;margin-bottom:14px}
+  #wrap{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
+  .card h2{font-size:13px;margin:0 0 10px;color:#e6edf3}
+  /* overflow:hidden 是必要的：#frame 的壓黑用 box-shadow 9999px 往外擴，
+     沒有這層裁切就會蓋到整個頁面。 */
+  #srcWrap{position:relative;display:inline-block;line-height:0;overflow:hidden}
+  #src{image-rendering:pixelated;display:block;cursor:crosshair;background:
+       repeating-conic-gradient(#2a2f37 0% 25%,#20242b 0% 50%) 50%/16px 16px}
+  /* 裁切框：外面壓暗、框內保持原亮度，框本身用雙色描邊在任何底色上都看得見 */
+  #frame{position:absolute;border:1px solid #fff;outline:1px solid #000;cursor:move;box-shadow:0 0 0 9999px rgba(0,0,0,.55)}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .row label{width:76px;font-size:12px;color:#8b949e;flex:none}
+  .row input[type=range]{flex:1}
+  .row .val{width:56px;text-align:right;font-size:12px;color:#e6edf3}
+  select,button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:5px 9px;font:inherit;font-size:12px}
+  button{cursor:pointer} button:hover{background:#30363d;border-color:#8b949e}
+  button.primary{background:#238636;border-color:#2ea043;color:#fff} button.primary:hover{background:#2ea043}
+  .hint{color:#7f868e;font-size:11px;line-height:1.6;margin-top:10px}
+  .msg{font-size:12px;min-height:17px;margin-top:8px;color:#3fb950} .msg.err{color:#f85149}
+  .warn{color:#d29922;font-size:11px;line-height:1.6;margin-top:8px}
+  /* 預覽用跟遊戲一致的深灰底盤 */
+  .stage{background:rgb(30,30,30);border:1px solid #444c56;border-radius:6px;padding:10px;display:inline-block;line-height:0}
+  .stage canvas{image-rendering:pixelated;display:block}
+  code{background:#21262d;padding:1px 5px;border-radius:3px}
+</style></head><body>
+<h1>✂️ vpet CutIn 裁切編輯器</h1>
+<div class="sub">從 <code>big.png</code> 拉一個 32×16 的框當 CutIn。拖曳移動、方向鍵微調（Shift ×5）。</div>
+
+<div id="wrap">
+  <div class="card">
+    <h2>來源（拖曳白框）</h2>
+    <div id="srcWrap"><img id="src" alt=""><div id="frame"></div></div>
+    <div class="row" style="margin-top:12px">
+      <label>角色</label><select id="charSel"></select>
+    </div>
+    <div class="row"><label>顯示倍率</label><input type="range" id="zoom" min="4" max="16" value="9"><span class="val" id="zoomV">9×</span></div>
+    <div class="row"><label>框大小</label><select id="mult"></select></div>
+    <div class="warn" id="multWarn"></div>
+  </div>
+
+  <div class="card">
+    <h2>成品預覽（遊戲實際大小）</h2>
+    <div class="stage"><canvas id="prev" width="256" height="128"></canvas></div>
+    <div class="hint">遊戲裡每個邏輯像素 = 8×8 螢幕像素，所以這就是實際觀感。</div>
+
+    <h2 style="margin-top:16px">我方（左右翻轉）</h2>
+    <div class="stage"><canvas id="prevFlip" width="256" height="128"></canvas></div>
+    <div class="warn">原圖固定面左：敵方原樣、我方自動翻轉。<br>
+      兩邊都要看起來合理，尤其眼睛不能被切掉。</div>
+
+    <div class="row" style="margin-top:14px">
+      <label>座標</label><span class="val" id="posV" style="width:auto">x=0 y=0</span>
+    </div>
+    <div style="margin-top:8px">
+      <button class="primary" id="save">💾 存成 CutIn 並轉檔</button>
+    </div>
+    <div class="msg" id="msg"></div>
+    <div class="hint">存檔會寫 <code>CutIn.png</code>（96×48，舊檔自動備份成 .bak）、
+      跑 <code>char-cli cutin</code> 產生 <code>cutin-art.json</code>，再部署到 installed。</div>
+  </div>
+</div>
+
+<script>
+const TW=32, TH=16;               // CutIn 邏輯網格
+const PX=8;                       // 遊戲裡 1 邏輯像素 = 8×8 螢幕像素
+const $=id=>document.getElementById(id);
+const img=$('src'), frame=$('frame'), prev=$('prev'), prevFlip=$('prevFlip');
+let S={x:0,y:0,zoom:9,mult:1}, natW=0, natH=0, off=null;
+
+function clamp(){
+  const w=TW*S.mult, h=TH*S.mult;
+  S.x=Math.max(0,Math.min(S.x, natW-w));
+  S.y=Math.max(0,Math.min(S.y, natH-h));
+}
+function layout(){
+  img.style.width=(natW*S.zoom)+'px'; img.style.height=(natH*S.zoom)+'px';
+  frame.style.left=(S.x*S.zoom)+'px'; frame.style.top=(S.y*S.zoom)+'px';
+  frame.style.width=(TW*S.mult*S.zoom)+'px'; frame.style.height=(TH*S.mult*S.zoom)+'px';
+  $('zoomV').textContent=S.zoom+'×';
+  $('posV').textContent='x='+S.x+' y='+S.y+'  （框 '+(TW*S.mult)+'×'+(TH*S.mult)+'）';
+}
+// 預覽 = 把裁切區以 nearest 放大到遊戲尺寸。mult>1 時先降到 32×16 再放大，
+// 跟 char-cli 的取樣一致（整數倍才不會糊，所以 mult 只提供能整除的值）。
+function renderPreview(){
+  if(!off) return;
+  for(const [cv,flip] of [[prev,false],[prevFlip,true]]){
+    const c=cv.getContext('2d');
+    c.imageSmoothingEnabled=false;
+    c.clearRect(0,0,cv.width,cv.height);
+    c.save();
+    if(flip){ c.translate(cv.width,0); c.scale(-1,1); }
+    c.drawImage(off, S.x,S.y, TW*S.mult,TH*S.mult, 0,0, TW*PX,TH*PX);
+    c.restore();
+  }
+}
+function render(){ clamp(); layout(); renderPreview(); }
+
+// 可用的框倍率＝能被 32×16 整除、且塞得進原圖的整數倍
+function buildMults(){
+  const sel=$('mult'); const opts=[];
+  for(let k=1;k<=8;k++) if(TW*k<=natW && TH*k<=natH) opts.push(k);
+  if(!opts.length) opts.push(1);
+  sel.innerHTML=opts.map(k=>`<option value="${k}">${k}× — 框 ${TW*k}×${TH*k}${k===1?'（1:1 無損）':'（降取樣 '+k+'倍）'}</option>`).join('');
+  if(!opts.includes(S.mult)) S.mult=opts[0];
+  sel.value=S.mult;
+  $('multWarn').innerHTML = opts.length===1
+    ? `原圖 ${natW}×${natH} 只放得下 1× 的框 —— 只能 1:1 裁切，這也是唯一無損的做法。`
+    : `框越大取到的畫面越多，但會降取樣；1× 是唯一無損。`;
+}
+
+async function loadChar(name){
+  $('msg').textContent='';
+  await new Promise(r=>{
+    img.onload=()=>{ natW=img.naturalWidth; natH=img.naturalHeight;
+      const c=document.createElement('canvas'); c.width=natW; c.height=natH;
+      c.getContext('2d').drawImage(img,0,0); off=c;
+      r(); };
+    img.onerror=()=>{ natW=natH=0; off=null; r(); };
+    img.src='/src?char='+encodeURIComponent(name)+'&file=big&t='+Date.now();
+  });
+  if(!natW){ $('multWarn').textContent='這隻沒有 big.png'; return; }
+  buildMults();
+  S.x=Math.max(0,Math.round(natW/2-TW*S.mult/2));
+  S.y=Math.max(0,Math.round(natH*0.25));
+  render();
+}
+
+// 拖曳
+let drag=null;
+frame.addEventListener('mousedown',e=>{ drag={mx:e.clientX,my:e.clientY,x:S.x,y:S.y}; e.preventDefault(); });
+addEventListener('mouseup',()=>drag=null);
+addEventListener('mousemove',e=>{
+  if(!drag) return;
+  S.x=drag.x+Math.round((e.clientX-drag.mx)/S.zoom);
+  S.y=drag.y+Math.round((e.clientY-drag.my)/S.zoom);
+  render();
+});
+// 點原圖任一處 → 把框中心移過去
+img.addEventListener('mousedown',e=>{
+  const b=img.getBoundingClientRect();
+  S.x=Math.round((e.clientX-b.left)/S.zoom-TW*S.mult/2);
+  S.y=Math.round((e.clientY-b.top )/S.zoom-TH*S.mult/2);
+  render();
+});
+addEventListener('keydown',e=>{
+  if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;
+  if(/^(INPUT|SELECT)$/.test(document.activeElement.tagName))return;
+  e.preventDefault();
+  const s=e.shiftKey?5:1;
+  if(e.key==='ArrowLeft')S.x-=s; if(e.key==='ArrowRight')S.x+=s;
+  if(e.key==='ArrowUp')S.y-=s;   if(e.key==='ArrowDown')S.y+=s;
+  render();
+});
+$('zoom').addEventListener('input',e=>{S.zoom=+e.target.value;render();});
+$('mult').addEventListener('change',e=>{S.mult=+e.target.value;render();});
+$('charSel').addEventListener('change',e=>loadChar(e.target.value));
+
+$('save').addEventListener('click',async()=>{
+  if(!off) return;
+  const m=$('msg'); m.className='msg'; m.textContent='存檔中…';
+  // 先降到 32×16（mult>1 時），再放大 3× 存成 96×48
+  const a=document.createElement('canvas'); a.width=TW; a.height=TH;
+  const ac=a.getContext('2d'); ac.imageSmoothingEnabled=false;
+  ac.drawImage(off,S.x,S.y,TW*S.mult,TH*S.mult,0,0,TW,TH);
+  const b=document.createElement('canvas'); b.width=TW*3; b.height=TH*3;
+  const bc=b.getContext('2d'); bc.imageSmoothingEnabled=false;
+  bc.drawImage(a,0,0,TW*3,TH*3);
+  try{
+    const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({char:$('charSel').value,png:b.toDataURL('image/png')})});
+    const j=await r.json();
+    if(j.ok){ m.textContent='✅ '+(j.log||'已轉檔')+(j.deployed?'　已部署':'　（未部署：installed 沒這隻）'); }
+    else { m.className='msg err'; m.textContent='失敗：'+j.error; }
+  }catch(e){ m.className='msg err'; m.textContent='失敗：'+e.message; }
+});
+
+(async()=>{
+  const {chars}=await (await fetch('/chars')).json();
+  const withBig=chars.filter(c=>c.big);
+  $('charSel').innerHTML=(withBig.length?withBig:chars)
+    .map(c=>`<option value="${c.name}">${c.name}${c.big?'':'（無 big.png）'}</option>`).join('');
+  if($('charSel').value) await loadChar($('charSel').value);
+})();
+</script></body></html>

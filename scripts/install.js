@@ -85,6 +85,15 @@ function installRuntime() {
         if (copyFile(path.join(srcDir, fn), path.join(INSTALL_DIR, fn))) ok++;
     }
     console.log(`  -> ${ok}/${RUNTIME_FILES.length} runtime 檔案已安裝`);
+
+    // 圖鑑（vpet album）：CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
+    // daemon 不需要這樣做 —— 它是由 repo/release 樹的啟動器直接跑的。
+    const albumSrc = path.join(REPO_ROOT, 'src', 'album');
+    if (fs.existsSync(albumSrc)) {
+        const dst = path.join(INSTALL_DIR, 'album');
+        fs.mkdirSync(dst, { recursive: true });
+        for (const f of fs.readdirSync(albumSrc)) copyFile(path.join(albumSrc, f), path.join(dst, f), 'album');
+    }
     // release 版標記：repo 根有 RELEASE 就部署到 INSTALL_DIR，讓 statusline-cheat 停用開發指令。
     // main（開發）沒有此檔 → 不部署（開發指令全開）。
     if (fs.existsSync(path.join(REPO_ROOT, 'RELEASE'))) {

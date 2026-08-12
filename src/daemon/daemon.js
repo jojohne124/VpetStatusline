@@ -35,7 +35,8 @@ const {
     getFacingRows, composeBattleScene, composeEvoScene, composeDropScene,
     silhouetteArt, updateEvoHistory,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
-    getCharacterStage, computeInheritedPower,
+    getCharacterStage, computeInheritedPower, resetStageStats, recordAlbumIfChanged,
+    alignWalkPhase,
 } = core;
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
@@ -126,9 +127,10 @@ function renderTick(i, st, now) {
                 delete st.inheritedPower;
             }
             st.evoStartStep = -1; st.evoNextCharId = null; st.evoShownElapsed = -1;
+            // 走路相位接回表演位置（與 statusline 的 commit 同一套；漏了新角色會瞬移）
+            alignWalkPhase(st, step, st.lastPos ?? 0, st.lastFacing);
             delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
-            delete st.trainingBonus;
-            delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;
+            resetStageStats(st);   // 訓練值/勝率/隱藏統計歸零 + 記錄 lastEvolveAt（與 statusLine 共用）
             if (AUTHORITATIVE) clearForceCharacter(FORCE_FILE);   // 清 force.character 免無限迴圈
         }
     }
@@ -136,6 +138,7 @@ function renderTick(i, st, now) {
     if (!st.characterId) st.characterId = 'agumon';
     const { charDef, artFile, bulletArtFile, cutinArtFile, config } = loadCharacter(st.characterId);
     updateEvoHistory(st);
+    recordAlbumIfChanged(st);   // 圖鑑：只在角色變動時碰磁碟
 
     // 1.5 + 2. force 觸發（drop/強制進化）
     if (AUTHORITATIVE) applyForceTriggers(st, step);

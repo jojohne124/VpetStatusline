@@ -74,14 +74,33 @@ for (const f of ['pixels.json', 'art.json', 'cutin-art.json', 'config.json']) {
     ok(fs.existsSync(path.join(shadowDir, f)), `Shadow/${f} 應存在`);
 }
 if (fs.existsSync(path.join(shadowDir, 'art.json'))) {
+    // ⚠️ 不要斷言「全為單一 shade 色」。Shadow 一開始是 gen-shadow 把 agumon 塗黑的
+    //    placeholder（純 [54,54,66]），2026-06-15 已在點陣編輯器改畫成有明暗層次、
+    //    有白眼睛的正式造型。這裡要守的不是「用哪個色」，而是 fallback 的兩個本質：
+    //    幀索引仍是那 12 幀（戰鬥共用同一套索引）、整體讀起來仍是「暗剪影」
+    //    （不能亮到看得出對手是誰 —— 對手本機沒有這隻角色才會走到這裡）。
     const sArt = JSON.parse(fs.readFileSync(path.join(shadowDir, 'art.json'), 'utf8'));
-    let allShade = true;
-    for (const fr of sArt.frames) for (const row of fr) for (const c of row) if (!cellOkShade(c)) { allShade = false; break; }
-    ok(allShade, 'Shadow art 全為 shade 或透明');
-    console.log(`  Shadow art ${sArt.frames.length} 幀，全 shade ✓`);
+    ok(sArt.frames.length === 12, 'Shadow art 應為 12 幀（與其他角色共用幀索引）');
+
+    let opaque = 0, dark = 0;
+    for (const fr of sArt.frames) for (const row of fr) for (const c of row) {
+        if (!c) continue;
+        for (const half of [[c[0], c[1], c[2]], [c[3], c[4], c[5]]]) {
+            if (half[0] < 0) continue;          // 該半格透明
+            opaque++;
+            if (half[0] + half[1] + half[2] <= 255) dark++;
+        }
+    }
+    ok(opaque > 0, 'Shadow art 應有不透明像素（不是整張空的）');
+    const darkPct = opaque ? dark / opaque : 0;
+    ok(darkPct >= 0.9, `Shadow art 應仍是暗剪影（暗色佔比 ${(darkPct * 100).toFixed(1)}% < 90%）`);
+    console.log(`  Shadow art ${sArt.frames.length} 幀、${opaque} 個不透明半格，暗色佔 ${(darkPct * 100).toFixed(1)}%`);
 }
 const sCfg = JSON.parse(fs.readFileSync(path.join(shadowDir, 'config.json'), 'utf8'));
-ok(sCfg.name === 'shadow' && Array.isArray(sCfg.evolvesTo) && sCfg.evolvesTo.length === 0, 'config name=shadow 且不進化');
+// name 比對不分大小寫：runtime id 一律小寫，config.name 存的是資料夾名的大小寫真相
+// （83fd7e8 全庫回填給 getDisplayName 用），兩者指同一隻就好。
+ok(String(sCfg.name).toLowerCase() === 'shadow' && Array.isArray(sCfg.evolvesTo) && sCfg.evolvesTo.length === 0,
+   'config name 應指向 shadow 且不進化');
 
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

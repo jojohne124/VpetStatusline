@@ -6,9 +6,10 @@ const path = require('path');
 const {
     STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH,
     EVO_LENGTH,
-    loadState, saveState, atomicWrite, decideAgumon, checkEvolution,
+    loadState, saveState, atomicWrite, decideAgumon, checkEvolution, resetStageStats,
+    recordAlbumIfChanged,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
-    getCharacterStage, computeInheritedPower,
+    getCharacterStage, computeInheritedPower, alignWalkPhase,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
@@ -150,9 +151,11 @@ process.stdin.on('end', () => {
                 st.evoStartStep = -1;
                 st.evoNextCharId = null;
                 st.evoShownElapsed = -1;
+                // 表演期間畫面釘在 lastPos，但 step 照跑 → 不重對齊的話新角色會從十幾格外冒出來。
+                // 與 drop / battle / 睡醒同一套（daemon 的 commit 也有一份）。
+                alignWalkPhase(st, step, st.lastPos ?? 0, st.lastFacing);
                 delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
-                delete st.trainingBonus;  // 進化歸零
-                delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
+                resetStageStats(st);   // 訓練值/勝率/隱藏統計歸零 + 記錄 lastEvolveAt（與 daemon 共用）
                 clearForceCharacter(FORCE_FILE);   // 清 force.character，避免「進化→拉回→進化」無限迴圈
             }
         }
@@ -161,6 +164,8 @@ process.stdin.on('end', () => {
 
         // characterId 此刻已定案 → 維護進化歷史（給 vpet tree 用；自然進化 append、斷點重設、空補種）
         if (!readOnly) updateEvoHistory(st);
+        // 圖鑑：只在角色變動時碰磁碟（內部用 st._albumLast 短路）
+        if (!readOnly) recordAlbumIfChanged(st);
 
         // 1.5 + 2. cheat trigger：reset 掉落空降 / 強制進化（與 daemon 共用）
         if (!readOnly) applyForceTriggers(st, step);

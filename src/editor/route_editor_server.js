@@ -76,6 +76,8 @@ function edgeParams(evo) {
     const tod  = conds.find(c => c.type === 'time_of_day');
     const tb   = conds.find(c => c.type === 'tag_battles');
     const pw   = conds.find(c => c.type === 'power_at_least');
+    const stt  = conds.find(c => c.type === 'stat_at_least');
+    const el   = conds.find(c => c.type === 'elapsed_since');
     return {
         pct: win ? win.pct : null,
         cost: cost ? cost.usd : null,
@@ -88,6 +90,13 @@ function edgeParams(evo) {
         tag: tb ? tb.tag : null,
         tagCount: tb ? tb.count : null,
         tagPct: tb && tb.pct != null ? tb.pct : null,
+        // stat_at_least：隱藏統計達標（key 自由字串，scope = stage 本階段 / life 本輪）
+        statKey:   stt ? stt.key : null,
+        statCount: stt && stt.count != null ? stt.count : null,
+        statScope: stt && stt.scope ? stt.scope : null,
+        // elapsed_since：距離出生 / 上次進化過了幾秒
+        elapsedSince: el ? el.since : null,
+        elapsedSec:   el && el.seconds != null ? el.seconds : null,
     };
 }
 
@@ -145,6 +154,8 @@ function buildGraph() {
                 pct: p.pct, cost: p.cost, minBattles: p.minBattles, time: p.time,
                 tag: p.tag, tagCount: p.tagCount, tagPct: p.tagPct,
                 power: p.power,
+                statKey: p.statKey, statCount: p.statCount, statScope: p.statScope,
+                elapsedSince: p.elapsedSince, elapsedSec: p.elapsedSec,
             });
         }
     }
@@ -165,6 +176,7 @@ function validate(graph) {
             tgt: e.to, power: (nodeById[e.to] || {}).power ?? 0,
             pct: e.pct, isNew: e.pct == null, time: e.time, tag: e.tag,
             powerGate: e.power,   // 邊上的戰力門檻（≠ 上面的 power ＝目標角色戰力）
+            altGate: !!(e.statKey || e.elapsedSince),   // 隱藏統計 / 時間也是另一個軸
         }));
         const resolved = RULES.resolvePcts(kids, src.stage, src.power);
         resolved.forEach(k => { suggestions[from + '>' + k.tgt] = k.pct; });
@@ -174,6 +186,7 @@ function validate(graph) {
     // 否則這些分歧會被誤判成死路（它們是另一個軸，不需要 win% 遞增）。
     const effEdges = graph.edges.map(e => ({
         from: e.from, to: e.to, time: e.time, tag: e.tag, powerGate: e.power,
+        altGate: !!(e.statKey || e.elapsedSince),
         pct: e.pct != null ? e.pct : suggestions[e.from + '>' + e.to],
     }));
     const dead = RULES.findDeadPaths({ nodes: graph.nodes, edges: effEdges });
@@ -216,6 +229,14 @@ function save(graph) {
             if (e.time) conds.push({ type: 'time_of_day', period: e.time });
             // power_at_least：戰力門檻（空＝不設）
             if (e.power != null && e.power !== '') conds.push({ type: 'power_at_least', power: e.power });
+            // stat_at_least：key 有填才寫。scope 預設 stage，只有 life 才寫進 config
+            if (e.statKey) {
+                const sc = { type: 'stat_at_least', key: e.statKey, count: e.statCount != null ? e.statCount : 1 };
+                if (e.statScope === 'life') sc.scope = 'life';
+                conds.push(sc);
+            }
+            if (e.elapsedSince && e.elapsedSec != null && e.elapsedSec !== '')
+                conds.push({ type: 'elapsed_since', since: e.elapsedSince, seconds: e.elapsedSec });
             // tag_battles：與帶指定 tag 的對手交戰達 N 次（可再加對該 tag 的勝率門檻）
             if (e.tag) {
                 const tb = { type: 'tag_battles', tag: e.tag, count: e.tagCount != null ? e.tagCount : 1 };

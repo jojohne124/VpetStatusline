@@ -519,6 +519,32 @@ function edgeCardHtml(from, e) {
                onchange="updEdge('${from}','${e.to}','tagPct',this.value===''?null:+this.value)"></div>
     </div>
     ${sp!=null?`<div class="spnote">🥚 <b>特規隱藏線</b>：進化後戰力固定 <b>${sp}</b>（不繼承原戰力）${t.stage==='Super-Ultimate'?'，上限 210；卡片階級顯示 Ultimate，vpet tree 依實際血緣長度縮短':''}。<br>只吃 <b>win% / minBattles / 戰力 ≥</b>，其餘欄位已鎖以免誤填讓彩蛋觸發不了。固定戰力要改請直接編 <code>${t.dir}/config.json</code> 的 <code>evolvePower</code>。</div>`:''}
+    <div class="row">
+      <div class="field"><label>統計 key</label>
+        <input type="text" placeholder="如 petRefuse" value="${e.statKey||''}" style="min-width:0"
+               onchange="updEdge('${from}','${e.to}','statKey',this.value.trim()||null)"></div>
+      <div class="field"><label>次數 &ge;</label>
+        <input type="number" min="1" placeholder="1" value="${e.statCount==null?'':e.statCount}" ${e.statKey?'':'disabled'}
+               onchange="updEdge('${from}','${e.to}','statCount',this.value===''?null:+this.value)"></div>
+      <div class="field"><label>範圍</label>
+        <select ${e.statKey?'':'disabled'} onchange="updEdge('${from}','${e.to}','statScope',this.value||null)">
+          <option value="" ${e.statScope!=='life'?'selected':''}>本階段</option>
+          <option value="life" ${e.statScope==='life'?'selected':''}>本輪</option>
+        </select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>經過時間</label>
+        <select onchange="updEdge('${from}','${e.to}','elapsedSince',this.value||null)">
+          <option value="" ${!e.elapsedSince?'selected':''}>—</option>
+          <option value="birth" ${e.elapsedSince==='birth'?'selected':''}>自出生</option>
+          <option value="evolve" ${e.elapsedSince==='evolve'?'selected':''}>自上次進化</option>
+        </select></div>
+      <div class="field"><label>秒數 &ge;</label>
+        <input type="number" min="0" placeholder="秒" value="${e.elapsedSec==null?'':e.elapsedSec}" ${e.elapsedSince?'':'disabled'}
+               onchange="updEdge('${from}','${e.to}','elapsedSec',this.value===''?null:+this.value)"></div>
+    </div>
+    ${e.statKey?`<div class="hint" style="margin-top:2px">隱藏統計「${e.statKey}」需 &ge; ${e.statCount??1}（${e.statScope==='life'?'本輪，reset 才歸零':'本階段，進化即歸零'}）— <code>vpet stats</code> 可查</div>`:''}
+    ${e.elapsedSince?`<div class="hint" style="margin-top:2px">距離${e.elapsedSince==='birth'?'出生':'上次進化'}需 &ge; ${e.elapsedSec??0} 秒（約 ${((e.elapsedSec||0)/3600).toFixed(1)} 小時）</div>`:''}
     ${e.tag&&sp==null?`<div class="hint" style="margin-top:2px">與帶「${e.tag}」的對手交戰 ≥ ${e.tagCount??1} 次${e.tagPct!=null?`，且對該 tag 勝率 ≥ ${e.tagPct}%`:''}（敗場也算交戰；進化後歸零）</div>`:''}
     ${e.power!=null?`<div class="hint" style="margin-top:2px">當前戰力（base + 訓練值）需 ≥ ${e.power}；填本階 cap＝練滿才給進</div>`:''}
     ${dead?'<div class="warn">⚠ 死路：調高此邊 win% 或降低較弱分支</div>':''}

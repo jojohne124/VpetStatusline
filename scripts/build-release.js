@@ -62,6 +62,12 @@ if (fs.existsSync(daemonDir))
     for (const f of fs.readdirSync(daemonDir))
         if (f.endsWith('.js')) copyRel(path.join('src', 'daemon', f));
 
+// 圖鑑（vpet album）：玩家功能，必須出貨。放 src/album/ 而非 src/editor/ 就是為了這個
+// —— src/editor 整個被排除，放錯地方 release 使用者就沒圖鑑可看。
+const albumDir = path.join(REPO, 'src', 'album');
+if (fs.existsSync(albumDir))
+    for (const f of fs.readdirSync(albumDir)) copyRel(path.join('src', 'album', f));
+
 // 只留 install / uninstall
 for (const f of ['install.js', 'uninstall.js'])
     if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
@@ -70,7 +76,8 @@ for (const f of ['install.js', 'uninstall.js'])
 //   .vbs = Windows 免小黑窗（收進工作列 tray），.bat = 保留 console 版（看得到錯誤訊息）
 //   .command/.sh 由 isShell() 強制 LF
 for (const f of ['install.bat', 'install.command',
-                 'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs'])
+                 'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
+                 'album.bat', 'album.sh', 'album.command'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
 
 // tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）

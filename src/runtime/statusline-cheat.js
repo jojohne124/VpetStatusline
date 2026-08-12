@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
@@ -48,6 +48,7 @@ function printHelp() {
     console.log('  vpet reset                  重抽一隻起始桌寵');
     console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
+    console.log('  vpet album                  開啟圖鑑（瀏覽器）');
     console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
     console.log('  vpet pvp-setup <url> <key> [名牌]  一鍵設定 PvP（首次用這個）');
     console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名；配不到真人派固定對手）');
@@ -58,6 +59,7 @@ function printHelp() {
     if (dev) {
         console.log('  ── 開發指令（release 版不提供）──');
         console.log('  vpet <index|name>           切換到任意角色');
+    console.log('  vpet stats                  查看隱藏統計');
         console.log('  vpet evolve <next>          立即播進化表演');
         console.log('  vpet battle [enemy] [win|lose]  強制戰鬥 / 指定勝負');
         console.log('  vpet pvp-server <url> [key] 只設後端');
@@ -69,6 +71,35 @@ function printHelp() {
 if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') { printHelp(); process.exit(0); }
 // 無參數：印用法（視為未給指令，exit 1）
 if (!args.length) { printHelp(); process.exit(1); }
+
+// album：開圖鑑。玩家功能，放在 release gate 之前 → release 也能用。
+// server 以 detached 方式起，指令本身立刻結束（不佔住終端機）；已經在跑就直接開瀏覽器。
+if (args[0] === '--album') {
+    const { spawn } = require('child_process');
+    const PORT = process.env.AGUMON_ALBUM_PORT || '3004';
+    const url  = 'http://localhost:' + PORT;
+    // server 在部署樹是 <INSTALL_ROOT>/../src/album/，在 repo 是 src/album/；兩種都試
+    const cands = [
+        path.join(INSTALL_ROOT, 'album', 'album_server.js'),        // 已部署（install.js 放的）
+        path.join(__dirname, '..', 'album', 'album_server.js'),     // 直接從 repo/release 樹跑
+    ];
+    const server = cands.find(p2 => fs.existsSync(p2));
+    if (!server) { console.log('找不到圖鑑 server（src/album/album_server.js）'); process.exit(1); }
+    const open = () => {
+        const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+                  : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+        try { spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' }).unref(); } catch (e) {}
+    };
+    // 先探一下：已經起來就別重複啟動（重複會 EADDRINUSE，然後靜默失敗）
+    require('http').get(url + '/data', r => { r.resume(); console.log('📖 圖鑑已在執行 → ' + url); open(); })
+        .on('error', () => {
+            const ch = spawn(process.execPath, [server], { detached: true, stdio: 'ignore' });
+            ch.unref();
+            console.log('📖 圖鑑已啟動 → ' + url);
+            setTimeout(open, 800);   // 等 server listen 再開瀏覽器
+        });
+    return;
+}
 
 // doctor：檢查並清除 node 孤兒。放在 release gate 之前 → 維護指令一律可用。
 // （真正卡死時建議用獨立包直接跑 doctor.js，不必經這裡；見 tools/agumon-doctor/）
@@ -82,7 +113,7 @@ if (args[0] === '--doctor') {
 // 保留：help/card/pvp/pvp-setup/code/sleep/wake/tree/reset/freeze/unfreeze、battle on/off。
 if (IS_RELEASE) {
     const a0 = args[0];
-    const blockedCmd    = ['--evolve', '--pvp-server', '--pin', '--unpin'].includes(a0);
+    const blockedCmd    = ['--evolve', '--pvp-server', '--pin', '--unpin', '--stats'].includes(a0);
     const blockedBattle = a0 === '--battle' && !(args[1] === 'on' || args[1] === 'off');  // 保留 battle on/off
     const blockedSwitch = a0 && !a0.startsWith('--');   // 裸角色名/index（--reset 有 -- 前綴不受影響）
     if (blockedCmd || blockedBattle || blockedSwitch) {
@@ -415,6 +446,29 @@ if (args[0] === '--sleep' || args[0] === '--wake') {
         writeForce(force);
         console.log('✓ 已喚醒（解除強制睡覺）');
     }
+    process.exit(0);
+}
+
+// ── --stats：查看隱藏統計（開發限定，release 已被上面的 gate 擋掉）──────
+// 這些數字不對玩家顯示，是給特殊進化條件用的；自己調數值時需要看得到。
+if (args[0] === '--stats') {
+    const st = core.loadState(STATE_FILE);
+    const fmt = ms => {
+        if (!ms) return '(無)';
+        const s2 = Math.floor((Date.now() - ms) / 1000);
+        const d = Math.floor(s2 / 86400), h = Math.floor(s2 % 86400 / 3600), m = Math.floor(s2 % 3600 / 60);
+        return (d ? d + ' 天 ' : '') + (h ? h + ' 小時 ' : '') + m + ' 分前';
+    };
+    const dump = (label, o) => {
+        const keys = Object.keys(o || {});
+        console.log(`  ${label}：` + (keys.length ? '' : '(無)'));
+        keys.sort().forEach(k => console.log(`    ${k.padEnd(20)} ${o[k].n}`));
+    };
+    console.log(`角色：${st.characterId || '(無)'}`);
+    console.log(`  出生       ${fmt(st.birthAt)}`);
+    console.log(`  上次進化   ${fmt(st.lastEvolveAt)}`);
+    dump('本階段 stats', st.stats);
+    dump('本輪 lifeStats', st.lifeStats);
     process.exit(0);
 }
 

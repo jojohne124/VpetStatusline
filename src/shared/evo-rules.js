@@ -42,7 +42,7 @@ function resolvePcts(kids, srcStage, srcPower) {
 
     // 日夜／tag／戰力門檻的分歧不需要 win% 遞增：它們靠別的軸區分，不是「取強者」的競爭關係。
     // （powerGate = 邊上的 power_at_least 門檻，不要跟 k.power ＝目標角色戰力搞混）
-    const altGated = a.some(k => k.time || k.tag || k.powerGate != null);
+    const altGated = a.some(k => k.time || k.tag || k.powerGate != null || k.altGate);
     if (!altGated) {
         for (let i = 1; i < a.length; i++) {
             if (a[i].power > a[i - 1].power && a[i].pct <= a[i - 1].pct) {
@@ -70,7 +70,7 @@ function findDeadPaths(graph) {
         const kids = byParent[from];
         if (kids.length < 2) continue;
         // 日夜／tag／戰力門檻的分歧不需遞增（靠別的軸區分，非「取強者」競爭）
-        if (kids.some(k => k.time || k.tag || k.powerGate != null)) continue;
+        if (kids.some(k => k.time || k.tag || k.powerGate != null || k.altGate)) continue;
         const a = kids
             .map(k => ({ tgt: k.to, pct: k.pct, pow: (nodeById[k.to] || {}).power ?? 0 }))
             .sort((x, y) => x.pow - y.pow);

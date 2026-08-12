@@ -133,6 +133,8 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
             delete st.trainingBonus;  // 切角色歸零（與進化/reset 一致）
             delete st.inheritedPower; // SU 繼承戰力：換角色即失效，改用新角色 config.power
             delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
+            delete st.stats; delete st.lifeStats;   // 隱藏統計：換角色＝新的一輪，兩種範圍都歸零
+            st.birthAt = Date.now(); st.lastEvolveAt = Date.now();
             st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
             delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
         }
@@ -166,8 +168,12 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
     if (force.petTriggerTs && force.petTriggerTs !== st.lastPetTriggerTs) {
         const age = Date.now() - force.petTriggerTs;
         if (age >= 0 && age < 3000) {
-            if (force.petMood === 'refuse') st._forceRefuse = true;
-            else                            st._forceHappy  = true;
+            if (force.petMood === 'refuse') {
+                st._forceRefuse = true;
+                bumpStat(st, 'petRefuse', Date.now());   // 被摸到不爽（本階段）
+            } else {
+                st._forceHappy = true;
+            }
         }
         st.lastPetTriggerTs = force.petTriggerTs;
     }
@@ -259,6 +265,19 @@ function computeWalk(step, offset = 0) {
     return { pos, facing: phase < MAX_POS ? 'right' : 'left' };
 }
 
+// 表演結束後把走路相位接回指定的 pos / facing。
+//
+// ⚠️ 每一種「會蓋掉走路」的表演結束時都必須呼叫這個 —— 表演期間畫面被釘住，但 step
+//    照樣累加，不重對齊的話角色會從三角波上的別處（最多 MAX_POS 格外、方向還可能相反）
+//    瞬移出現。drop / battle / 睡醒本來就各自手寫了一份，進化漏掉了（commit 被搬到
+//    statusline 與 daemon 兩個 caller，相位重對齊沒跟著搬）→ 抽成共用函式，免得再漏。
+function alignWalkPhase(st, step, pos, facing) {
+    const PERIOD    = MAX_POS * 2;
+    const p         = ((pos % PERIOD) + PERIOD) % PERIOD;
+    const wantPhase = facing === 'left' ? (PERIOD - p) % PERIOD : p;
+    st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+}
+
 // ── 進化花費累積（cost_threshold 用）──────────────────────────────
 // 改良差額制：i.cost.total_cost_usd 是「本 session」累計，關視窗→新 session 會歸 0。
 // 舊的「base 相減」在跨 session 時會進度歸零、甚至 delta 變負卡住。
@@ -290,6 +309,78 @@ function evoSpendTotal(st) {
     let sum = 0;
     for (const k in m) { const e = m[k]; if (e) sum += Math.max(0, (e.p || 0) - (e.s || 0)); }
     return sum;
+}
+
+// ── 圖鑑（album）─────────────────────────────────────────────────
+// 記錄「這台機器養過哪些角色」。刻意獨立成一個檔而不是塞進 color-state：
+//   1. reset / 換角色會清 state，圖鑑必須活下來 —— 那正是它的意義
+//   2. state 曾經因斷電整份壞掉（見 atomicWrite 的註解），圖鑑不該跟它同生共死
+// 門檻採「寬鬆」：成為過那隻就記（含 vpet <name> 直接切換）。之所以敢寬鬆，是因為
+// 直接切換角色在 release 版被 gate 擋掉，一般玩家只能靠實際養成累積。
+const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
+
+function loadAlbum(file) {
+    try {
+        const a = JSON.parse(fs.readFileSync(file || ALBUM_FILE, 'utf8'));
+        if (a && typeof a.chars === 'object') return a;
+    } catch(e) {}
+    return { v: 1, chars: {} };
+}
+
+// 只在 characterId 真的變動時才碰磁碟（用 st._albumLast 短路），避免每秒 tick 都讀寫。
+// 值存「首次取得時間」，日後要排序 / 顯示「最近取得」都用得上。
+function recordAlbumIfChanged(st, file) {
+    const id = st && st.characterId;
+    if (!id || st._albumLast === id) return false;
+    st._albumLast = id;
+    const f = file || ALBUM_FILE;
+    const a = loadAlbum(f);
+    if (a.chars[id]) return false;          // 已收錄，不覆蓋首次取得時間
+    a.chars[id] = Date.now();
+    atomicWrite(f, JSON.stringify(a));
+    return true;
+}
+
+// ── 隱藏統計 ─────────────────────────────────────────────────────
+// 給特殊進化條件用的計數器。不對玩家顯示（開發時用 vpet stats 查）。
+//
+// 兩種生命週期，由呼叫端指定：
+//   'stage'（預設）本階段，進化時歸零 —— 與 battleTotalCount / tagStats 同步
+//   'life'         本輪，只有 reset / 換角色才歸零
+//   'both'         兩邊都記
+//
+// 每個 key 存 { n: 次數, t: 上次計數時戳 }。t 是冷卻用的：沒有冷卻的話「被摸到不爽 N 次」
+// 這種條件在獨立介面狂點十秒就達成，會失去份量。同一 key 在冷卻內重複觸發直接忽略。
+//
+// 多視窗 race：與 trainingBonus 同模式 —— 每個視窗讀同一份 disk state 都算出 n+1，
+// 最後寫的 wins，淨增 +1。冷卻時戳還額外壓低了重複計數的機會。
+const STAT_COOLDOWN_MS = 60000;
+
+function bumpStat(st, key, now, scope = 'stage') {
+    const buckets = scope === 'life' ? ['lifeStats']
+                  : scope === 'both' ? ['stats', 'lifeStats']
+                  : ['stats'];
+    for (const b of buckets) {
+        if (!st[b] || typeof st[b] !== 'object') st[b] = {};
+        const e = st[b][key] || { n: 0, t: 0 };
+        if (now - (e.t || 0) < STAT_COOLDOWN_MS) continue;   // 冷卻中，不計
+        st[b][key] = { n: (e.n || 0) + 1, t: now };
+    }
+}
+function getStat(st, key, scope = 'stage') {
+    const b = scope === 'life' ? (st && st.lifeStats) : (st && st.stats);
+    const e = b && b[key];
+    return (e && e.n) || 0;
+}
+
+// 進化 / 換角色時的「本階段」歸零。statusLine 與 daemon 兩個 commit 點共用，
+// 免得日後只改一邊而分歧（這兩塊本來就是幾乎一樣的複製品）。
+function resetStageStats(st, now) {
+    delete st.trainingBonus;
+    delete st.battleTotalCount; delete st.battleWinCount;
+    delete st.lastBattleCountedStartStep; delete st.tagStats;
+    delete st.stats;
+    st.lastEvolveAt = now || Date.now();
 }
 
 // ── 進化檢查 ─────────────────────────────────────────────────────
@@ -345,6 +436,20 @@ function evalCondition(cond, ns, st, input, nowSec) {
         const cur = Math.min(getBasePower(st, id) + (st.trainingBonus ?? 0),
                              getTierCap(getCharacterStage(id)));
         return cur >= (cond.power ?? Infinity);
+    }
+
+    if (cond.type === 'stat_at_least') {
+        // 隱藏統計達標。key 是自由字串 → 日後新增統計只要加「記錄」那一行，
+        // 條件引擎與 route-editor 都不用再動。
+        return getStat(st, cond.key, cond.scope || 'stage') >= (cond.count ?? 1);
+    }
+
+    if (cond.type === 'elapsed_since') {
+        // 距離某個時間點過了多久（秒）。since: 'birth' = 這輪養了多久（reset 起算）、
+        // 'evolve' = 上次進化後多久。時戳缺漏（舊 state）時回 false，不會誤觸發。
+        const base = cond.since === 'birth' ? st.birthAt : st.lastEvolveAt;
+        if (!base) return false;
+        return (Date.now() - base) / 1000 >= (cond.seconds ?? Infinity);
     }
 
     if (cond.type === 'time_of_day') {
@@ -887,6 +992,10 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         }
     } catch(e) {}
     if (!st.lastActivityAt) st.lastActivityAt = now;
+    // 舊 state 沒有這兩個時戳 → elapsed_since 會永遠回 false。首次見到就補，
+    // 從「現在」起算而不是假裝很久以前，免得舊玩家一啟動就白撿一堆時間條件。
+    if (!st.birthAt)      st.birthAt = now;
+    if (!st.lastEvolveAt) st.lastEvolveAt = now;
 
     if (allowBattle && hookFired) {
         // 新訊息 → 武裝這一回合的自動戰鬥（用 hook ts 當唯一識別，每個 prompt 最多觸發一次）
@@ -928,7 +1037,11 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     } else {
         // 自然 idle 睡（超過 IDLE_MS 沒活動）→ 摸摸視同活動，把牠叫醒。
         // 只要更新 lastActivityAt，下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
-        if (st._forceHappy || st._forceRefuse) st.lastActivityAt = now;
+        if (st._forceHappy || st._forceRefuse) {
+            // 判斷要在更新 lastActivityAt 之前 —— 更新完就看不出剛才是不是在睡了
+            if ((now - (st.lastActivityAt || now)) > IDLE_MS) bumpStat(st, 'petWake', now);
+            st.lastActivityAt = now;
+        }
         if (st._forceHappy) {
             if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
             delete st._forceHappy;
@@ -956,9 +1069,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                 // 正常結束 → 清掉，從中央接著走（相位對齊，同 battle 結束）
                 st.dropStartStep = -1; st.dropShownElapsed = -1;
                 st.lastStepSeen = step;
-                const PERIOD    = MAX_POS * 2;
-                const wantPhase = PERIOD - BATTLE_CENTER_COL;   // pos=center, facing 'left'
-                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+                alignWalkPhase(st, step, BATTLE_CENTER_COL, 'left');
             },
         });
         if (f) return f;
@@ -1028,9 +1139,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                 st.lastBattleEnemy = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
                 cleanupBattle();
                 st.lastStepSeen    = step;
-                const PERIOD     = MAX_POS * 2;                            // 40
-                const wantPhase  = PERIOD - BATTLE_CENTER_COL;             // pos=center, facing 'left'
-                st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+                alignWalkPhase(st, step, BATTLE_CENTER_COL, 'left');   // 接續 RESULT 的中央位置
             },
         });
         if (f) return f;
@@ -1055,10 +1164,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     // 從睡眠喚醒：重新對齊 walkPhaseOffset，讓 computeWalk(step) 從 lastPos / lastFacing 繼續
     // 否則 step 在睡眠期間持續累加，醒來瞬間 pos 會跳到三角波的別處（包含 ROAR 那幾幀）
     if (st.wasSleeping && (now - st.lastActivityAt) <= IDLE_MS) {
-        const PERIOD    = MAX_POS * 2;
-        const lastPos   = st.lastPos ?? 0;
-        const wantPhase = (st.lastFacing === 'left') ? (PERIOD - lastPos) % PERIOD : lastPos;
-        st.walkPhaseOffset = (((wantPhase - step) % PERIOD) + PERIOD) % PERIOD;
+        alignWalkPhase(st, step, st.lastPos ?? 0, st.lastFacing);
         st.wasSleeping = false;
     }
 
@@ -1683,9 +1789,12 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
 
     const displayName = getDisplayName(charId);
     // 勝率：勝場 / 總戰鬥場數；0 場顯示 0%（不顯示 NaN）
+    // ⚠️ 一律無條件捨去，不要用 Math.round —— win_rate 進化條件比的是原始浮點值，
+    //    四捨五入會讓 74.5% 顯示成 75%，卡片說到了但引擎不給進化（所見即所得破功）。
+    //    寧可顯示保守：顯示 75% 就保證 >= 75%，門檻與顯示永遠同調。
     const total   = (st && st.battleTotalCount) || 0;
     const wins    = (st && st.battleWinCount) || 0;
-    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+    const winRate = total > 0 ? Math.floor((wins / total) * 100) : 0;
     // 文字欄一律「補滿或截斷」到 TEXT_W。只補不截的話，長名字（Name: BurningGodzilla
     // ＝21 字元 > 18）會把那一列撐寬，右邊的 CutIn 就只有該列右移，看起來像圖歪掉。
     const pad = (s) => {
@@ -1789,6 +1898,7 @@ module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     ANCHOR_GAP,
     BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT, MAX_POS,
+    alignWalkPhase,
     hasCutIn, pickBattleVersion, battleLength,
     EVO_LENGTH,
     DROP_LENGTH,
@@ -1806,6 +1916,8 @@ module.exports = {
     loadCharacter,
     getCharacterStage,
     getBasePower, computeInheritedPower,
+    bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
+    loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
     getDisplayName,
     getCharacterTags,
     getCharacterPower,

@@ -1,7 +1,7 @@
 {
-  "name": "Zephagamon",
-  "stage": "Ultimate",
-  "power": 175,
+  "name": "zephagamon_ace",
+  "stage": "Super-Ultimate",
+  "power": 200,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,30 +60,6 @@
       ]
     }
   ],
-  "evolvesTo": [
-    {
-      "character": "zephagamon_ace",
-      "conditions": [
-        {
-          "type": "cost_threshold",
-          "usd": 0
-        },
-        {
-          "type": "win_rate",
-          "pct": 0,
-          "minBattles": 0
-        },
-        {
-          "type": "power_at_least",
-          "power": 200
-        },
-        {
-          "type": "elapsed_since",
-          "since": "evolve",
-          "seconds": 86400
-        }
-      ]
-    }
-  ],
-  "_note": "進化到 Super-Ultimate（zephagamon_ace）：戰力練滿 200（Ultimate 上限）且距上次進化超過 24 小時。cost/win_rate 為 no-op，只留這兩個軸。"
+  "evolvesTo": [],
+  "_note": "Super-Ultimate。走正規線（Zephagamon → 本體），不設 evolvePower ＝ 繼承進化前的 base+訓練（上限 210）。power=200 為敵方戰力（同 SU 暫定規格）。子彈沿用 Zephagamon。"
 }

@@ -18,6 +18,7 @@ const os   = require('os');
 const path = require('path');
 const http = require('http');
 const { Worker } = require('worker_threads');
+const { spawnSync } = require('child_process');
 
 // 優先用「已安裝」的 core（跟 statusLine 同一份權威），抓不到再退回 repo 內。
 let core;
@@ -41,7 +42,13 @@ const {
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
 //       --authoritative → 「當家」：寫真 color-state.json + 每拍寫 heartbeat，statusLine 偵測到就退唯讀。
-const AUTHORITATIVE = process.argv.includes('--authoritative');
+//
+// daemon-only 安裝（install.js --daemon-only 留下的 DAEMON_ONLY 標記）→ 預設當家。
+// 那種環境根本沒有 statusLine 在跑，隔離模式只會寫進沒人讀的 daemon-state.json，
+// 使用者會看到「pet 完全不動、指令都沒反應」而找不到原因。--isolated 可強制覆寫回隔離。
+const DAEMON_ONLY   = fs.existsSync(path.join(core.INSTALL_ROOT, 'DAEMON_ONLY'));
+const AUTHORITATIVE = process.argv.includes('--isolated') ? false
+                    : (process.argv.includes('--authoritative') || DAEMON_ONLY);
 const STATE_FILE     = path.join(STATE_DIR, AUTHORITATIVE ? 'color-state.json' : 'daemon-state.json');
 const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
 const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令；當家時由 daemon 讀
@@ -50,16 +57,44 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 // （release 只留 battle on/off），UI 按鈕自然也要一致 → release 不顯示、且伺服器端擋掉。
 // 只隱藏按鈕是不夠的：/cmd 是公開端點，必須在伺服器端一起擋。
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
-const DEV_ONLY   = new Set(['battle']);
+// 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
+// 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server']);
 
-// UI 上要露出的按鈕。**只影響版面，不影響功能** —— 沒列在這裡的指令照樣能用
-// （CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
+// UI 上要露出的快捷鈕（一鍵、不用填參數）。**只影響版面，不影響功能** ——
+// 沒列在這裡的指令照樣能用（CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
 //   摸摸 → 直接點角色就好，按鈕多餘
-//   battle → dev-only，另外被 DEV_ONLY 擋
-//   drop/sleep/wake/freeze/unfreeze → 走 CLI，平常用不到
+//   hide/show/pin/unpin → statusline 顯示專屬，daemon 沒有狀態列可隱藏／釘住，不做
+// confirm：按下去要先二次確認（重抽會直接換掉現在的桌寵）
+// dev: 只在非 release 露出。
+// ⚠️ 這是「UI 露不露臉」，跟下面伺服器端的 DEV_ONLY 是兩回事 —— sleep/wake 在 CLI
+//    的 release 版是開放的（vpet help 的玩家區就有），所以不能進 DEV_ONLY，否則
+//    會變成「終端機打得動、網頁 POST 卻被擋」。這裡只是不把按鈕擺出來。
 const UI_BUTTONS = [
-    ['card', '🪪 卡片'],
-    ['tree', '🌳 進化樹'],
+    ['card',   '🪪 卡片'],
+    ['tree',   '🌳 進化樹'],
+    ['album',  '📖 圖鑑'],
+    ['sleep',  '😴 睡覺', { dev: true }],
+    ['wake',   '☀ 喚醒', { dev: true }],
+];
+
+// 進階摺疊區：不常用的開關 + 需要填參數的指令。避免主畫面被塞爆。
+//   buttons: 同一列多顆鈕（開/關這種成對的開關）
+//   fields : 輸入框；沒有欄位就只有一顆「執行」
+//   dev    : 開發限定（release 不露出；若同時列在 DEV_ONLY，伺服器端也會擋）
+const UI_FORMS = [
+    { label: '🎲 重抽桌寵', action: 'reset', fields: [],
+      confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
+    { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
+    { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
+    { label: '🩺 doctor',   action: 'doctor',    fields: [] },
+    { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
+    { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
+    { label: '🔧 PvP 設定', action: 'pvp-setup', fields: [['url', 'Worker URL'], ['key', 'API key'], ['name', '名牌（可留空）']] },
+    { label: '🔀 切換角色', action: 'switch',    fields: [['name', '角色名或編號']], dev: true },
+    { label: '✨ 立即進化', action: 'evolve',    fields: [['name', '進化目標角色名']], dev: true },
+    { label: '⚔ 指定戰鬥', action: 'battle',    fields: [['enemy', '敵人（留空＝隨機）'], ['result', 'win / lose（留空＝依機率）']], dev: true },
+    { label: '📊 隱藏統計', action: 'stats',     fields: [], dev: true },
 ];
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
@@ -282,6 +317,10 @@ function doTick() {
                 activeSession: usage.activeSession,
                 activeCostUSD: usage.activeSessionUsage ? usage.activeSessionUsage.costUSD : 0,
                 totalCostUSD:  usage.totals.costUSD,
+                // 各來源小計（Claude Code / Codex…）。totals 是合計 —— 桌寵的「花費」
+                // 語意是「你在所有 AI 上燒了多少」，面板要能看出是誰貢獻的。
+                bySource: Object.fromEntries(
+                    Object.entries(usage.bySource || {}).map(([k, b]) => [k, b.costUSD])),
                 burn10mTokens: usage.burn10m.tokens,
                 burn10mCostUSD: usage.burn10m.costUSD,
                 lastActivityAgoSec: usage.lastActivityAgoSec,
@@ -298,6 +337,14 @@ function doTick() {
 
 doTick();
 setInterval(doTick, STEP_MS);   // ← 獨立時鐘：跟 Claude Code 有沒有呼叫指令無關
+
+// 跨行程收屍：平常是每個新啟動的 statusline 在做，但 daemon-only 安裝根本沒部署
+// statusline-agumon-color.js → hook 若被凍結成孤兒就沒人清。daemon 是常駐的，補上這一輪。
+// 只收屍、不登記自己（長駐行程一登記就會被當成「活著又逾時」的卡死孤兒殺掉）。
+// 兩者都在跑時重複收屍無害：判定準則相同，且只殺「確認卡死」的。
+const REAP_INTERVAL_MS = 30000;
+const PIDS_DIR = path.join(STATE_DIR, 'pids');
+setInterval(() => { try { core.reapStalePids(PIDS_DIR); } catch (e) {} }, REAP_INTERVAL_MS);
 
 // ── UI 指令 → force-char.json（跟 vpet CLI 同一個指令通道）───────────────────
 // 當家時 daemon 自己讀套用；隔離時 statusLine 讀 → UI 等於「圖形版 vpet 指令」，兩模式皆可用。
@@ -350,12 +397,55 @@ const COMMANDS = {
     battleOff: () => ({ autoBattleOff: true }),
     battleOn:  () => ({ autoBattleOff: false }),
 };
-function applyCommand(action) {
+// ── 需要參數／需要輸出／不只是寫 force 的指令 → 轉呼叫 vpet CLI 子行程 ────────────
+// 為什麼不在 daemon 重寫一份：reset 的加權抽選、pvp 的連線、doctor 的行程掃描，
+// 邏輯都在 statusline-cheat.js（567 行的 top-level if-chain，不是函式庫）。抄一份過來
+// 就會變成兩套實作，改一邊忘一邊 → 「終端機打 vpet reset 和網頁按重抽，抽到的不一樣」。
+// 這個 repo 已經吃過複製品分叉的虧（進化 commit 兩份，害相位重對齊漏了一邊）。
+// 代價是每次多開一個 node 行程（實測約 140ms）—— 這些都是低頻操作，按鈕感覺不出來。
+//
+// 安全性：/cmd 是 localhost 公開端點。用陣列形式 spawn（不經 shell）→ 參數不會被當指令解析；
+// action 一律走白名單，只有下面 CLI_ACTIONS 列出的能執行。
+const CHEAT_CLI = path.join(core.INSTALL_ROOT, 'statusline-cheat.js');
+const CLI_TIMEOUT_MS = 15000;   // doctor 掃行程可能久一點；卡住就中止，不要吊死 HTTP
+
+// action → 組出 CLI 參數。回 null = 參數不合法。
+const CLI_ACTIONS = {
+    reset:       ()  => ['reset'],
+    album:       ()  => ['album'],
+    doctor:      ()  => ['doctor', '--check'],   // 只診斷不清，避免網頁一按就殺行程
+    stats:       ()  => ['stats'],
+    pvp:         (a) => a.name ? ['pvp', a.name] : ['pvp'],
+    code:        (a) => a.name ? ['code', a.name] : ['code'],
+    'pvp-setup': (a) => (a.url && a.key) ? ['pvp-setup', a.url, a.key, ...(a.name ? [a.name] : [])] : null,
+    switch:      (a) => a.name ? [a.name] : null,          // 裸角色名/編號
+    evolve:      (a) => a.name ? ['evolve', a.name] : null,
+    battle:      (a) => ['battle', ...(a.enemy ? [a.enemy] : []), ...(a.result ? [a.result] : [])],
+};
+
+function runCli(args) {
+    const r = spawnSync(process.execPath, [CHEAT_CLI, ...args],
+                        { encoding: 'utf8', timeout: CLI_TIMEOUT_MS, windowsHide: true });
+    if (r.error) return { ok: false, error: `執行失敗：${r.error.message}` };
+    const out = ((r.stdout || '') + (r.stderr || '')).trim();
+    // CLI 用 exit code 1 表示「找不到角色 / 此版本未提供」之類的拒絕，輸出仍要帶回去給使用者看
+    return { ok: r.status === 0, output: out || '(無輸出)' };
+}
+
+function applyCommand(action, args = {}) {
     if (IS_RELEASE && DEV_ONLY.has(action)) return { ok: false, error: '此版本未提供此指令' };
     if (action === 'pet') return petTouch();   // 觸碰要即時計數，走專用路徑
+
+    // 快路徑：純粹寫一個旗標的指令直接寫 force，省掉 140ms 的行程開銷。
+    // 這些在 CLI 那邊也只是寫同樣的欄位，沒有額外邏輯，不會分叉。
     const fn = COMMANDS[action];
-    if (!fn) return { ok: false, error: 'unknown action: ' + action };
-    return { ok: writeForce(fn()), action };
+    if (fn) return { ok: writeForce(fn()), action };
+
+    const build = CLI_ACTIONS[action];
+    if (!build) return { ok: false, error: 'unknown action: ' + action };
+    const argv = build(args || {});
+    if (!argv) return { ok: false, error: '參數不足' };
+    return Object.assign({ action }, runCli(argv));
 }
 
 // ── HTTP 顯示層 ──
@@ -386,7 +476,13 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      用 min-width/min-height 釘住一般表演的尺寸（52×8 = 走路／卡片／戰鬥），
      canvas 維持原生大小置中；只有進化樹（35~92×9）需要時才把底盤撐寬。
      不用固定 width：那會讓一般表演永遠佔著五格進化樹的寬度，版面太空。 */
-  #stage{min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;max-width:100%;
+  /* width:fit-content 是關鍵 —— #stage 是 block，預設會撐滿 #petbox 的內容寬，
+     而 #petbox 是 #wrap（flex + wrap）的項目，可用寬度隨視窗變動 → 舞台跟著變寬變窄，
+     底圖是 center/cover，寬度一動就重新裁切，看起來就是「拉視窗背景會微微變」。
+     改成 fit-content 後舞台只跟內容走：一般表演固定 min-width，只有進化樹才撐寬。
+     也刻意不留 max-width:100% —— 那會在窄視窗把 canvas 縮小，地平線又會對不上
+     （就是先前睡覺角色浮起來那個 bug）。窄到放不下就由 #petbox 的 overflow:hidden 裁掉。 */
+  #stage{width:fit-content;min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;
          /* 上下各留 ${PAD_DOTS} dot（1 dot = 半格 = ${CH / 2}px）。用 padding 而不是墊高 min-height，
             這樣進化樹那種比較高的場景也一樣有留白，不會頂到邊。底圖會鋪滿含 padding 的範圍。 */
          padding:${PAD_DOTS * (CH / 2)}px 0;
@@ -416,15 +512,43 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #controls button:hover{background:#30363d;border-color:#8b949e}
   /* 提示字 3 秒後淡出；min-height 保留讓版面不會跳動 */
   #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px;opacity:0;transition:opacity .5s}
+  /* 進階區：要填參數的指令。預設收起，避免主畫面被塞爆 */
+  #adv{margin-top:8px;max-width:480px}
+  #adv summary{cursor:pointer;color:#8b949e;font-size:12px;user-select:none}
+  #adv summary:hover{color:#c9d1d9}
+  .form{display:flex;gap:4px;align-items:center;margin-top:6px;flex-wrap:wrap}
+  .form .lbl{font-size:12px;color:#8b949e;min-width:74px}
+  .form input{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
+              padding:3px 7px;font:inherit;font-size:12px;width:120px}
+  .form input:focus{outline:none;border-color:#58a6ff}
+  .form button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
+               padding:3px 9px;font:inherit;font-size:12px;cursor:pointer}
+  .form button:hover{background:#30363d;border-color:#8b949e}
+  .devtag{color:#d29922;font-size:11px}
+  /* 指令輸出：子行程的 stdout 原樣顯示（doctor / stats / code 這種有回應的） */
+  #cmdout{margin-top:8px;max-width:480px;display:none;background:#0d1117;border:1px solid #30363d;
+          border-radius:6px;padding:8px 10px;font-size:12px;color:#c9d1d9;
+          white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 </style></head><body>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
   <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
     <div id="controls">
-      ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
-                  .map(([c, label]) => `<button data-cmd="${c}">${label}</button>`).join('\n      ')}
+      ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
+                  .map(([c, label, o]) => `<button data-cmd="${c}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .join('\n      ')}
     </div>
-    <div id="cmdmsg"></div></div>
+    <div id="cmdmsg"></div>
+    <details id="adv"><summary>⚙ 進階指令</summary>
+      ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
+                .map(f => `<div class="form"${f.action ? ` data-cmd="${f.action}"` : ''}>
+        <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
+        ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
+        ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
+                    : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
+      </div>`).join('\n      ')}
+    </details>
+    <div id="cmdout"></div></div>
   <div class="panel">
     <div>daemon tick：<span class="big" id="tick">–</span> <span class="badge" id="kind">–</span></div>
     <div class="k">（背景／切走這個分頁再回來，tick 仍持續跳 = 時鐘不依賴前景）</div>
@@ -436,7 +560,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
     <div class="k">── JSONL token 資料源 ──</div>
     <div><span class="k">活躍 session：</span><span class="v" id="asess">–</span></div>
     <div><span class="k">本 session cost：</span><span class="v" id="acost">–</span></div>
-    <div><span class="k">全域 cost：</span><span class="v" id="tcost">–</span></div>
+    <div><span class="k">全域 cost（所有 AI）：</span><span class="v" id="tcost">–</span></div>
+    <div class="k" id="bysrc" style="padding-left:12px"></div>
     <div><span class="k">近 10m burn：</span><span class="v" id="burn">–</span></div>
     <div><span class="k">最近活躍：</span><span class="v" id="lastact">–</span></div>
     <div><span class="k">掃描：</span><span class="v" id="scan">–</span></div>
@@ -538,6 +663,9 @@ async function poll(){
     document.getElementById('asess').textContent=(u.activeSession||'–').slice(0,8);
     document.getElementById('acost').textContent='$'+(u.activeCostUSD||0).toFixed(4);
     document.getElementById('tcost').textContent='$'+(u.totalCostUSD||0).toFixed(2);
+    const bs=u.bySource||{};
+    document.getElementById('bysrc').textContent=
+      Object.keys(bs).length ? Object.entries(bs).map(([k,v])=>k+' $'+v.toFixed(2)).join('　') : '';
     document.getElementById('burn').textContent=(u.burn10mTokens||0).toLocaleString()+' tok / $'+(u.burn10mCostUSD||0).toFixed(4);
     document.getElementById('lastact').textContent=(u.lastActivityAgoSec==null?'?':u.lastActivityAgoSec+'s 前');
     document.getElementById('scan').textContent=(u.scannedFiles||0)+' 檔 / '+(u.uniqueMessages||0).toLocaleString()+' unique msg';
@@ -552,15 +680,47 @@ function flashCmdMsg(text,color){
   if(cmdMsgTimer)clearTimeout(cmdMsgTimer);
   cmdMsgTimer=setTimeout(()=>{ el.style.opacity='0'; },3000);
 }
-async function sendCmd(action){
+// 子行程的輸出是給終端機看的，帶 ANSI 色碼 → 網頁顯示前先剝掉
+const stripAnsi = s => String(s).replace(/\[[0-9;]*[A-Za-z]/g,'');
+function showOutput(text){
+  const el=document.getElementById('cmdout');
+  if(!text){ el.style.display='none'; return; }
+  el.textContent=stripAnsi(text); el.style.display='block';
+}
+async function sendCmd(action,args){
   try{
-    const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
+    const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
+                                       body:JSON.stringify({action,args:args||{}})})).json();
     const MOOD={happy:'摸摸 ♥',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
     flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action)),
                 r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
+    // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
+    // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
+    showOutput(r.output || r.error || '');
   }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); }
 }
-document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>sendCmd(b.dataset.cmd)));
+document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
+  const c=b.dataset.confirm;
+  if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
+  sendCmd(b.dataset.cmd);
+}));
+// 進階區：把該列的輸入框收成 {欄位:值} 一起送出。
+// 一列可以有多顆鈕（開/關成對的開關）→ 動作優先取按鈕自己的 data-cmd，沒有才用整列的。
+document.querySelectorAll('#adv .form').forEach(row=>{
+  const collect=()=>{
+    const args={};
+    row.querySelectorAll('input').forEach(i=>{ if(i.value.trim()) args[i.dataset.f]=i.value.trim(); });
+    return args;
+  };
+  row.querySelectorAll('button').forEach(b=>
+    b.addEventListener('click',()=>{
+      const c=b.dataset.confirm;
+      if(c && !confirm(c)) return;    // 破壞性操作（重抽）先問一次
+      sendCmd(b.dataset.cmd||row.dataset.cmd,collect());
+    }));
+  row.querySelectorAll('input').forEach(i=>
+    i.addEventListener('keydown',e=>{ if(e.key==='Enter')sendCmd(row.dataset.cmd,collect()); }));
+});
 document.getElementById('pet').addEventListener('click',()=>sendCmd('pet'));   // 點角色＝摸摸（連戳會生氣）
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 setInterval(poll,500); poll();
@@ -589,9 +749,19 @@ const server = http.createServer((req, res) => {
         let body = '';
         req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
         req.on('end', () => {
-            let action = '';
-            try { action = JSON.parse(body).action; } catch (e) {}
-            const r = applyCommand(action);
+            let action = '', args = {};
+            try {
+                const j = JSON.parse(body);
+                action = j.action;
+                // 只收字串欄位，長度設限 —— /cmd 是公開端點，別讓瀏覽器塞奇怪東西進 argv
+                if (j.args && typeof j.args === 'object') {
+                    for (const k of Object.keys(j.args)) {
+                        const v = j.args[k];
+                        if (typeof v === 'string' && v.length <= 200) args[k] = v.trim();
+                    }
+                }
+            } catch (e) {}
+            const r = applyCommand(action, args);
             res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(r));
         });
@@ -601,7 +771,8 @@ const server = http.createServer((req, res) => {
     res.end(HTML);
 });
 server.listen(PORT, () => {
-    console.log(`🥚 agumon daemon 已啟動  [${AUTHORITATIVE ? '當家 authoritative' : '隔離 isolated'}]`);
+    console.log(`🥚 agumon daemon 已啟動  [${AUTHORITATIVE ? '當家 authoritative' : '隔離 isolated'}]`
+        + (DAEMON_ONLY ? '  (daemon-only 安裝 → 預設當家)' : ''));
     console.log(`   時鐘：每 ${STEP_MS}ms tick 一次（獨立於 Claude Code）`);
     if (AUTHORITATIVE) {
         console.log(`   ⚠️ 當家模式：寫真 ${STATE_FILE} + heartbeat，statusLine 會退唯讀`);

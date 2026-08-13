@@ -1,7 +1,7 @@
 {
-  "name": "Zephagamon_Ace",
-  "stage": "Super-Ultimate",
-  "power": 200,
+  "name": "Machinedramon",
+  "stage": "Ultimate",
+  "power": 175,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,6 +60,5 @@
       ]
     }
   ],
-  "evolvesTo": [],
-  "_note": "Super-Ultimate。走正規線（Zephagamon → 本體），不設 evolvePower ＝ 繼承進化前的 base+訓練（上限 210）。power=200 為敵方戰力（同 SU 暫定規格）。子彈沿用 Zephagamon。"
+  "evolvesTo": []
 }

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "install-runtime": "node scripts/install.js",
+    "install-runtime:daemon-only": "node scripts/install.js --daemon-only",
   "build-release": "node scripts/build-release.js",
   "publish-release": "node scripts/publish-release.js",
     "uninstall-runtime": "node scripts/uninstall.js",
@@ -17,7 +18,8 @@
     "gen-shared": "node scripts/gen-shared-placeholders.js",
     "gen-bullets": "node scripts/gen-bullet-placeholders.js",
     "gen-shadow": "node scripts/gen-shadow.js",
-    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js"
+    "check-pricing": "node scripts/check-pricing.js",
+    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js"
   },
   "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],
   "author": "kaihsiangchang",

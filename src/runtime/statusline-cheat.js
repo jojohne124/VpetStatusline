@@ -464,9 +464,14 @@ if (args[0] === '--stats') {
         console.log(`  ${label}：` + (keys.length ? '' : '(無)'));
         keys.sort().forEach(k => console.log(`    ${k.padEnd(20)} ${o[k].n}`));
     };
+    const mood = core.getMood(st);
+    const moodLabel = mood > 0 ? '+1 開心（勝率 +5%，走路只演 exprs[0]）'
+                    : mood < 0 ? '-1 不爽（勝率 -5%，走路只演生氣）'
+                    : ' 0 普通（勝率無補正，走路表情各半）';
     console.log(`角色：${st.characterId || '(無)'}`);
     console.log(`  出生       ${fmt(st.birthAt)}`);
     console.log(`  上次進化   ${fmt(st.lastEvolveAt)}`);
+    console.log(`  心情       ${moodLabel}`);
     dump('本階段 stats', st.stats);
     dump('本輪 lifeStats', st.lifeStats);
     process.exit(0);

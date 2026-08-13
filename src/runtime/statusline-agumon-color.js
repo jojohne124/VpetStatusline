@@ -9,7 +9,7 @@ const {
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution, resetStageStats,
     recordAlbumIfChanged,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
-    getCharacterStage, computeInheritedPower, alignWalkPhase,
+    getCharacterStage, computeInheritedPower, alignWalkPhase, reapStalePids,
     buildStatusLines, composeOutput, visLen,
     loadCharacter, loadShared, getSharedFrame, isHighTierStarter,
     renderCells, flipRows, overlayCells, composeSleepScene, composeStatusCard, composeTreeScene, getFacingRows, composeBattleScene, composeEvoScene, composeDropScene, silhouetteArt,
@@ -55,37 +55,16 @@ const _watchdog = setTimeout(() => process.exit(0), 8000);
 // 當共享 map，兩個時間重疊的行程會 read-modify-write 互相覆蓋：B 先讀到（還沒有 A 的）舊快照、
 // A 寫入自己、B 再把舊快照寫回 → A 的登記被抹掉 → A 之後凍結成孤兒也永遠查不到、收不了屍。
 // 目錄列表即名單，天生無競態。
+// 收屍那段（探活 / SIGKILL / 回探確認才刪檔）已抽到 agumon-core 的 reapStalePids()，
+// 讓 daemon 也能共用同一份 —— daemon-only 安裝沒部署本檔，hook 的孤兒得由 daemon 來收。
+// 登記／除名仍留在這裡：core 那支刻意不登記自己（長駐行程一登記就會被當成卡死孤兒殺掉）。
 const PIDS_DIR   = path.join(STATE_DIR, 'pids');
-const REAP_AGE_MS = 20000;   // 活著且登記超過 20 秒 = 卡死（健康 render 1~3 秒早已退出並除名）
 function pidFile(pid) { return path.join(PIDS_DIR, pid + '.pid'); }
 function reapStale() {
     try { fs.mkdirSync(PIDS_DIR, { recursive: true }); } catch(e) {}
     // 先登記自己：單一檔案的整檔寫入，不依賴任何共享狀態
     try { fs.writeFileSync(pidFile(process.pid), String(Date.now())); } catch(e) {}
-    let names = [];
-    try { names = fs.readdirSync(PIDS_DIR); } catch(e) {}
-    const now = Date.now();
-    for (const name of names) {
-        const pid = parseInt(name, 10);
-        if (!pid || pid === process.pid) continue;
-        let ts = 0;
-        try { ts = parseInt(fs.readFileSync(path.join(PIDS_DIR, name), 'utf8'), 10) || 0; } catch(e) { continue; }
-        // 核心不變量：pid 檔只有在「確認行程已死」時才移除；只要還活著就保留，下個 render 重試。
-        // ⚠️ 舊版兩處都「沒確認死亡就 unlink」，正是永久孤兒的真凶：本機記憶體吃緊時，
-        // 對凍結行程送 SIGKILL（TerminateProcess）可能延遲生效甚至當下沒死，舊版卻立刻刪掉 pid 檔
-        // → 行程還活著卻從名單消失 → 之後所有 render 都看不到它 → 永久收不了屍。改為殺完「回探」，
-        // 只有拿到 ESRCH（確認終結）才刪檔，否則留檔重試。探活同理：只有明確 ESRCH 才算死，EPERM
-        // 或任何暫時性錯誤一律當活著（避免記憶體壓力下的暫時錯誤誤刪活孤兒的追蹤檔）。
-        let dead = false;
-        try { process.kill(pid, 0); } catch(e) { dead = (e.code === 'ESRCH'); }   // 訊號 0：只探活
-        if (dead) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} continue; }  // 確認死亡 → 清殘留檔
-        if (now - ts > REAP_AGE_MS) {                                             // 活著又逾時 = 卡死孤兒 → 收屍
-            try { process.kill(pid, 'SIGKILL'); } catch(e) {}
-            let killed = false;
-            try { process.kill(pid, 0); } catch(e) { killed = (e.code === 'ESRCH'); }  // 回探：真的死了嗎
-            if (killed) { try { fs.unlinkSync(pidFile(pid)); } catch(e) {} }      // 確認終結才刪，否則留檔下輪再殺
-        }
-    }
+    reapStalePids(PIDS_DIR, process.pid);
 }
 // 自我除名：正常退出前刪掉自己的 pid 檔，避免 PID 被作業系統回收再指派給別的行程後被誤殺。
 // （死掉行程的殘留檔也會在每次 render 的掃描中被清掉，故「殘留檔存活到 PID 被回收且超過 20 秒」

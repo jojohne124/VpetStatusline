@@ -134,6 +134,7 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
             delete st.inheritedPower; // SU 繼承戰力：換角色即失效，改用新角色 config.power
             delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
             delete st.stats; delete st.lifeStats;   // 隱藏統計：換角色＝新的一輪，兩種範圍都歸零
+            delete st.mood;                         // 心情歸 0
             st.birthAt = Date.now(); st.lastEvolveAt = Date.now();
             st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
             delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
@@ -171,8 +172,10 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
             if (force.petMood === 'refuse') {
                 st._forceRefuse = true;
                 bumpStat(st, 'petRefuse', Date.now());   // 被摸到不爽（本階段）
+                setMood(st, -1);            // 不爽 → 心情直接落底（不是遞減）
             } else {
                 st._forceHappy = true;
+                bumpMood(st, +1);           // 摸摸 → 心情 +1（夾在 +1）
             }
         }
         st.lastPetTriggerTs = force.petTriggerTs;
@@ -255,6 +258,41 @@ function gitBranch(startDir) {
         }
     } catch (_) {}
     return null;
+}
+
+// ── 跨行程收屍（只收屍，不登記自己）────────────────────────────────
+// 掃 pids/：確認已死的清殘留檔；活著卻登記超過 ageMs 的視為「卡死孤兒」→ SIGKILL 後回探，
+// 確認終結才刪檔（沒確認就刪 = 行程還活著卻從名單消失 = 永久收不了屍，這是舊版的真凶）。
+//
+// ⚠️ 這裡刻意「不」登記自己：登記超過 REAP_AGE 還活著正是孤兒的定義，長駐行程（daemon）
+//    一登記就會被別人 SIGKILL。登記／除名留在短命的 statusline 那側自己做。
+//
+// 呼叫者：statusline 每次啟動一次（登記自己後）、daemon 週期性呼叫。
+// daemon 也要跑是因為 daemon-only 安裝根本沒部署 statusline，否則 hook 的孤兒沒人收。
+const REAP_AGE_MS = 20000;   // 活著且登記超過 20 秒 = 卡死（健康 render 1~3 秒早已退出並除名）
+function reapStalePids(pidsDir, selfPid = process.pid, ageMs = REAP_AGE_MS) {
+    let names = [];
+    try { names = fs.readdirSync(pidsDir); } catch (e) { return 0; }
+    const now = Date.now();
+    let reaped = 0;
+    for (const name of names) {
+        const pid = parseInt(name, 10);
+        if (!pid || pid === selfPid) continue;
+        let ts = 0;
+        try { ts = parseInt(fs.readFileSync(path.join(pidsDir, name), 'utf8'), 10) || 0; } catch (e) { continue; }
+        // 探活：只有明確 ESRCH 才算死。EPERM 或任何暫時性錯誤一律當活著
+        // （記憶體壓力下的暫時錯誤若誤判成死亡，會刪掉活孤兒的追蹤檔 → 永遠收不到）。
+        let dead = false;
+        try { process.kill(pid, 0); } catch (e) { dead = (e.code === 'ESRCH'); }
+        if (dead) { try { fs.unlinkSync(path.join(pidsDir, name)); } catch (e) {} continue; }
+        if (now - ts > ageMs) {
+            try { process.kill(pid, 'SIGKILL'); } catch (e) {}
+            let killed = false;
+            try { process.kill(pid, 0); } catch (e) { killed = (e.code === 'ESRCH'); }
+            if (killed) { try { fs.unlinkSync(path.join(pidsDir, name)); } catch (e) {} reaped++; }
+        }
+    }
+    return reaped;
 }
 
 // ── 走路（三角波）────────────────────────────────────────────────
@@ -373,6 +411,37 @@ function getStat(st, key, scope = 'stage') {
     return (e && e.n) || 0;
 }
 
+// ── 心情（隱藏屬性，彩蛋性質的勝率控制）─────────────────────────────
+// 三級：-1 / 0 / +1。不對玩家顯示（vpet stats 查得到），卡片也不顯示。
+//
+//   摸摸        → +1（夾在 +1）
+//   摸到不爽    → 直接 -1（不是 -1 遞減，是一次到底）
+//   戰鬥表演結束 → 歸 0（在 onEnd 的去重 guard 內，多視窗安全）
+//   進化/換角色 → 歸 0（同訓練值、勝率）
+//
+// 影響兩處：
+//   1. 戰鬥勝率 ±5%（走 winProbFromStr 既有的 expBonus 參數；clamp [5%,95%] 照舊套用，
+//      所以已經頂到 95% 時 +1 心情不會有額外效果 —— 這是刻意的，clamp 是保護機制）
+//   2. 走路時 10% 隨機表情：-1 只演生氣、0 照舊各半、+1 只演 exprs[0]
+//
+// 多視窗 race：摸摸只能從 daemon 頁面觸發，而 daemon 頁面在的時候 daemon 一定在跑；
+// 標準啟動器都帶 --authoritative → statusLine 全部退唯讀 → 只有一個消費者，走不到 race。
+// 唯一的縫是「隔離模式 daemon + 多個 Claude 視窗」，最壞後果是 -1 一次跳到 +1，不致命。
+const MOOD_MIN = -1, MOOD_MAX = 1;
+const MOOD_WIN_BONUS_PCT = 5;    // 每級心情的勝率補正（百分點）
+
+function getMood(st) {
+    const m = st && st.mood;
+    return typeof m === 'number' ? Math.max(MOOD_MIN, Math.min(MOOD_MAX, Math.round(m))) : 0;
+}
+function setMood(st, v) {
+    const m = Math.max(MOOD_MIN, Math.min(MOOD_MAX, Math.round(v)));
+    if (m === 0) delete st.mood;   // 0 是預設值，不落地 → state 檔不長胖
+    else         st.mood = m;
+    return m;
+}
+function bumpMood(st, delta) { return setMood(st, getMood(st) + delta); }
+
 // 進化 / 換角色時的「本階段」歸零。statusLine 與 daemon 兩個 commit 點共用，
 // 免得日後只改一邊而分歧（這兩塊本來就是幾乎一樣的複製品）。
 function resetStageStats(st, now) {
@@ -380,6 +449,7 @@ function resetStageStats(st, now) {
     delete st.battleTotalCount; delete st.battleWinCount;
     delete st.lastBattleCountedStartStep; delete st.tagStats;
     delete st.stats;
+    delete st.mood;              // 心情跟著歸 0
     st.lastEvolveAt = now || Date.now();
 }
 
@@ -411,6 +481,10 @@ function evalCondition(cond, ns, st, input, nowSec) {
         const total = st.battleTotalCount || 0;
         const wins  = st.battleWinCount  || 0;
         if (total < (cond.minBattles ?? 0)) return false;
+        // ⚠️ total === 0 要單獨處理：0/0 是 NaN，而 NaN >= 任何數都是 false，
+        //    會讓「pct:0 + minBattles:0」這個本該是 no-op 的寫法變成永遠不過的硬門檻
+        //    （彩蛋線常這樣填佔位，靠別的軸把關）。0 場時勝率視為 0：pct<=0 才算通過。
+        if (total === 0) return (cond.pct ?? 100) <= 0;
         return (wins / total) * 100 >= (cond.pct ?? 100);
     }
 
@@ -683,7 +757,9 @@ function computeWinProb(myId, st, enemyId) {
     const myCap = getTierCap(getCharacterStage(myId));
     const myStr = Math.min(getBasePower(st, myId) + (st.trainingBonus ?? 0), myCap);
     const eStr  = getCharacterPower(enemyId);
-    return winProbFromStr(myStr, eStr);
+    // 心情補正：走既有的 expBonus 參數，clamp [5%,95%] 照舊套用。
+    // PvP 不經過這裡（statusline-cheat 直接呼叫 winProbFromStr 且 expBonus 給 0）→ 心情不影響 PvP。
+    return winProbFromStr(myStr, eStr, getMood(st) * MOOD_WIN_BONUS_PCT);
 }
 
 function _hashSeed(seed) {
@@ -1137,6 +1213,11 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                     }
                 }
                 st.lastBattleEnemy = st.battleEnemy;  // 供 anti-stick 用，避免下場連續同敵
+                // 心情用掉了 → 歸 0。放在表演結束（而非開打）是因為勝負早在 startBattle
+                // 就定案並存進 st.battleWin，這裡歸零不會影響已決定的結果；而且此處在
+                // 上面那個 lastBattleCountedStartStep 去重 guard 的同一個 onEnd 內，
+                // 多視窗只會有一個算得數。強制勝負／PvP 雖然吃不到補正，心情一樣照歸零。
+                setMood(st, 0);
                 cleanupBattle();
                 st.lastStepSeen    = step;
                 alignWalkPhase(st, step, BATTLE_CENTER_COL, 'left');   // 接續 RESULT 的中央位置
@@ -1283,7 +1364,12 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
         st.lastStepSeen = step;
         if (Math.random() < EXPR_CHANCE) {
             st.exprStartStep = step;
-            st.exprIdx       = Math.floor(Math.random() * EXPRS.length);
+            // 心情決定演哪一個表情：-1 只演最後一個（慣例上是 ANGRY）、+1 只演第一個、
+            // 0 維持原本的隨機各半。用 length-1 而非硬寫 1，exprs 長度變了也不會越界。
+            const mood = getMood(st);
+            st.exprIdx = mood < 0 ? EXPRS.length - 1
+                       : mood > 0 ? 0
+                       : Math.floor(Math.random() * EXPRS.length);
             return { kind: 'single', frameIdx: EXPRS[st.exprIdx].frames[0], facing: walk.facing, pos: walk.pos };
         }
     }
@@ -1928,6 +2014,8 @@ module.exports = {
     buildLineageBackward,
     updateEvoHistory,
     computeWinProb,
+    getMood, setMood, bumpMood, MOOD_WIN_BONUS_PCT,
+    reapStalePids, REAP_AGE_MS,
     winProbFromStr,
     seedRand01,
     chooseBattleEnemy,

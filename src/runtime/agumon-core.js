@@ -260,6 +260,41 @@ function gitBranch(startDir) {
     return null;
 }
 
+// ── 跨行程收屍（只收屍，不登記自己）────────────────────────────────
+// 掃 pids/：確認已死的清殘留檔；活著卻登記超過 ageMs 的視為「卡死孤兒」→ SIGKILL 後回探，
+// 確認終結才刪檔（沒確認就刪 = 行程還活著卻從名單消失 = 永久收不了屍，這是舊版的真凶）。
+//
+// ⚠️ 這裡刻意「不」登記自己：登記超過 REAP_AGE 還活著正是孤兒的定義，長駐行程（daemon）
+//    一登記就會被別人 SIGKILL。登記／除名留在短命的 statusline 那側自己做。
+//
+// 呼叫者：statusline 每次啟動一次（登記自己後）、daemon 週期性呼叫。
+// daemon 也要跑是因為 daemon-only 安裝根本沒部署 statusline，否則 hook 的孤兒沒人收。
+const REAP_AGE_MS = 20000;   // 活著且登記超過 20 秒 = 卡死（健康 render 1~3 秒早已退出並除名）
+function reapStalePids(pidsDir, selfPid = process.pid, ageMs = REAP_AGE_MS) {
+    let names = [];
+    try { names = fs.readdirSync(pidsDir); } catch (e) { return 0; }
+    const now = Date.now();
+    let reaped = 0;
+    for (const name of names) {
+        const pid = parseInt(name, 10);
+        if (!pid || pid === selfPid) continue;
+        let ts = 0;
+        try { ts = parseInt(fs.readFileSync(path.join(pidsDir, name), 'utf8'), 10) || 0; } catch (e) { continue; }
+        // 探活：只有明確 ESRCH 才算死。EPERM 或任何暫時性錯誤一律當活著
+        // （記憶體壓力下的暫時錯誤若誤判成死亡，會刪掉活孤兒的追蹤檔 → 永遠收不到）。
+        let dead = false;
+        try { process.kill(pid, 0); } catch (e) { dead = (e.code === 'ESRCH'); }
+        if (dead) { try { fs.unlinkSync(path.join(pidsDir, name)); } catch (e) {} continue; }
+        if (now - ts > ageMs) {
+            try { process.kill(pid, 'SIGKILL'); } catch (e) {}
+            let killed = false;
+            try { process.kill(pid, 0); } catch (e) { killed = (e.code === 'ESRCH'); }
+            if (killed) { try { fs.unlinkSync(path.join(pidsDir, name)); } catch (e) {} reaped++; }
+        }
+    }
+    return reaped;
+}
+
 // ── 走路（三角波）────────────────────────────────────────────────
 function computeWalk(step, offset = 0) {
     const period = MAX_POS * 2;
@@ -1980,6 +2015,7 @@ module.exports = {
     updateEvoHistory,
     computeWinProb,
     getMood, setMood, bumpMood, MOOD_WIN_BONUS_PCT,
+    reapStalePids, REAP_AGE_MS,
     winProbFromStr,
     seedRand01,
     chooseBattleEnemy,

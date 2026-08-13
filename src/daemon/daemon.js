@@ -41,7 +41,13 @@ const {
 
 // 模式：預設「隔離」(寫 daemon-state.json，不接管、不寫 heartbeat) → 純顯示/PoC，跑了也不影響 statusLine。
 //       --authoritative → 「當家」：寫真 color-state.json + 每拍寫 heartbeat，statusLine 偵測到就退唯讀。
-const AUTHORITATIVE = process.argv.includes('--authoritative');
+//
+// daemon-only 安裝（install.js --daemon-only 留下的 DAEMON_ONLY 標記）→ 預設當家。
+// 那種環境根本沒有 statusLine 在跑，隔離模式只會寫進沒人讀的 daemon-state.json，
+// 使用者會看到「pet 完全不動、指令都沒反應」而找不到原因。--isolated 可強制覆寫回隔離。
+const DAEMON_ONLY   = fs.existsSync(path.join(core.INSTALL_ROOT, 'DAEMON_ONLY'));
+const AUTHORITATIVE = process.argv.includes('--isolated') ? false
+                    : (process.argv.includes('--authoritative') || DAEMON_ONLY);
 const STATE_FILE     = path.join(STATE_DIR, AUTHORITATIVE ? 'color-state.json' : 'daemon-state.json');
 const HEARTBEAT_FILE = path.join(STATE_DIR, 'daemon-heartbeat.json');
 const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令；當家時由 daemon 讀
@@ -298,6 +304,14 @@ function doTick() {
 
 doTick();
 setInterval(doTick, STEP_MS);   // ← 獨立時鐘：跟 Claude Code 有沒有呼叫指令無關
+
+// 跨行程收屍：平常是每個新啟動的 statusline 在做，但 daemon-only 安裝根本沒部署
+// statusline-agumon-color.js → hook 若被凍結成孤兒就沒人清。daemon 是常駐的，補上這一輪。
+// 只收屍、不登記自己（長駐行程一登記就會被當成「活著又逾時」的卡死孤兒殺掉）。
+// 兩者都在跑時重複收屍無害：判定準則相同，且只殺「確認卡死」的。
+const REAP_INTERVAL_MS = 30000;
+const PIDS_DIR = path.join(STATE_DIR, 'pids');
+setInterval(() => { try { core.reapStalePids(PIDS_DIR); } catch (e) {} }, REAP_INTERVAL_MS);
 
 // ── UI 指令 → force-char.json（跟 vpet CLI 同一個指令通道）───────────────────
 // 當家時 daemon 自己讀套用；隔離時 statusLine 讀 → UI 等於「圖形版 vpet 指令」，兩模式皆可用。
@@ -601,7 +615,8 @@ const server = http.createServer((req, res) => {
     res.end(HTML);
 });
 server.listen(PORT, () => {
-    console.log(`🥚 agumon daemon 已啟動  [${AUTHORITATIVE ? '當家 authoritative' : '隔離 isolated'}]`);
+    console.log(`🥚 agumon daemon 已啟動  [${AUTHORITATIVE ? '當家 authoritative' : '隔離 isolated'}]`
+        + (DAEMON_ONLY ? '  (daemon-only 安裝 → 預設當家)' : ''));
     console.log(`   時鐘：每 ${STEP_MS}ms tick 一次（獨立於 Claude Code）`);
     if (AUTHORITATIVE) {
         console.log(`   ⚠️ 當家模式：寫真 ${STATE_FILE} + heartbeat，statusLine 會退唯讀`);

@@ -26,6 +26,20 @@
  *   - 自動更新 ~/.claude/settings.json 的 statusLine.command 與
  *     hooks.UserPromptSubmit 路徑（含備份）
  *   - 清除舊版散落在 ~/.claude/ 的 runtime js 與 agumon-assets/
+ *
+ * ── --daemon-only ────────────────────────────────────────────────────────
+ * 給「想用自己的 statusline、pet 只在 daemon 網頁看」的人：不接管 statusLine.command，
+ * 也不部署那兩支 statusline 顯示程式。daemon 本來就有自己的時鐘與 token 源
+ * （token-source 直接讀 ~/.claude/projects 的 JSONL），顯示層完全不依賴 statusLine。
+ *
+ * ⚠️ 但 hooks.UserPromptSubmit 一定要裝，它不是 statusline 的一部分。decideAgumon 靠它：
+ *      訓練值 +1（戰力成長的唯一來源，沒有它進化鏈直接斷）
+ *      自動戰鬥武裝 battleArmHookTs
+ *      ROAR 表演 + lastActivityAt（沒有它角色閒置後會一直睡，只能靠摸摸叫醒）
+ *    所以 daemon-only 只跳過 statusLine，hook 照裝。
+ *
+ * 會在 INSTALL_DIR 留一個 DAEMON_ONLY 標記檔 → daemon 據此預設進當家模式
+ * （沒有 statusLine 在跑，隔離模式寫 daemon-state.json 沒有意義，pet 會不動）。
  */
 const fs   = require('fs');
 const os   = require('os');
@@ -38,14 +52,21 @@ const INSTALL_DIR = path.join(CLAUDE_HOME, 'agumon-statusline');
 const ASSETS_DIR  = path.join(INSTALL_DIR, 'assets');
 const STATE_DIR   = path.join(INSTALL_DIR, 'state');
 
+const DAEMON_ONLY      = process.argv.includes('--daemon-only');
+const DAEMON_ONLY_FLAG = path.join(INSTALL_DIR, 'DAEMON_ONLY');
+
+// statusline 顯示層專屬 —— daemon-only 不需要（daemon 自己 compose 畫面）。
+// 注意 statusline-cheat.js 不在此列：它其實是 vpet 指令通道，只是名字誤導，兩種模式都要。
+const STATUSLINE_ONLY_FILES = ['statusline-agumon-color.js', 'statusline-agumon.js'];
+
 const RUNTIME_FILES = [
     'agumon-core.js',
     'statusline-agumon-color.js',
     'statusline-agumon.js',
-    'statusline-cheat.js',
-    'agumon-hook.js',
-    'doctor.js',            // vpet doctor：檢查/清除 node 孤兒（漏掉會導致 ac doctor 失效）
-];
+    'statusline-cheat.js',   // = vpet 指令通道（非顯示層），daemon-only 也要
+    'agumon-hook.js',        // = 訓練值/自動戰鬥/活動時戳的脈搏，daemon-only 也要
+    'doctor.js',             // vpet doctor：檢查/清除 node 孤兒（漏掉會導致 ac doctor 失效）
+].filter(f => !(DAEMON_ONLY && STATUSLINE_ONLY_FILES.includes(f)));
 
 // 舊版散落在 ~/.claude/ 的檔案 → 新位置
 const LEGACY_RUNTIME_FILES = [
@@ -84,7 +105,25 @@ function installRuntime() {
     for (const fn of RUNTIME_FILES) {
         if (copyFile(path.join(srcDir, fn), path.join(INSTALL_DIR, fn))) ok++;
     }
-    console.log(`  -> ${ok}/${RUNTIME_FILES.length} runtime 檔案已安裝`);
+    console.log(`  -> ${ok}/${RUNTIME_FILES.length} runtime 檔案已安裝`
+        + (DAEMON_ONLY ? `（--daemon-only：略過 ${STATUSLINE_ONLY_FILES.join(' / ')}）` : ''));
+
+    // 模式標記 DAEMON_ONLY：daemon 據此預設當家模式。兩個方向都要處理 ——
+    // 從一般版切 daemon-only 要新增，從 daemon-only 切回一般版要移除（殘留會讓
+    // daemon 在有 statusLine 的環境也硬搶當家，兩邊搶寫同一份 state）。
+    if (DAEMON_ONLY) {
+        fs.writeFileSync(DAEMON_ONLY_FLAG,
+            '此檔存在 = 只裝 daemon、不接管 statusLine。daemon 會預設進當家模式。\n'
+            + '切回一般版：重跑 npm run install-runtime（不加 --daemon-only）即會移除。\n');
+        console.log(`  [mark]   DAEMON_ONLY`);
+        // 切換模式時把顯示層舊檔清掉，免得留著讓人以為 statusLine 還在運作
+        for (const f of STATUSLINE_ONLY_FILES) {
+            const stale = path.join(INSTALL_DIR, f);
+            if (fs.existsSync(stale)) { try { fs.rmSync(stale); console.log(`  [clean]  ${f}`); } catch (e) {} }
+        }
+    } else if (fs.existsSync(DAEMON_ONLY_FLAG)) {
+        try { fs.rmSync(DAEMON_ONLY_FLAG); console.log(`  [clean]  DAEMON_ONLY（切回一般版）`); } catch (e) {}
+    }
 
     // 圖鑑（vpet album）：CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
     // daemon 不需要這樣做 —— 它是由 repo/release 樹的啟動器直接跑的。
@@ -213,10 +252,9 @@ function updateSettings() {
 
     if (!fs.existsSync(settingsPath)) {
         console.warn('  [skip] 找不到 settings.json，請手動建立並貼入：');
-        console.log(JSON.stringify({
-            statusLine: { type: 'command', command: newCmd, refreshInterval: 1 },
-            hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: newHook }] }] },
-        }, null, 2));
+        const sample = { hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: newHook }] }] } };
+        if (!DAEMON_ONLY) sample.statusLine = { type: 'command', command: newCmd, refreshInterval: 1 };
+        console.log(JSON.stringify(sample, null, 2));
         return;
     }
 
@@ -228,16 +266,23 @@ function updateSettings() {
     }
 
     let changed = false;
-    cur.statusLine = cur.statusLine || {};
-    if (cur.statusLine.command !== newCmd) {
-        const old = cur.statusLine.command;
-        cur.statusLine.command = newCmd;
-        cur.statusLine.type    = cur.statusLine.type || 'command';
-        cur.statusLine.refreshInterval = cur.statusLine.refreshInterval || 1;
-        console.log(`  [update] statusLine.command:`);
-        console.log(`           舊: ${old}`);
-        console.log(`           新: ${newCmd}`);
-        changed = true;
+    if (DAEMON_ONLY) {
+        // 完全不碰 statusLine —— 使用者自己的 statusline 設定原封不動保留。
+        const mine = cur.statusLine && cur.statusLine.command;
+        console.log('  [skip]   statusLine（--daemon-only）'
+            + (mine ? `，保留你現有的：${mine}` : '，settings 目前也沒設'));
+    } else {
+        cur.statusLine = cur.statusLine || {};
+        if (cur.statusLine.command !== newCmd) {
+            const old = cur.statusLine.command;
+            cur.statusLine.command = newCmd;
+            cur.statusLine.type    = cur.statusLine.type || 'command';
+            cur.statusLine.refreshInterval = cur.statusLine.refreshInterval || 1;
+            console.log(`  [update] statusLine.command:`);
+            console.log(`           舊: ${old}`);
+            console.log(`           新: ${newCmd}`);
+            changed = true;
+        }
     }
 
     cur.hooks = cur.hooks || {};

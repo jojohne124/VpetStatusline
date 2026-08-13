@@ -77,7 +77,12 @@ for (const f of ['install.js', 'uninstall.js'])
 //   .command/.sh 由 isShell() 強制 LF
 for (const f of ['install.bat', 'install.command',
                  'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
-                 'album.bat', 'album.sh', 'album.command'])
+                 'album.bat', 'album.sh', 'album.command',
+                 // 只裝 daemon（不接管 statusLine）+ 解除安裝，兩者都要出貨：
+                 // 前者是「想用自己 statusline」的人的唯一入口，後者沒有的話
+                 // 非開發者只能手動編 settings.json。
+                 'install-daemon-only.bat', 'install-daemon-only.sh', 'install-daemon-only.command',
+                 'uninstall.bat', 'uninstall.sh', 'uninstall.command'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
 
 // tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）

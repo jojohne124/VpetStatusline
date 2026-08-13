@@ -26,7 +26,7 @@ const INSTALLED_CORE = path.join(os.homedir(), '.claude', 'agumon-statusline', '
 try { core = require(INSTALLED_CORE); }
 catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js')); }
 
-const { loadAlbum, ALBUM_FILE, getCharacterStage, silhouetteArt, loadCharacter } = core;
+const { loadAlbum, ALBUM_FILE, getCharacterStage, silhouetteArt, loadCharacter, getRosterSet } = core;
 const ASSETS_DIR = path.join(core.INSTALL_ROOT, 'assets');
 const PORT = parseInt(process.env.AGUMON_ALBUM_PORT || '3004', 10);
 const HTML_FILE = path.join(__dirname, 'album.html');
@@ -37,12 +37,21 @@ const STAGE_ORDER = ['Child', 'Adult', 'Perfect', 'Ultimate', SU_STAGE];
 function readJSON(f) { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return null; } }
 
 // 全庫的 id → {stage, name, evolvesTo[]}
+//
+// ⚠️ 只收「已實裝」＝ roster 成員。assets/ 底下比 roster 多出十幾個資料夾：
+//    還沒接進化鏈的新角色、以及 shadow（黑影 fallback）、majaja（PvP 練習對手）
+//    這種本來就不是玩家角色的。它們算進分母會讓「已收錄 X / Y」的 Y 灌水，
+//    而且 checkEvolution 本來就用同一個 roster 當 gate（agumon-core.js:546）
+//    跳過非 roster 目標 —— 那些節點玩家永遠到不了，畫成 ??? 只是誤導。
+//    讀不到 roster 時 fail-open（不過濾），與 core 的 getRosterSet 一致。
 function loadAll() {
     const out = {};
+    const roster = getRosterSet();
     let dirs = [];
     try { dirs = fs.readdirSync(ASSETS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
     catch (e) { return out; }
     for (const id of dirs) {
+        if (roster && !roster.has(id)) continue;
         const cfg = readJSON(path.join(ASSETS_DIR, id, 'config.json'));
         if (!cfg) continue;
         out[id] = {
@@ -130,7 +139,10 @@ function buildGraph() {
         };
     });
 
-    return { nodes, edges, total: Object.keys(all).length, owned: raised.size };
+    // owned 只算「已實裝且養過」的 —— 與 total 同一個母體，否則萬一 album.json 裡有
+    // 已從 roster 移除的舊角色，會出現 owned > total 這種看起來壞掉的數字。
+    const ownedCount = [...raised].filter(id => all[id]).length;
+    return { nodes, edges, total: Object.keys(all).length, owned: ownedCount };
 }
 
 function json(res, code, obj) {

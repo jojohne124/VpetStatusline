@@ -66,30 +66,35 @@ const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server']
 //   摸摸 → 直接點角色就好，按鈕多餘
 //   hide/show/pin/unpin → statusline 顯示專屬，daemon 沒有狀態列可隱藏／釘住，不做
 // confirm：按下去要先二次確認（重抽會直接換掉現在的桌寵）
+// dev: 只在非 release 露出。
+// ⚠️ 這是「UI 露不露臉」，跟下面伺服器端的 DEV_ONLY 是兩回事 —— sleep/wake 在 CLI
+//    的 release 版是開放的（vpet help 的玩家區就有），所以不能進 DEV_ONLY，否則
+//    會變成「終端機打得動、網頁 POST 卻被擋」。這裡只是不把按鈕擺出來。
 const UI_BUTTONS = [
-    ['card',      '🪪 卡片'],
-    ['tree',      '🌳 進化樹'],
-    ['sleep',     '😴 睡覺'],
-    ['wake',      '☀ 喚醒'],
-    ['freeze',    '🧊 凍結進化'],
-    ['unfreeze',  '🔥 解除凍結'],
-    ['battleOn',  '⚔ 自動戰鬥開'],
-    ['battleOff', '🛡 自動戰鬥關'],
-    ['reset',     '🎲 重抽', { confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' }],
-    ['album',     '📖 圖鑑'],
-    ['doctor',    '🩺 doctor'],
+    ['card',   '🪪 卡片'],
+    ['tree',   '🌳 進化樹'],
+    ['album',  '📖 圖鑑'],
+    ['sleep',  '😴 睡覺', { dev: true }],
+    ['wake',   '☀ 喚醒', { dev: true }],
 ];
 
-// 需要填參數的指令 → 摺疊在「進階」區，避免主畫面被塞爆。
-//   fields: 輸入框；dev: 開發限定（release 不露出、伺服器端也擋）
+// 進階摺疊區：不常用的開關 + 需要填參數的指令。避免主畫面被塞爆。
+//   buttons: 同一列多顆鈕（開/關這種成對的開關）
+//   fields : 輸入框；沒有欄位就只有一顆「執行」
+//   dev    : 開發限定（release 不露出；若同時列在 DEV_ONLY，伺服器端也會擋）
 const UI_FORMS = [
-    { action: 'pvp',        label: '👻 幽靈對戰',   fields: [['name', '對手名牌（留空＝隨機）']] },
-    { action: 'code',       label: '🏷 名牌',       fields: [['name', '新名牌（留空＝查看目前）']] },
-    { action: 'pvp-setup',  label: '🔧 PvP 設定',   fields: [['url', 'Worker URL'], ['key', 'API key'], ['name', '名牌（可留空）']] },
-    { action: 'switch',     label: '🔀 切換角色',   fields: [['name', '角色名或編號']], dev: true },
-    { action: 'evolve',     label: '✨ 立即進化',   fields: [['name', '進化目標角色名']], dev: true },
-    { action: 'battle',     label: '⚔ 指定戰鬥',   fields: [['enemy', '敵人（留空＝隨機）'], ['result', 'win / lose（留空＝依機率）']], dev: true },
-    { action: 'stats',      label: '📊 隱藏統計',   fields: [], dev: true },
+    { label: '🎲 重抽桌寵', action: 'reset', fields: [],
+      confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
+    { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
+    { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
+    { label: '🩺 doctor',   action: 'doctor',    fields: [] },
+    { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
+    { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
+    { label: '🔧 PvP 設定', action: 'pvp-setup', fields: [['url', 'Worker URL'], ['key', 'API key'], ['name', '名牌（可留空）']] },
+    { label: '🔀 切換角色', action: 'switch',    fields: [['name', '角色名或編號']], dev: true },
+    { label: '✨ 立即進化', action: 'evolve',    fields: [['name', '進化目標角色名']], dev: true },
+    { label: '⚔ 指定戰鬥', action: 'battle',    fields: [['enemy', '敵人（留空＝隨機）'], ['result', 'win / lose（留空＝依機率）']], dev: true },
+    { label: '📊 隱藏統計', action: 'stats',     fields: [], dev: true },
 ];
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 const STEP_MS        = 1000;
@@ -467,7 +472,13 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      用 min-width/min-height 釘住一般表演的尺寸（52×8 = 走路／卡片／戰鬥），
      canvas 維持原生大小置中；只有進化樹（35~92×9）需要時才把底盤撐寬。
      不用固定 width：那會讓一般表演永遠佔著五格進化樹的寬度，版面太空。 */
-  #stage{min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;max-width:100%;
+  /* width:fit-content 是關鍵 —— #stage 是 block，預設會撐滿 #petbox 的內容寬，
+     而 #petbox 是 #wrap（flex + wrap）的項目，可用寬度隨視窗變動 → 舞台跟著變寬變窄，
+     底圖是 center/cover，寬度一動就重新裁切，看起來就是「拉視窗背景會微微變」。
+     改成 fit-content 後舞台只跟內容走：一般表演固定 min-width，只有進化樹才撐寬。
+     也刻意不留 max-width:100% —— 那會在窄視窗把 canvas 縮小，地平線又會對不上
+     （就是先前睡覺角色浮起來那個 bug）。窄到放不下就由 #petbox 的 overflow:hidden 裁掉。 */
+  #stage{width:fit-content;min-width:${BASE_COLS * CW}px;min-height:${BASE_ROWS * CH}px;
          /* 上下各留 ${PAD_DOTS} dot（1 dot = 半格 = ${CH / 2}px）。用 padding 而不是墊高 min-height，
             這樣進化樹那種比較高的場景也一樣有留白，不會頂到邊。底圖會鋪滿含 padding 的範圍。 */
          padding:${PAD_DOTS * (CH / 2)}px 0;
@@ -519,17 +530,18 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="wrap">
   <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
     <div id="controls">
-      ${UI_BUTTONS.filter(([c]) => !(IS_RELEASE && DEV_ONLY.has(c)))
-                  .map(([c, label, o]) => `<button data-cmd="${c}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}</button>`)
+      ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
+                  .map(([c, label, o]) => `<button data-cmd="${c}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
     </div>
     <div id="cmdmsg"></div>
-    <details id="adv"><summary>⚙ 進階指令（需要填參數）</summary>
+    <details id="adv"><summary>⚙ 進階指令</summary>
       ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
-                .map(f => `<div class="form" data-cmd="${f.action}">
+                .map(f => `<div class="form"${f.action ? ` data-cmd="${f.action}"` : ''}>
         <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
-        ${f.fields.map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
-        <button>執行</button>
+        ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
+        ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
+                    : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
       </div>`).join('\n      ')}
     </details>
     <div id="cmdout"></div></div>
@@ -684,15 +696,22 @@ document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('cli
   if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
   sendCmd(b.dataset.cmd);
 }));
-// 進階區：把該列的輸入框收成 {欄位:值} 一起送出
+// 進階區：把該列的輸入框收成 {欄位:值} 一起送出。
+// 一列可以有多顆鈕（開/關成對的開關）→ 動作優先取按鈕自己的 data-cmd，沒有才用整列的。
 document.querySelectorAll('#adv .form').forEach(row=>{
-  const send=()=>{
+  const collect=()=>{
     const args={};
     row.querySelectorAll('input').forEach(i=>{ if(i.value.trim()) args[i.dataset.f]=i.value.trim(); });
-    sendCmd(row.dataset.cmd,args);
+    return args;
   };
-  row.querySelector('button').addEventListener('click',send);
-  row.querySelectorAll('input').forEach(i=>i.addEventListener('keydown',e=>{ if(e.key==='Enter')send(); }));
+  row.querySelectorAll('button').forEach(b=>
+    b.addEventListener('click',()=>{
+      const c=b.dataset.confirm;
+      if(c && !confirm(c)) return;    // 破壞性操作（重抽）先問一次
+      sendCmd(b.dataset.cmd||row.dataset.cmd,collect());
+    }));
+  row.querySelectorAll('input').forEach(i=>
+    i.addEventListener('keydown',e=>{ if(e.key==='Enter')sendCmd(row.dataset.cmd,collect()); }));
 });
 document.getElementById('pet').addEventListener('click',()=>sendCmd('pet'));   // 點角色＝摸摸（連戳會生氣）
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);

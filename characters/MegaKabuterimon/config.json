@@ -74,6 +74,20 @@
           "minBattles": 12
         }
       ]
+    },
+    {
+      "character": "ancientbeatmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 70,
+          "minBattles": 12
+        }
+      ]
     }
   ]
 }

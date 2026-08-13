@@ -74,6 +74,20 @@
           "minBattles": 12
         }
       ]
+    },
+    {
+      "character": "bloomlordmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
     }
   ]
 }

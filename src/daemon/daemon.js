@@ -317,6 +317,10 @@ function doTick() {
                 activeSession: usage.activeSession,
                 activeCostUSD: usage.activeSessionUsage ? usage.activeSessionUsage.costUSD : 0,
                 totalCostUSD:  usage.totals.costUSD,
+                // 各來源小計（Claude Code / Codex…）。totals 是合計 —— 桌寵的「花費」
+                // 語意是「你在所有 AI 上燒了多少」，面板要能看出是誰貢獻的。
+                bySource: Object.fromEntries(
+                    Object.entries(usage.bySource || {}).map(([k, b]) => [k, b.costUSD])),
                 burn10mTokens: usage.burn10m.tokens,
                 burn10mCostUSD: usage.burn10m.costUSD,
                 lastActivityAgoSec: usage.lastActivityAgoSec,
@@ -556,7 +560,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
     <div class="k">── JSONL token 資料源 ──</div>
     <div><span class="k">活躍 session：</span><span class="v" id="asess">–</span></div>
     <div><span class="k">本 session cost：</span><span class="v" id="acost">–</span></div>
-    <div><span class="k">全域 cost：</span><span class="v" id="tcost">–</span></div>
+    <div><span class="k">全域 cost（所有 AI）：</span><span class="v" id="tcost">–</span></div>
+    <div class="k" id="bysrc" style="padding-left:12px"></div>
     <div><span class="k">近 10m burn：</span><span class="v" id="burn">–</span></div>
     <div><span class="k">最近活躍：</span><span class="v" id="lastact">–</span></div>
     <div><span class="k">掃描：</span><span class="v" id="scan">–</span></div>
@@ -658,6 +663,9 @@ async function poll(){
     document.getElementById('asess').textContent=(u.activeSession||'–').slice(0,8);
     document.getElementById('acost').textContent='$'+(u.activeCostUSD||0).toFixed(4);
     document.getElementById('tcost').textContent='$'+(u.totalCostUSD||0).toFixed(2);
+    const bs=u.bySource||{};
+    document.getElementById('bysrc').textContent=
+      Object.keys(bs).length ? Object.entries(bs).map(([k,v])=>k+' $'+v.toFixed(2)).join('　') : '';
     document.getElementById('burn').textContent=(u.burn10mTokens||0).toLocaleString()+' tok / $'+(u.burn10mCostUSD||0).toFixed(4);
     document.getElementById('lastact').textContent=(u.lastActivityAgoSec==null?'?':u.lastActivityAgoSec+'s 前');
     document.getElementById('scan').textContent=(u.scannedFiles||0)+' 檔 / '+(u.uniqueMessages||0).toLocaleString()+' unique msg';

@@ -2,6 +2,11 @@
 /*
  * bg_editor_server.js — daemon 舞台底圖編輯器（port 3002）。
  *
+ * ⚠️ 這是「玩家功能」不是開發工具，所以住在 src/bgedit/ 而不是 src/editor/
+ *    —— build-release 會排除整個 src/editor，放錯地方 release 使用者就沒背景可換。
+ *    判準：它寫的是 ~/.claude/agumon-statusline/bg.png（使用者自己的檔），
+ *    不像進化路線／CutIn／點陣編輯器是改 repo 資產的創作工具。
+ *
  * 為什麼影像處理全放在瀏覽器：
  *   預覽必須「所見即所得」。若預覽用 canvas、存檔用 sharp，兩邊的模糊/取樣演算法
  *   不一樣，調好的東西存出來會走鐘。所以瀏覽器直接把成品 canvas 轉成 PNG 送過來，
@@ -24,16 +29,21 @@ const BG_FILE     = path.join(INSTALL_DIR, 'bg.png');
 
 const HTML_FILE = path.join(__dirname, 'bg_editor.html');
 
-// 角色資產優先讀已安裝的（＝daemon 實際顯示的那份），沒有再退回 repo
+// 角色資產優先讀已安裝的（＝daemon 實際顯示的那份），沒有再退回 repo。
+// ⚠️ CHARS_ROOT 只有從 repo/release 樹跑才存在：部署到 INSTALL_DIR/bgedit/ 之後
+//    __dirname/../.. 會是 ~/.claude/，底下沒有 characters/。readdirSync 會直接拋，
+//    所以要包 try —— 已安裝的資產一定在，這個 fallback 本來就只是開發時的方便。
 function charDir(id) {
     const a = path.join(ASSETS_DIR, id);
     if (fs.existsSync(path.join(a, 'art.json'))) return a;
-    for (const d of fs.readdirSync(CHARS_ROOT, { withFileTypes: true })) {
-        if (d.isDirectory() && d.name.toLowerCase() === id.toLowerCase()) {
-            const r = path.join(CHARS_ROOT, d.name);
-            if (fs.existsSync(path.join(r, 'art.json'))) return r;
+    try {
+        for (const d of fs.readdirSync(CHARS_ROOT, { withFileTypes: true })) {
+            if (d.isDirectory() && d.name.toLowerCase() === id.toLowerCase()) {
+                const r = path.join(CHARS_ROOT, d.name);
+                if (fs.existsSync(path.join(r, 'art.json'))) return r;
+            }
         }
-    }
+    } catch (e) {}
     return null;
 }
 

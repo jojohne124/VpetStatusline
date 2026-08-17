@@ -87,6 +87,7 @@ const UI_FORMS = [
       confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
     { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
     { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
+    { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
     { label: '🩺 doctor',   action: 'doctor',    fields: [] },
     { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
     { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
@@ -413,6 +414,7 @@ const CLI_TIMEOUT_MS = 15000;   // doctor 掃行程可能久一點；卡住就�
 const CLI_ACTIONS = {
     reset:       ()  => ['reset'],
     album:       ()  => ['album'],
+    bg:          ()  => ['bg'],        // 舞台底圖編輯器（另開頁面，寫的是使用者自己的 bg.png）
     doctor:      ()  => ['doctor', '--check'],   // 只診斷不清，避免網頁一按就殺行程
     stats:       ()  => ['stats'],
     pvp:         (a) => a.name ? ['pvp', a.name] : ['pvp'],

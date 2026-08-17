@@ -28,4 +28,4 @@ fi
 
 echo "[bg-editor] 啟動中..."
 echo "[bg-editor] 網址：http://localhost:3002   結束請按 Ctrl+C"
-node src/editor/bg_editor_server.js
+node src/bgedit/bg_editor_server.js

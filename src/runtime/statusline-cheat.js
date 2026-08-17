@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
@@ -49,6 +49,7 @@ function printHelp() {
     console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet album                  開啟圖鑑（瀏覽器）');
+    console.log('  vpet bg                     設定獨立視窗的舞台底圖（瀏覽器）');
     console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
     console.log('  vpet pvp-setup <url> <key> [名牌]  一鍵設定 PvP（首次用這個）');
     console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名；配不到真人派固定對手）');
@@ -72,30 +73,38 @@ if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') { printHelp(
 // 無參數：印用法（視為未給指令，exit 1）
 if (!args.length) { printHelp(); process.exit(1); }
 
-// album：開圖鑑。玩家功能，放在 release gate 之前 → release 也能用。
+// 玩家用的獨立頁面（圖鑑 / 底圖編輯器）：起一個 detached server 再開瀏覽器。
 // server 以 detached 方式起，指令本身立刻結束（不佔住終端機）；已經在跑就直接開瀏覽器。
-if (args[0] === '--album') {
+// 兩者流程一模一樣，只差目錄與埠號 → 抽成一張表，日後再加頁面只要多一行。
+// 放在 release gate 之前 → 這些是玩家功能，release 版一樣要能用。
+const PLAYER_PAGES = {
+    '--album': { dir: 'album',  file: 'album_server.js',     port: process.env.AGUMON_ALBUM_PORT || '3004',
+                 probe: '/data', label: '📖 圖鑑' },
+    '--bg':    { dir: 'bgedit', file: 'bg_editor_server.js', port: process.env.AGUMON_BG_PORT || '3002',
+                 probe: '/current', label: '🖼 底圖編輯器' },
+};
+if (PLAYER_PAGES[args[0]]) {
+    const cfg = PLAYER_PAGES[args[0]];
     const { spawn } = require('child_process');
-    const PORT = process.env.AGUMON_ALBUM_PORT || '3004';
-    const url  = 'http://localhost:' + PORT;
-    // server 在部署樹是 <INSTALL_ROOT>/../src/album/，在 repo 是 src/album/；兩種都試
+    const url = 'http://localhost:' + cfg.port;
+    // server 在部署樹是 <INSTALL_ROOT>/<dir>/，在 repo/release 樹是 src/<dir>/；兩種都試
     const cands = [
-        path.join(INSTALL_ROOT, 'album', 'album_server.js'),        // 已部署（install.js 放的）
-        path.join(__dirname, '..', 'album', 'album_server.js'),     // 直接從 repo/release 樹跑
+        path.join(INSTALL_ROOT, cfg.dir, cfg.file),         // 已部署（install.js 放的）
+        path.join(__dirname, '..', cfg.dir, cfg.file),      // 直接從 repo/release 樹跑
     ];
     const server = cands.find(p2 => fs.existsSync(p2));
-    if (!server) { console.log('找不到圖鑑 server（src/album/album_server.js）'); process.exit(1); }
+    if (!server) { console.log(`找不到 server（src/${cfg.dir}/${cfg.file}）`); process.exit(1); }
     const open = () => {
         const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
                   : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
         try { spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' }).unref(); } catch (e) {}
     };
     // 先探一下：已經起來就別重複啟動（重複會 EADDRINUSE，然後靜默失敗）
-    require('http').get(url + '/data', r => { r.resume(); console.log('📖 圖鑑已在執行 → ' + url); open(); })
+    require('http').get(url + cfg.probe, r => { r.resume(); console.log(`${cfg.label}已在執行 → ${url}`); open(); })
         .on('error', () => {
             const ch = spawn(process.execPath, [server], { detached: true, stdio: 'ignore' });
             ch.unref();
-            console.log('📖 圖鑑已啟動 → ' + url);
+            console.log(`${cfg.label}已啟動 → ${url}`);
             setTimeout(open, 800);   // 等 server listen 再開瀏覽器
         });
     return;

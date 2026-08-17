@@ -33,7 +33,7 @@ echo [bg-editor] starting...
 echo [bg-editor] URL: http://localhost:3002   (Ctrl+C to stop)
 echo.
 
-node src/editor/bg_editor_server.js
+node src/bgedit/bg_editor_server.js
 set "RC=%errorlevel%"
 
 echo.

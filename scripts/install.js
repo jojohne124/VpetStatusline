@@ -55,6 +55,10 @@ const STATE_DIR   = path.join(INSTALL_DIR, 'state');
 const DAEMON_ONLY      = process.argv.includes('--daemon-only');
 const DAEMON_ONLY_FLAG = path.join(INSTALL_DIR, 'DAEMON_ONLY');
 
+// 玩家用的獨立頁面（src/<name>/ 底下一個 server + 一個 html）。
+// 刻意不放 src/editor/ —— 那整個資料夾會被 build-release 排除，放錯地方 release 就沒有。
+const PLAYER_PAGES = ['album', 'bgedit'];
+
 // statusline 顯示層專屬 —— daemon-only 不需要（daemon 自己 compose 畫面）。
 // 注意 statusline-cheat.js 不在此列：它其實是 vpet 指令通道，只是名字誤導，兩種模式都要。
 const STATUSLINE_ONLY_FILES = ['statusline-agumon-color.js', 'statusline-agumon.js'];
@@ -125,13 +129,16 @@ function installRuntime() {
         try { fs.rmSync(DAEMON_ONLY_FLAG); console.log(`  [clean]  DAEMON_ONLY（切回一般版）`); } catch (e) {}
     }
 
-    // 圖鑑（vpet album）：CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
+    // 玩家功能的獨立頁面（圖鑑 vpet album、底圖編輯器 vpet bg）：
+    // CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
     // daemon 不需要這樣做 —— 它是由 repo/release 樹的啟動器直接跑的。
-    const albumSrc = path.join(REPO_ROOT, 'src', 'album');
-    if (fs.existsSync(albumSrc)) {
-        const dst = path.join(INSTALL_DIR, 'album');
+    // 新增這類頁面時只要加進下面這張表，install 與 build-release 兩邊都會帶到。
+    for (const sub of PLAYER_PAGES) {
+        const src2 = path.join(REPO_ROOT, 'src', sub);
+        if (!fs.existsSync(src2)) continue;
+        const dst = path.join(INSTALL_DIR, sub);
         fs.mkdirSync(dst, { recursive: true });
-        for (const f of fs.readdirSync(albumSrc)) copyFile(path.join(albumSrc, f), path.join(dst, f), 'album');
+        for (const f of fs.readdirSync(src2)) copyFile(path.join(src2, f), path.join(dst, f), sub);
     }
     // release 版標記：repo 根有 RELEASE 就部署到 INSTALL_DIR，讓 statusline-cheat 停用開發指令。
     // main（開發）沒有此檔 → 不部署（開發指令全開）。

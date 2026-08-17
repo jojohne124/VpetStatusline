@@ -62,11 +62,15 @@ if (fs.existsSync(daemonDir))
     for (const f of fs.readdirSync(daemonDir))
         if (f.endsWith('.js')) copyRel(path.join('src', 'daemon', f));
 
-// 圖鑑（vpet album）：玩家功能，必須出貨。放 src/album/ 而非 src/editor/ 就是為了這個
-// —— src/editor 整個被排除，放錯地方 release 使用者就沒圖鑑可看。
-const albumDir = path.join(REPO, 'src', 'album');
-if (fs.existsSync(albumDir))
-    for (const f of fs.readdirSync(albumDir)) copyRel(path.join('src', 'album', f));
+// 玩家用的獨立頁面（圖鑑 vpet album、底圖編輯器 vpet bg）：都是玩家功能，必須出貨。
+// 放 src/<name>/ 而非 src/editor/ 就是為了這個 —— src/editor 整個被排除，
+// 放錯地方 release 使用者就沒得用。判準是「改的是使用者的檔還是 repo 資產」：
+// 底圖寫 ~/.claude/agumon-statusline/bg.png（使用者的），所以是玩家功能；
+// 進化路線／CutIn／點陣編輯器改的是 repo 資產，維持 dev-only。
+for (const sub of ['album', 'bgedit']) {
+    const d = path.join(REPO, 'src', sub);
+    if (fs.existsSync(d)) for (const f of fs.readdirSync(d)) copyRel(path.join('src', sub, f));
+}
 
 // 只留 install / uninstall
 for (const f of ['install.js', 'uninstall.js'])
@@ -78,6 +82,8 @@ for (const f of ['install.js', 'uninstall.js'])
 for (const f of ['install.bat', 'install.command',
                  'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
                  'album.bat', 'album.sh', 'album.command',
+                 // 底圖編輯器：玩家功能（改的是使用者自己的 bg.png），要出貨
+                 'bg-editor.bat', 'bg-editor.sh', 'bg-editor.command',
                  // 只裝 daemon（不接管 statusLine）+ 解除安裝，兩者都要出貨：
                  // 前者是「想用自己 statusline」的人的唯一入口，後者沒有的話
                  // 非開發者只能手動編 settings.json。

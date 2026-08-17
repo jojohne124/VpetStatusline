@@ -2015,7 +2015,6 @@ module.exports = {
     updateEvoHistory,
     computeWinProb,
     getMood, setMood, bumpMood, MOOD_WIN_BONUS_PCT,
-    getRosterSet,
     reapStalePids, REAP_AGE_MS,
     winProbFromStr,
     seedRand01,

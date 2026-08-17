@@ -13,10 +13,17 @@
   #view.drag{cursor:grabbing}
   #world{position:absolute;transform-origin:0 0}
   #edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
-  .node{position:absolute;text-align:center;cursor:pointer;user-select:none}
+  /* 寬度釘死＝canvas 66px（64 + 左右框線）。不能讓名字把節點撐寬 ——
+     .node 是絕對定位、內容置中，一撐寬 canvas 就會往右位移，連線的錨點（見 layout()
+     的 x1/x2 是以 canvas 位置算的）就對不上了。名字改用負 margin 往兩側溢出。 */
+  .node{position:absolute;width:66px;text-align:center;cursor:pointer;user-select:none}
   .node canvas{image-rendering:pixelated;display:block;border-radius:5px;background:#161b22;border:1px solid #30363d}
   .node.own canvas{border-color:#3fb950}
-  .node .nm{font-size:11px;margin-top:3px;color:#8b949e;max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 名字完整顯示，不截斷。66 + 31*2 = 128px < COL_W(140)，左右各留 6px 不會黏到隔壁欄。
+     等寬字 11px 約 6.05px/字，最長的 HerculesKabuterimon（19 字）約 115px，單行放得下；
+     真的更長就靠 overflow-wrap 折成兩行（ROW_H 已預留高度）。 */
+  .node .nm{font-size:11px;line-height:1.2;margin:3px -31px 0;color:#8b949e;
+            white-space:normal;overflow-wrap:anywhere}
   .node.own .nm{color:#e6edf3}
   .node:hover canvas{border-color:#58a6ff}
   /* CutIn 彈窗 */
@@ -40,7 +47,7 @@
 
 <script>
 const CELL=4;                 // idle 縮圖：1 邏輯像素 = 4x4
-const COL_W=140, ROW_H=104;   // 節點間距
+const COL_W=140, ROW_H=112;   // 節點間距（ROW_H 含兩行名字的空間：canvas 66 + 名字最多 24）
 const $=id=>document.getElementById(id);
 const view=$('view'), world=$('world'), edges=$('edges');
 let DATA=null, frame=0, cvs=[];

@@ -1,7 +1,7 @@
 {
   "name": "Megadramon",
   "stage": "Perfect",
-  "power": 108,
+  "power": 110,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "machinedramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 70,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
 }

@@ -25,13 +25,20 @@ if errorlevel 1 (
 
 REM Warn if the installed statusLine is not yet the daemon-aware (gated) version,
 REM otherwise the old statusLine and this daemon would both write state (race).
-findstr /c:"daemonIsAuthoritative" "%USERPROFILE%\.claude\agumon-statusline\statusline-agumon-color.js" >nul 2>&1
+REM Only check when the file is actually there: a --daemon-only install does not
+REM deploy the statusLine at all, and findstr on a missing file also returns
+REM errorlevel 1 -> those users would get a warning telling them to fix
+REM something that is absent on purpose. (.sh and the tray script already guard.)
+set "SL=%USERPROFILE%\.claude\agumon-statusline\statusline-agumon-color.js"
+if not exist "%SL%" goto :skipslcheck
+findstr /c:"daemonIsAuthoritative" "%SL%" >nul 2>&1
 if errorlevel 1 (
   echo [WARN] Installed statusLine is not the daemon-aware version yet.
   echo        Until you deploy it, the statusLine may fight the daemon for state.
   echo        Deploy first with:  vpet install   ^(or npm run install-runtime in the repo^)
   echo.
 )
+:skipslcheck
 
 echo Starting agumon standalone on http://localhost:%PORT%
 echo Close this window to stop.

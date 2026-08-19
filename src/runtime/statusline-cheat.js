@@ -66,6 +66,36 @@ function printHelp() {
         console.log('  vpet pvp-server <url> [key] 只設後端');
         console.log('  vpet pin / unpin            釘住 / 解除 IDLE 對照');
     }
+    printInstallInfo();
+}
+
+// help 結尾的「指路」區塊。存在的理由：部署目錄（~/.claude/agumon-statusline/）裡
+// 沒有 GUIDE 也沒有 scripts/，所以「怎麼改安裝模式 / 怎麼解除安裝」這類問題，
+// 從 vpet 這一側是查不到答案的 —— 使用者多半也不在當初 clone 的資料夾裡。
+// 這幾行把「目前是哪個模式」「指引在哪個檔」「切換指令長怎樣」一次講完，
+// 讓 help 成為自足的入口，而不是查完仍要靠猜。
+function printInstallInfo() {
+    const daemonOnly = fs.existsSync(path.join(INSTALL_ROOT, 'DAEMON_ONLY'));
+    console.log('');
+    console.log('目前安裝模式：' + (daemonOnly
+        ? '只用獨立視窗（daemon-only，未接管 statusLine）'
+        : '狀態列 + 獨立視窗'));
+
+    let repo = null;
+    try { repo = fs.readFileSync(path.join(INSTALL_ROOT, 'REPO_PATH'), 'utf8').trim(); } catch (e) {}
+    if (!repo || !fs.existsSync(repo)) {
+        // 裝完之後 clone 被刪 / 搬走，或是這份 vpet 裝於此功能之前
+        console.log('  安裝指引：找不到當初 clone 的資料夾' + (repo ? `（${repo} 已不存在）` : '')
+            + '，請回到該資料夾看 GUIDE.md／README.md。');
+        return;
+    }
+    // repo 樹的使用者指南是 GUIDE.md（README.md 是開發文件）；
+    // release 樹只有 README.md（build 時由 GUIDE.md 複製過去）。
+    const guide = ['GUIDE.md', 'README.md'].map(f => path.join(repo, f)).find(f2 => fs.existsSync(f2));
+    console.log('  安裝指引（含模式切換 / 解除安裝 / 疑難排解）：' + (guide || repo));
+    console.log('  切換模式（在 ' + repo + ' 執行）：');
+    console.log('    node scripts/install.js --daemon-only    → 只用獨立視窗');
+    console.log('    node scripts/install.js                  → 狀態列 + 獨立視窗');
 }
 
 // 顯式 help：vpet help / --help / -h（成功離開 exit 0）

@@ -129,6 +129,18 @@ function installRuntime() {
         try { fs.rmSync(DAEMON_ONLY_FLAG); console.log(`  [clean]  DAEMON_ONLY（切回一般版）`); } catch (e) {}
     }
 
+    // REPO_PATH 指標檔：記下這份是從哪個 clone 裝的。
+    // 用途是「指路」—— 部署目錄裡沒有 GUIDE 也沒有 scripts/，使用者（或他叫來幫忙的
+    // Claude）在自己的專案目錄裡問「怎麼改成純 daemon」時，唯一能探到的東西是
+    // vpet help；有了這個檔，help 才印得出安裝指引在哪、切換指令要在哪裡跑。
+    // 靠 npm ls -g 反查也做得到，但那多一層 npm 相依且要人先想到，不如直接寫死。
+    try {
+        fs.writeFileSync(path.join(INSTALL_DIR, 'REPO_PATH'), REPO_ROOT + '\n');
+        console.log(`  [mark]   REPO_PATH -> ${REPO_ROOT}`);
+    } catch (e) {
+        console.warn(`  [warn]   REPO_PATH 寫入失敗（vpet help 將無法指路）：${e.message}`);
+    }
+
     // 玩家功能的獨立頁面（圖鑑 vpet album、底圖編輯器 vpet bg）：
     // CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
     // daemon 不需要這樣做 —— 它是由 repo/release 樹的啟動器直接跑的。

@@ -43,6 +43,13 @@ daemon-only 不部署 `statusline-agumon.js` / `statusline-agumon-color.js`（�
 判斷「是不是我們裝的」一律**比路徑不比檔名**（`isOurs()`，install 與 uninstall 同一套）——
 使用者自己的 statusline 也可能叫 `statusline.js`。
 
+install 另外會寫一個 `REPO_PATH` 指標檔進 `INSTALL_DIR`，記下這份是從哪個 clone 裝的。
+`vpet help` 結尾據此印出「目前模式 + 指引路徑 + 兩個方向的切換指令」。
+存在的理由是**可探索性**：部署目錄裡沒有 GUIDE 也沒有 `scripts/`，而使用者（或他叫來
+幫忙的 Claude）通常不在 clone 資料夾裡，`vpet help` 是唯一探得到的入口 —— 沒有這幾行，
+「怎麼改成純 daemon」這種問題從 vpet 這一側查不到答案。clone 被刪／搬走時退化成明確
+訊息，不會印出壞路徑。
+
 `install-runtime` 會把所有東西部署到 **單一資料夾** `~/.claude/agumon-statusline/`：
 
 ```

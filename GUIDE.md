@@ -2,8 +2,8 @@
 
 養一隻像素桌寵：牠會走動、睡覺、隨你使用 Claude Code 而成長、進化，還能跟朋友幽靈對戰。
 
-放在**哪裡**由你決定 —— 可以住在 Claude Code 的狀態列（statusline），也可以只開一個
-**獨立視窗**（適合已經在用自己 statusline 的人）。兩種安裝方式見下。
+放在**哪裡**由你決定 —— 可以只開一個**獨立視窗**（推薦），也可以讓牠住進 Claude Code
+的狀態列（statusline）。兩種安裝方式見下。
 
 ---
 
@@ -14,50 +14,96 @@
 
 ---
 
-## 二、安裝（約 1 分鐘）
+## 二、選一種安裝方式
+
+兩種安裝**功能完全一樣** —— `vpet` 指令、成長、進化、戰鬥、圖鑑、幽靈對戰都一模一樣。
+差別只在**桌寵畫在哪裡**：
+
+| | **A. 獨立視窗**（⭐ 推薦） | **B. 狀態列 + 獨立視窗** |
+|---|---|---|
+| 桌寵顯示在 | 瀏覽器的獨立視窗 | Claude Code 狀態列**與**獨立視窗 |
+| 你的 statusline | **完全不碰**，維持原樣 | 被接管（改成桌寵版） |
+| 動不動 | 有自己的時鐘，永遠在動 | 狀態列那隻要 Claude Code 有在刷新才動 |
+| 佔畫面 | 不佔狀態列 | 狀態列會被桌寵佔一段 |
+| 適合 | **大多數人**，尤其已經有慣用 statusline 的 | 想在狀態列瞄一眼、不想多開視窗的 |
+
+> **為什麼推薦 A？** 大部分人都有自己習慣的 statusline（顯示分支、model、用量……），
+> 被接管會很不方便；而且獨立視窗有自己的時鐘，桌寵不會因為 Claude Code 沒在刷新就停格
+> （那是狀態列版最常見的「看起來卡住」）。
+
+先確認需求（見上一節），然後取得 release 版：
 
 ```bash
-# 1. 取得 release 版
 git clone -b release https://github.com/jojohne124/VpetStatusline.git vpet
 cd vpet
-
-# 2. 一鍵安裝
-node scripts/install.js
 ```
 
-> **不想開終端機？** 下載後直接雙擊資料夾裡的 **`install.bat`**（Windows）或
-> **`install.command`**（macOS）即可安裝，效果與上面的指令相同。（仍需先裝 Node.js）
-
-安裝腳本會自動：
-- 把桌寵資產裝到 `~/.claude/agumon-statusline/`
-- 幫你的 `~/.claude/settings.json` 掛上 statusline 與 prompt hook（會先備份）
-- 註冊全域指令 `vpet`
-
-完成後：
-1. **重開終端機**（讓 `vpet` 指令生效）。
-2. **重開 Claude Code**（或開新對話）→ 狀態列就會出現一隻 **亞古獸（Agumon）**。
-
-> 若安裝時提示 `vpet` 沒進 PATH，或找不到 `settings.json`，照它印出的指示補一下即可。
-> 在 Claude Code 對話框裡，指令前面加 `!` 就能直接執行，例如 `! vpet help`。
-
-### 已經有自己的 statusline？改用「只裝獨立視窗」
-
-如果你已經在用別的 statusline（自己寫的、或別的工具的），不想被接管，改用這個：
+### A. 獨立視窗（推薦）
 
 ```bash
 node scripts/install.js --daemon-only
 ```
 
-> 雙擊版：**`install-daemon-only.bat`**（Windows）／**`install-daemon-only.command`**（macOS）
+> 不想開終端機？雙擊 **`install-daemon-only.bat`**（Windows）／
+> **`install-daemon-only.command`**（macOS）。
 
-差別只有一個：**不會碰你 `settings.json` 的 `statusLine` 設定**，桌寵改在瀏覽器的
-獨立視窗裡看（見下節）。其餘完全相同 —— `vpet` 指令、進化、戰鬥、圖鑑都照常。
+裝完後**雙擊 `vpet-standalone.bat`（Windows）/ `vpet-standalone.sh`（macOS / Linux）**
+就會開出桌寵視窗（見下一節）。
 
-> 為什麼還是會裝 prompt hook？那個 hook 不是 statusline 的一部分，它負責「你送出訊息」
+### B. 狀態列 + 獨立視窗
+
+```bash
+node scripts/install.js
+```
+
+> 雙擊版：**`install.bat`**（Windows）／**`install.command`**（macOS）
+
+完成後**重開 Claude Code**（或開新對話）→ 狀態列就會出現一隻 **亞古獸（Agumon）**。
+
+### 兩種都會做的事
+
+- 把桌寵資產裝到 `~/.claude/agumon-statusline/`
+- 在 `~/.claude/settings.json` 掛上 **prompt hook**（會先備份）
+- 註冊全域指令 `vpet`
+
+裝完**重開終端機**讓 `vpet` 指令生效。
+
+> **為什麼 A 也要裝 prompt hook？** 那個 hook 不是 statusline 的一部分，它負責「你送出訊息」
 > 這個脈搏 —— 桌寵的**訓練值（戰力成長的唯一來源）**、自動戰鬥、活動時間全靠它。
 > 少了它桌寵不會長大，所以兩種安裝都會裝。
 
-反悔了想讓桌寵回到狀態列，重跑一次一般安裝（不加 `--daemon-only`）即可。
+> 若安裝時提示 `vpet` 沒進 PATH，或找不到 `settings.json`，照它印出的指示補一下即可。
+> 在 Claude Code 對話框裡，指令前面加 `!` 就能直接執行，例如 `! vpet help`。
+
+### 隨時可以互換
+
+兩個方向都只要**重跑一次安裝指令**，桌寵的角色與進度完全不受影響（存檔在 `state/`，
+安裝腳本不會動它）。
+
+**B → A（改成只用獨立視窗）**
+
+```bash
+cd vpet                                    # 你當初 clone 的資料夾
+git pull                                   # 舊版沒有這個轉換流程，先更新
+node scripts/install.js --daemon-only      # 或雙擊 install-daemon-only.bat
+```
+
+腳本會自動把狀態列那份拆乾淨：移除 statusline 顯示層檔案，並把 `settings.json` 裡
+**指向 `agumon-statusline` 的那條 `statusLine`** 一併移除（會先備份）。之後你的狀態列
+就恢復成 Claude Code 預設 —— 想換回自己原本的 statusline，這時再把你的設定填回去。
+
+> ⚠ 若你手上的 vpet 是 2026-08 之前的版本，`--daemon-only` **不會**清掉那條 `statusLine`，
+> 結果是 Claude Code 每秒去執行一個已被刪掉的檔案。所以上面才要先 `git pull`。
+> 已經踩到的話：手動把 `~/.claude/settings.json` 裡的 `statusLine` 整段刪掉即可。
+
+**A → B（讓桌寵回到狀態列）**
+
+```bash
+node scripts/install.js                    # 不加 --daemon-only
+```
+
+statusline 顯示層會裝回去、`settings.json` 的 `statusLine` 會被寫成桌寵版。
+（如果你原本有自己的 statusline，這一步會覆蓋掉它，記得先備份自己那條指令。）
 
 ---
 
@@ -168,8 +214,13 @@ vpet code 新名牌     # 改名牌（會同步更新後端上的戰卡）
 - **狀態列沒出現桌寵**：確認已重開 Claude Code；檢查 `~/.claude/settings.json` 的
   `statusLine.command` 有指向 `agumon-statusline/statusline-agumon-color.js`。
 - **打 `vpet` 說找不到指令**：重開終端機；仍不行就照安裝時印的 PATH 指示加一下。
-- **只裝了獨立視窗（`--daemon-only`），狀態列當然不會有桌寵** —— 那是預期行為。
+- **只裝了獨立視窗（A），狀態列當然不會有桌寵** —— 那是預期行為。
   桌寵在 `vpet-standalone.bat` / `.sh` 開的視窗裡。想改回狀態列就重跑一次一般安裝。
+- **想從「狀態列版」改成「只用獨立視窗」**：見 [§二「隨時可以互換」](#隨時可以互換)。
+  一行指令，角色與進度不受影響。
+- **狀態列跳出「找不到檔案」之類的錯誤**：多半是用舊版跑了 `--daemon-only`（顯示層被刪、
+  設定卻還留著）。把 `~/.claude/settings.json` 的 `statusLine` 整段刪掉即可，
+  或 `git pull` 後重跑一次 `node scripts/install.js --daemon-only`。
 - **桌寵停格不動（最常見，不是故障）**：Claude 分頁**閒置或沒 focus** 時（例如你切到別的分頁工作、或開了非 Claude 的分頁），Claude Code 會暫停 statusline 更新 → 桌寵看起來卡住。**回到 Claude 分頁、送一則訊息，或打 `vpet card`** 就會恢復。經常掛在別的分頁的人尤其容易遇到。
 - **桌寵卡住、且上面互動了也不恢復**：先打 `vpet doctor` 清除卡死的背景行程（只想先看有沒有問題就 `vpet doctor --check`）。平時系統會自動清，這是手動補刀。
 - **整個 statusline 完全凍住、doctor 也救不回**：到 `tools/agumon-doctor/` 資料夾雙擊 **`agumon-restart.bat`**（Windows）/ **`agumon-restart.command`**（macOS）強制重啟（會保留你的角色與進度），或執行 `node tools/agumon-doctor/restart.js`。仍要診斷就跑 `agumon-report`（見 `tools/agumon-doctor/`）把現況回報給開發者。

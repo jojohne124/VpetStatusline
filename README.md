@@ -24,8 +24,24 @@
 git clone <repo-url>
 cd agumon-cli
 npm install
-npm run install-runtime
+npm run install-runtime               # 狀態列 + 獨立視窗
+npm run install-runtime:daemon-only   # 只裝獨立視窗（不接管 statusLine）
 ```
+
+兩種模式功能完全相同，差別只在**接不接管 `settings.json` 的 `statusLine.command`**。
+標記是 `~/.claude/agumon-statusline/DAEMON_ONLY` 這個檔存不存在，daemon 據此預設進當家模式。
+daemon-only 不部署 `statusline-agumon.js` / `statusline-agumon-color.js`（顯示層），
+但 `statusline-cheat.js`（= `vpet` 指令通道，名字誤導）與 hook 兩種模式都要。
+
+**兩個方向都靠重跑安裝指令切換**，`state/` 不受影響：
+
+| 從 → 到 | 指令 | install 會做的事 |
+|---|---|---|
+| 一般 → daemon-only | `npm run install-runtime:daemon-only` | 刪顯示層檔案、寫 `DAEMON_ONLY`、**移除指向 agumon-statusline 的 `statusLine`**（指向別處的原封不動） |
+| daemon-only → 一般 | `npm run install-runtime` | 裝回顯示層、清掉 `DAEMON_ONLY`、把 `statusLine.command` 寫成桌寵版 |
+
+判斷「是不是我們裝的」一律**比路徑不比檔名**（`isOurs()`，install 與 uninstall 同一套）——
+使用者自己的 statusline 也可能叫 `statusline.js`。
 
 `install-runtime` 會把所有東西部署到 **單一資料夾** `~/.claude/agumon-statusline/`：
 
@@ -62,8 +78,12 @@ npm run uninstall-runtime          # 保留 state/
 npm run uninstall-runtime:purge    # 連 state 一起砍
 ```
 
+兩種安裝模式共用同一支 uninstall，它會先讀 `DAEMON_ONLY` 記下模式再動手。
 預設只刪 runtime + assets，保留你的 state；加 `--purge` 連 state 一起清。
-`settings.json` 永遠不會被刪，請自行移除 `statusLine.command` 與 `UserPromptSubmit` hook。
+
+`settings.json` 會**自動清理，但只拆屬於我們的**（同樣按路徑比對）：`statusLine` 指向
+`agumon-statusline` 才移除、指向別處保留；hook 抽掉呼叫 `agumon-hook` 的 entry。
+加 `--keep-settings` 則完全不動 settings，只印出該手動清哪幾項。
 
 ---
 

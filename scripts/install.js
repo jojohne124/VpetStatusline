@@ -250,6 +250,11 @@ function migrateLegacyState() {
     if (cleaned === 0) console.log('  -> 沒有舊版散落檔需要清理');
 }
 
+// 判斷一段 command 是不是「我們裝的」。比對部署目錄而非檔名 —— 使用者自己的
+// statusline 也可能叫 statusline.js，只有路徑分得出來。與 uninstall.js 同一套判準。
+const isOurs = (cmd) => typeof cmd === 'string'
+    && cmd.replace(/\\/g, '/').includes('agumon-statusline');
+
 function updateSettings() {
     console.log('\n[7/8] 更新 ~/.claude/settings.json');
     const settingsPath = path.join(CLAUDE_HOME, 'settings.json');
@@ -274,10 +279,20 @@ function updateSettings() {
 
     let changed = false;
     if (DAEMON_ONLY) {
-        // 完全不碰 statusLine —— 使用者自己的 statusline 設定原封不動保留。
+        // 使用者「自己的」statusline 原封不動保留；但「我們裝的」那條必須移除 ——
+        // 因為 --daemon-only 剛把 statusline-agumon-color.js 刪掉了（STATUSLINE_ONLY_FILES），
+        // 留著設定等於叫 Claude Code 每秒去執行一個不存在的檔案。
+        // 一般版 → daemon-only 的轉換就是走這條路，判準與 uninstall 的 isOurs() 一致：比路徑不比檔名。
         const mine = cur.statusLine && cur.statusLine.command;
-        console.log('  [skip]   statusLine（--daemon-only）'
-            + (mine ? `，保留你現有的：${mine}` : '，settings 目前也沒設'));
+        if (mine && isOurs(mine)) {
+            delete cur.statusLine;
+            console.log('  [rm]     statusLine（原本指向 agumon-statusline，檔案已隨 --daemon-only 移除）');
+            console.log('           桌寵改在獨立視窗看；想換回自己的 statusline 請自行填回這一段。');
+            changed = true;
+        } else {
+            console.log('  [skip]   statusLine（--daemon-only）'
+                + (mine ? `，保留你現有的：${mine}` : '，settings 目前也沒設'));
+        }
     } else {
         cur.statusLine = cur.statusLine || {};
         if (cur.statusLine.command !== newCmd) {

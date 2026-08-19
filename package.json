@@ -19,7 +19,9 @@
     "gen-bullets": "node scripts/gen-bullet-placeholders.js",
     "gen-shadow": "node scripts/gen-shadow.js",
     "check-pricing": "node scripts/check-pricing.js",
-    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js"
+    "plaza-preview": "node scripts/plaza-preview-web.js",
+    "plaza-preview-tty": "node scripts/plaza-preview.js",
+    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js && node scripts/test-plaza.js"
   },
   "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],
   "author": "kaihsiangchang",

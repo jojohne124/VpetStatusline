@@ -172,10 +172,10 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
             if (force.petMood === 'refuse') {
                 st._forceRefuse = true;
                 bumpStat(st, 'petRefuse', Date.now());   // 被摸到不爽（本階段）
-                setMood(st, -1);            // 不爽 → 心情直接落底（不是遞減）
+                setMood(st, MOOD_MIN);      // 不爽 → 心情直接落底（不是遞減）
             } else {
                 st._forceHappy = true;
-                bumpMood(st, +1);           // 摸摸 → 心情 +1（夾在 +1）
+                bumpMood(st, +1);           // 摸摸 → 心情 +1（夾在 MOOD_MAX）
             }
         }
         st.lastPetTriggerTs = force.petTriggerTs;
@@ -412,22 +412,24 @@ function getStat(st, key, scope = 'stage') {
 }
 
 // ── 心情（隱藏屬性，彩蛋性質的勝率控制）─────────────────────────────
-// 三級：-1 / 0 / +1。不對玩家顯示（vpet stats 查得到），卡片也不顯示。
+// 五級：-2 / -1 / 0 / +1 / +2。不對玩家顯示（vpet stats 查得到），卡片也不顯示。
 //
-//   摸摸        → +1（夾在 +1）
-//   摸到不爽    → 直接 -1（不是 -1 遞減，是一次到底）
+//   摸摸        → +1（一級一級加，夾在 +2）
+//   摸到不爽    → 直接 -2（不是遞減，是一次到底）
 //   戰鬥表演結束 → 歸 0（在 onEnd 的去重 guard 內，多視窗安全）
 //   進化/換角色 → 歸 0（同訓練值、勝率）
 //
+// 不對稱是刻意的：好心情要摸兩次才滿，壞心情戳一次就到底。
+//
 // 影響兩處：
-//   1. 戰鬥勝率 ±5%（走 winProbFromStr 既有的 expBonus 參數；clamp [5%,95%] 照舊套用，
-//      所以已經頂到 95% 時 +1 心情不會有額外效果 —— 這是刻意的，clamp 是保護機制）
-//   2. 走路時 10% 隨機表情：-1 只演生氣、0 照舊各半、+1 只演 exprs[0]
+//   1. 戰鬥勝率 每級 ±5%（走 winProbFromStr 既有的 expBonus 參數，所以範圍是 ±10%；
+//      clamp [5%,95%] 照舊套用，已經頂到 95% 時心情不會有額外效果 —— 刻意的，clamp 是保護機制）
+//   2. 走路時 10% 隨機表情：負只演生氣、0 照舊各半、正只演 exprs[0]（不分級數）
 //
 // 多視窗 race：摸摸只能從 daemon 頁面觸發，而 daemon 頁面在的時候 daemon 一定在跑；
 // 標準啟動器都帶 --authoritative → statusLine 全部退唯讀 → 只有一個消費者，走不到 race。
-// 唯一的縫是「隔離模式 daemon + 多個 Claude 視窗」，最壞後果是 -1 一次跳到 +1，不致命。
-const MOOD_MIN = -1, MOOD_MAX = 1;
+// 唯一的縫是「隔離模式 daemon + 多個 Claude 視窗」，最壞後果是少算一次 bump，不致命。
+const MOOD_MIN = -2, MOOD_MAX = 2;
 const MOOD_WIN_BONUS_PCT = 5;    // 每級心情的勝率補正（百分點）
 
 function getMood(st) {

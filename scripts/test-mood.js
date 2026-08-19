@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // 驗證心情（隱藏屬性，彩蛋性質的勝率控制）。
-//   三級 -1/0/+1；摸摸 +1、摸到不爽直接 -1、戰鬥表演結束歸 0、進化/換角色歸 0
-//   勝率補正 心情 x 5%（clamp [5%,95%] 照舊）；走路 10% 表情：-1 只生氣、+1 只 exprs[0]
+//   五級 -2..+2；摸摸 +1（夾 +2）、摸到不爽直接 -2、戰鬥表演結束歸 0、進化/換角色歸 0
+//   勝率補正 心情 x 5%（clamp [5%,95%] 照舊）；走路 10% 表情：負只生氣、正只 exprs[0]
 // 用法：node scripts/test-mood.js
 //
 // 注意：core 的 ASSETS_DIR 是相對它自己的位置算的 —— repo 樹下的 src/runtime/ 沒有 assets/，
@@ -31,11 +31,11 @@ console.log('— 心情 API —');
 {
     const st = {};
     ok(core.getMood(st) === 0, '未設定時應為 0');
-    core.setMood(st, 5);   ok(core.getMood(st) === 1,  '超過上限應夾到 +1');
-    core.setMood(st, -5);  ok(core.getMood(st) === -1, '超過下限應夾到 -1');
+    core.setMood(st, 5);   ok(core.getMood(st) === 2,  '超過上限應夾到 +2');
+    core.setMood(st, -5);  ok(core.getMood(st) === -2, '超過下限應夾到 -2');
     core.setMood(st, 0);   ok(!('mood' in st), 'mood=0 應 delete（state 檔不長胖）');
-    core.bumpMood(st, 1);  core.bumpMood(st, 1);
-    ok(core.getMood(st) === 1, 'bumpMood 連加應夾在 +1');
+    core.bumpMood(st, 1);  core.bumpMood(st, 1);  core.bumpMood(st, 1);
+    ok(core.getMood(st) === 2, 'bumpMood 連加應夾在 +2');
 }
 
 // ── 2. 摸摸 / 不爽 ────────────────────────────────────────────────────
@@ -44,9 +44,10 @@ console.log('— 摸摸與不爽 —');
     const st = { characterId: 'greymon', lastActivityAt: Date.now() };
     let t = Date.now();
     pet(st, 'happy',  t++); ok(core.getMood(st) === 1,  '摸摸 → +1');
-    pet(st, 'happy',  t++); ok(core.getMood(st) === 1,  '再摸 → 仍 +1');
-    pet(st, 'refuse', t++); ok(core.getMood(st) === -1, '摸到不爽 → 直接 -1（不是遞減）');
-    pet(st, 'happy',  t++); ok(core.getMood(st) === 0,  '-1 摸一次 → 0');
+    pet(st, 'happy',  t++); ok(core.getMood(st) === 2,  '再摸 → +2');
+    pet(st, 'happy',  t++); ok(core.getMood(st) === 2,  '第三次 → 仍夾在 +2');
+    pet(st, 'refuse', t++); ok(core.getMood(st) === -2, '摸到不爽 → 直接 -2（不是遞減）');
+    pet(st, 'happy',  t++); ok(core.getMood(st) === -1, '-2 摸一次 → -1（要摸回來得摸四次）');
 
     // 同一筆 trigger 重放不該再算一次（lastPetTriggerTs 去重）
     const st2 = { characterId: 'greymon', lastActivityAt: Date.now() };
@@ -102,11 +103,14 @@ console.log('— 勝率補正 —');
     else {
         const p = (my, en, mood) => core.computeWinProb(my, { characterId: my, trainingBonus: 0, mood }, en) * 100;
         const mid0 = p('zephagamon', 'ravemon', 0);
-        ok(Math.abs(p('zephagamon', 'ravemon', 1)  - (mid0 + core.MOOD_WIN_BONUS_PCT)) < 1e-6, '+1 應 +5 個百分點');
-        ok(Math.abs(p('zephagamon', 'ravemon', -1) - (mid0 - core.MOOD_WIN_BONUS_PCT)) < 1e-6, '-1 應 -5 個百分點');
+        const B = core.MOOD_WIN_BONUS_PCT;
+        ok(Math.abs(p('zephagamon', 'ravemon', 1)  - (mid0 + B))     < 1e-6, '+1 應 +5 個百分點');
+        ok(Math.abs(p('zephagamon', 'ravemon', -1) - (mid0 - B))     < 1e-6, '-1 應 -5 個百分點');
+        ok(Math.abs(p('zephagamon', 'ravemon', 2)  - (mid0 + B * 2)) < 1e-6, '+2 應 +10 個百分點（每級 5）');
+        ok(Math.abs(p('zephagamon', 'ravemon', -2) - (mid0 - B * 2)) < 1e-6, '-2 應 -10 個百分點');
         // clamp 邊界：頂到 95 / 撞到 5 時，心情不該把它推出界
-        ok(p('wargreymon', 'agumon', 1) === 95, '打極弱敵仍夾在 95%（+1 不加碼）');
-        ok(p('agumon', 'wargreymon', -1) === 5, '打極強敵仍夾在 5%（-1 不追殺）');
+        ok(p('wargreymon', 'agumon', 2) === 95, '打極弱敵仍夾在 95%（+2 不加碼）');
+        ok(p('agumon', 'wargreymon', -2) === 5, '打極強敵仍夾在 5%（-2 不追殺）');
     }
 }
 
@@ -129,10 +133,12 @@ console.log('— 走路表情 —');
             }
             return seen;
         };
-        const neg = sample(-1), zero = sample(0), pos = sample(1);
-        ok(neg.size === 1 && neg.has(n - 1), '-1 應只演最後一個表情（慣例 ANGRY）');
-        ok(pos.size === 1 && pos.has(0),     '+1 應只演 exprs[0]');
-        ok(zero.size === n,                  '0 應維持隨機（各個表情都出現過）');
+        const neg = sample(-1), neg2 = sample(-2), zero = sample(0), pos = sample(1), pos2 = sample(2);
+        ok(neg.size === 1 && neg.has(n - 1),  '-1 應只演最後一個表情（慣例 ANGRY）');
+        ok(neg2.size === 1 && neg2.has(n - 1), '-2 同樣只演生氣（表情不分級數）');
+        ok(pos.size === 1 && pos.has(0),      '+1 應只演 exprs[0]');
+        ok(pos2.size === 1 && pos2.has(0),    '+2 同樣只演 exprs[0]');
+        ok(zero.size === n,                   '0 應維持隨機（各個表情都出現過）');
     }
 }
 

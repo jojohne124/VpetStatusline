@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * plaza-preview-web.js — 廣場的瀏覽器預覽（768×768，實際尺寸）
+ * plaza-preview-web.js — 廣場的瀏覽器預覽（實際尺寸）
  *
  * 這是**預覽用的鷹架，不是最終架構**。規格書 §七 已經決定廣場要做成 daemon 的一個
  * 模式而不是獨立頁面（理由是「在外面」是寫進 color-state.json 的持久狀態，另開一個
@@ -15,7 +15,7 @@
  * 這兩件事跟後端、跟「不在家」狀態完全無關，所以先用假名單看，比整套接完再看便宜。
  *
  * 用法：
- *   node scripts/plaza-preview-web.js            # 8 個假人
+ *   node scripts/plaza-preview-web.js            # 5 個假人
  *   node scripts/plaza-preview-web.js 20         # 20 人（規格上限，看看擠不擠）
  *   node scripts/plaza-preview-web.js 8 --mine   # 其中一隻換成你自己現在養的角色
  *
@@ -35,9 +35,13 @@ const W = require('../src/shared/plaza-walk.js');
 const P = require('../src/daemon/plaza.js');
 
 const argv = process.argv.slice(2);
-const num  = Math.max(1, Math.min(20, parseInt(argv.find(a => /^\d+$/.test(a)) || '8', 10)));
+const num  = Math.max(1, Math.min(20, parseInt(argv.find(a => /^\d+$/.test(a)) || '5', 10)));
 const PORT = parseInt(process.env.AGUMON_PLAZA_PORT || '3011', 10);
 const CW = 8, CH = 16;          // 與 daemon 同一組（1 dot = 8×8 px）
+// 畫布尺寸一律從場地常數推導，不要寫死 —— 改 PLAZA_W/H 時漏改這裡，
+// 畫面會被裁掉或多出一塊空白，而且不會有任何錯誤訊息。
+const CV_W = W.PLAZA_W * CW;
+const CV_H = (W.PLAZA_H / 2) * CH;
 
 // ── 假名單 ───────────────────────────────────────────────────────────
 const NAMES = ['阿張', 'MAJAJA', '小明', 'Kai', '喵喵', 'Riku', '大雄', 'Zed',
@@ -72,7 +76,12 @@ if (argv.includes('--mine')) {
 
 const caches = new Map();
 const t0 = Date.now();
-const stepNow = () => Math.floor((Date.now() - t0) / 1000);
+// 正式版的 step 來自「用 serverNow 校正後的牆鐘」；預覽沒有後端，就用開機時間當基準。
+const stepNow = () => W.stepAt(Date.now() - t0);
+
+// 前端輪詢比一拍更密，畫面才不會與拍子產生節拍差（同一拍被畫兩次 / 跳過一拍）。
+// 合成很便宜（20 人約 0.3ms），密集輪詢的成本可以忽略。
+const POLL_MS = Math.max(100, Math.round(W.STEP_MS / 3));
 
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>廣場預覽</title>
@@ -83,16 +92,17 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      否則縮放瀏覽器時 canvas 會被拉扯，像素就不是整數倍了（家裡舞台踩過這個坑）。*/
   #wrap{width:fit-content;border:1px solid #30363d;border-radius:8px;background:#161b22;padding:8px}
   canvas{display:block;image-rendering:pixelated}
-  .bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;max-width:784px}
+  .bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;max-width:${CV_W + 16}px}
   .k{color:#8b949e}
 </style></head><body>
 <div class="bar">
   <span><span class="k">step</span> <b id="step">0</b></span>
   <span><span class="k">在場</span> <b id="n">0</b></span>
+  <span><span class="k">野生</span> <b id="np">0</b></span>
   <span><span class="k">走動中</span> <b id="mv">0</b></span>
-  <span class="k">96×96 dot = 768×768 px</span>
+  <span class="k">${W.PLAZA_W}×${W.PLAZA_H} dot = ${CV_W}×${CV_H} px · 一拍 ${W.STEP_MS}ms</span>
 </div>
-<div id="wrap"><canvas id="pz" width="768" height="768"></canvas></div>
+<div id="wrap"><canvas id="pz" width="${CV_W}" height="${CV_H}"></canvas></div>
 <div class="bar k" id="list"></div>
 <script>
 const CW=${CW}, CH=${CH};
@@ -155,14 +165,15 @@ async function poll(){
   try{
     const s=await (await fetch('/state',{cache:'no-store'})).json();
     document.getElementById('step').textContent=s.step;
-    document.getElementById('n').textContent=s.placed.length;
+    document.getElementById('n').textContent=s.placed.length-s.npc;
+    document.getElementById('np').textContent=s.npc;
     document.getElementById('mv').textContent=s.placed.filter(p=>p.moving).length;
     document.getElementById('list').textContent=
-      s.placed.map(p=>p.code+'('+p.char+') '+p.x+','+p.y).join('   ');
+      s.placed.map(p=>(p.code||'野生')+'('+p.char+') '+p.x+','+p.y).join('   ');
     draw(s.lines);
   }catch(e){}
 }
-poll(); setInterval(poll,1000);
+poll(); setInterval(poll,${POLL_MS});
 </script></body></html>`;
 
 http.createServer((req, res) => {
@@ -173,6 +184,7 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({
             step, lines,
             placed: placed.map(p => ({ code: p.code, char: p.char, x: p.x, y: p.y, moving: p.moving })),
+            npc: P.NPCS.length,
         }));
         return;
     }
@@ -180,6 +192,7 @@ http.createServer((req, res) => {
     res.end(HTML);
 }).listen(PORT, () => {
     console.log(`🏛  廣場預覽（純畫面，不寫任何 state）`);
-    console.log(`   ${num} 人 · ${W.PLAZA_W}×${W.PLAZA_H} dot · 每 ${W.STEP_T} 拍決策一次`);
+    console.log(`   ${num} 人 · ${W.PLAZA_W}×${W.PLAZA_H} dot · 一拍 ${W.STEP_MS}ms · 每段 ${W.RUN_MIN}~${W.RUN_MAX} 拍 · ${W.DIR_VECTORS.length} 種方向`);
+    console.log(`   前端每 ${POLL_MS}ms 輪詢一次`);
     console.log(`   開啟：http://localhost:${PORT}`);
 });

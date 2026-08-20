@@ -6,10 +6,10 @@
  * 存在的理由：廣場第一期真正要驗的只有兩件事 —— 多人走動看起來對不對、
  * y 排序的畫面好不好看（docs/plaza-spec.md §一）。這兩件事跟後端、跟「不在家」
  * 狀態、跟 daemon 整合全都無關，所以先用假名單在終端機跑起來看，
- * 比先把整套接完再看便宜太多。走路節奏（STEP_T / 停留權重）也預期要靠這支微調。
+ * 比先把整套接完再看便宜太多。走路節奏（段長 / 停留權重）也預期要靠這支微調。
  *
  * 用法：
- *   node scripts/plaza-preview.js                 # 8 人，即時播放
+ *   node scripts/plaza-preview.js                 # 5 人，即時播放
  *   node scripts/plaza-preview.js 20              # 20 人（規格上限）
  *   node scripts/plaza-preview.js 8 --fast        # 8 倍速（快速看走位分布）
  *   node scripts/plaza-preview.js 8 --step 500    # 只印第 500 拍的靜態畫面
@@ -33,7 +33,7 @@ const P = require('../src/daemon/plaza.js');
 
 // ── 參數 ─────────────────────────────────────────────────────────────
 const argv  = process.argv.slice(2);
-const num   = Math.max(1, Math.min(20, parseInt(argv.find(a => /^\d+$/.test(a)) || '8', 10)));
+const num   = Math.max(1, Math.min(20, parseInt(argv.find(a => /^\d+$/.test(a)) || '5', 10)));
 const flag  = (name, dflt) => {
     const i = argv.indexOf('--' + name);
     return i >= 0 ? (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : true) : dflt;
@@ -95,7 +95,7 @@ if (heatSpan) {
         }
         console.log(line);
     }
-    console.log(`\n停留比例 ${(stayCnt / total * 100).toFixed(1)}%（設計值約 33%，撞牆也算停所以會偏高）`);
+    console.log(`\n停留時間佔比 ${(stayCnt / total * 100).toFixed(1)}%（設計值約 12%）`);
     console.log(`最熱格 ${max} 次 / 平均 ${(total / ((W.MAX_X + 1) * (W.MAX_Y + 1))).toFixed(1)} 次`);
     process.exit(0);
 }
@@ -106,7 +106,7 @@ const caches = new Map();
 function frame(step) {
     const { lines, placed } = P.composePlaza(core, occupants, step, { caches, me: occupants[0].code });
     const moving = placed.filter(p => p.moving).length;
-    const head = `廣場預覽  ${W.PLAZA_W}x${W.PLAZA_H} dot  |  ${num} 人（走動 ${moving}）  |  step ${step}`
+    const head = `廣場預覽  ${W.PLAZA_W}x${W.PLAZA_H} dot  |  ${num} 人（走動 ${moving}）  |  step ${step}（${W.STEP_MS}ms/拍）`
                + `  |  你是 \x1b[38;2;247;198;49m${occupants[0].code}\x1b[0m`;
     return [head, '─'.repeat(W.PLAZA_W), ...lines].join('\n');
 }
@@ -118,7 +118,7 @@ if (oneStep) {
 
 // 即時播放：清畫面後重印。48 列 + 表頭，一般終端機高度不夠會滾動 ——
 // 縮小字級（Ctrl+-）到看得完整為止，這是終端機預覽的先天限制，daemon 頁面沒這問題。
-const TICK = fast ? 125 : 1000;
+const TICK = fast ? Math.round(W.STEP_MS / 8) : W.STEP_MS;
 let step = 0;
 process.stdout.write('\x1b[?25l');                        // 藏游標
 const stop = () => { process.stdout.write('\x1b[?25h\n'); process.exit(0); };

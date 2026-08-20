@@ -27,6 +27,7 @@ try { core = require(INSTALLED_CORE); }
 catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js')); }
 
 const { computeUsage } = require('./token-source');
+const plaza = require('./plaza');   // 廣場／院子的合成器（走路在 ../shared/plaza-walk.js）
 
 const {
     STATE_DIR, EVO_LENGTH, MAX_POS,
@@ -74,6 +75,7 @@ const UI_BUTTONS = [
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
     ['album',  '📖 圖鑑'],
+    ['yard',   '🐮 牧場'],
     ['sleep',  '😴 睡覺', { dev: true }],
     ['wake',   '☀ 喚醒', { dev: true }],
 ];
@@ -87,6 +89,12 @@ const UI_FORMS = [
       confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
     { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
     { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
+    { label: '📋 牧場清單', action: 'ranch',     fields: [] },
+    { label: '📥 收進牧場', action: 'keep',      fields: [],
+      confirm: '會把現役收進牧場，並抽一隻新的桌寵。收進去的隨時可以換回來。確定嗎？' },
+    { label: '🔄 換出牧場', action: 'swap',      fields: [['which', '編號或角色名']] },
+    { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']],
+      confirm: '放生會**永久刪除**那一隻，救不回來。確定嗎？' },
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
     { label: '🩺 doctor',   action: 'doctor',    fields: [] },
     { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
@@ -293,6 +301,12 @@ startUsageWorker();
 
 // ── 時鐘 ──
 let tick = 0;
+// 院子用的走路快取（key -> 走到第幾拍的快照）。長駐在 daemon 上，不必每次請求重播。
+const yardCaches = new Map();
+// 院子的拍子與家裡的不同（750ms vs 1000ms），而且不依賴 daemon 的 tick 計數 ——
+// 用牆鐘算，重開 daemon 也接得上，日後接共用廣場時同一條式子還要加上 serverNow 校正。
+const plazaStep = () => require('../shared/plaza-walk.js').stepAt(Date.now());
+
 let startedAt = Date.now();
 let latest = { tick: 0, kind: 'init', petLines: null, usage: null, at: startedAt, err: null };
 
@@ -423,6 +437,12 @@ const CLI_ACTIONS = {
     switch:      (a) => a.name ? [a.name] : null,          // 裸角色名/編號
     evolve:      (a) => a.name ? ['evolve', a.name] : null,
     battle:      (a) => ['battle', ...(a.enemy ? [a.enemy] : []), ...(a.result ? [a.result] : [])],
+    // 牧場（docs/ranch-spec.md）。release 一律補 yes —— CLI 的二次確認是為終端機使用者
+    // 設計的，網頁這邊由 data-confirm 的對話框負責，不能讓 subprocess 吊在等輸入。
+    ranch:       ()  => ['ranch'],
+    keep:        ()  => ['keep'],
+    swap:        (a) => a.which ? ['swap', a.which] : null,
+    release:     (a) => a.which ? ['release', a.which, 'yes'] : null,
 };
 
 function runCli(args) {
@@ -495,6 +515,14 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
             要現場微調就在 devtools 加 filter，定案後回去改 make-bg.js 的 lo/hi 重烘。 */
          background:#d2d2d2 url(/bg) center/cover;` : ''}}
   canvas{image-rendering:pixelated;display:block;cursor:pointer;max-width:100%;height:auto}
+  /* 院子是 96 欄（768px），比家裡的 52 欄寬。canvas 的 max-width:100% 在窄視窗會把它
+     縮小，而縮小後 1 dot 不再是整數個 px，像素風會糊掉 —— 家裡那邊為了地平線對齊
+     已經踩過一次。院子寧可讓 petbox 裁掉右邊，也不要非整數倍縮放。 */
+  body.yard canvas{max-width:none}
+  body.yard #petbox{overflow:auto}
+  /* 院子不鋪底圖：那張圖是為家裡 52x8 的橫幅舞台烘的（center/cover），
+     放到 96x24 會被裁成完全不同的一塊，看起來像另一張圖。等院子有自己的美術再說。 */
+  body.yard #stage{background:rgb(24,24,24)}
   /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
      仍然看得到底圖，只有邊緣被收乾淨。用偽元素而不是換整片 background，
      否則整個舞台會變黑、底圖在戰鬥期間整段消失。 */
@@ -539,6 +567,9 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
+    </div>
+    <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
+      <span id="yardinfo">–</span>
     </div>
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
@@ -648,7 +679,47 @@ function draw(petLines){
   }
 }
 let lastFetch=Date.now();
+// 視圖：家（statusline 那個舞台）／院子（牧場成員在 96x24 的場地散步）。
+// 只是「這個瀏覽器分頁在看哪裡」，不是 daemon 的狀態 —— 開兩個分頁可以一個看家、
+// 一個看院子，daemon 不需要知道。
+let view = 'home';
+function setView(v){
+  view = v;
+  document.body.classList.toggle('yard', v==='yard');
+  document.getElementById('yardbar').style.display = (v==='yard') ? '' : 'none';
+  document.querySelectorAll('[data-cmd="yard"]').forEach(b=>{
+    // 「家」在這裡有兩個意思會打架：廣場那邊的「回家」是從廣場回到自己的舞台，
+    // 牧場這邊按了是回到現役那隻。用「前線」指現役、「牧場」指收藏，不會混。
+    b.textContent = (v==='yard') ? '⚔ 前線' : '🐮 牧場';
+  });
+  poll();
+}
+
+async function pollYard(){
+  const y = await (await fetch('/yard',{cache:'no-store'})).json();
+  if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
+  document.getElementById('yardinfo').textContent = y.kept
+    ? '牧場 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
+    : '牧場是空的 —— 進階區的「📥 收進牧場」可以把現役收進來（隨時換得回去）';
+  document.getElementById('kind').textContent='yard';
+  document.getElementById('tick').textContent='#'+y.step;
+  if(y.lines){ draw(y.lines); }
+  else {
+    // 空牧場：仍然把畫布撐成完整的場地大小再清空。
+    // 只 clearRect 不改尺寸的話，畫布會停在上一次畫過的家裡舞台（52 欄），
+    // 空牧場就變成一個小方塊，看起來像壞掉而不是「這裡還沒有東西」。
+    const cv=document.getElementById('pet');
+    cv.width=y.cols*CW; cv.height=y.rows*CH;
+    cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+  }
+}
+
 async function poll(){
+  if(view==='yard'){
+    try{ await pollYard(); lastFetch=Date.now(); }
+    catch(e){ document.getElementById('err').textContent='fetch fail: '+e.message; }
+    return;
+  }
   try{
     const s=await (await fetch('/state',{cache:'no-store'})).json();
     lastFetch=Date.now();
@@ -699,9 +770,13 @@ async function sendCmd(action,args){
     // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
     showOutput(r.output || r.error || '');
+    // 牧場操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
+    if(['keep','swap','release'].includes(action)) setTimeout(poll, 1300);
   }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); }
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
+  // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
+  if(b.dataset.cmd==='yard'){ setView(view==='yard'?'home':'yard'); return; }
   const c=b.dataset.confirm;
   if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
   sendCmd(b.dataset.cmd);
@@ -740,6 +815,32 @@ const server = http.createServer((req, res) => {
         } catch (e) {
             res.writeHead(404); res.end();
         }
+        return;
+    }
+    // 院子：牧場成員 + 現役在同一個舞台散步（docs/ranch-spec.md 階段 2）。
+    // 每次請求現算 —— 合成 20 隻約 0.3ms，沒必要放進主 tick 迴圈給不看院子的人付成本。
+    // 名單直接讀 ranch.json，不經過 latest 快取：牧場剛改完就要看得到。
+    if (req.url === '/yard') {
+        let body;
+        try {
+            const ranch = core.loadRanch();
+            const st    = loadState(STATE_FILE);
+            const step  = plazaStep();
+            const out   = plaza.composeYard(core, ranch, st, step, { caches: yardCaches });
+            // 場地尺寸一定要回傳，**空牧場時尤其重要**：沒有這個，前端拿不到尺寸只能
+            // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空牧場看起來就變成
+            // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
+            const F = plaza.YARD_FIELD;
+            body = { ok: true, step, cols: F.w, rows: F.h / 2,
+                     cap: ranch.cap || core.RANCH_CAP,
+                     kept: (ranch.pets || []).length,
+                     lines: out ? out.lines : null,
+                     pets: out ? out.placed.map(p => ({ code: p.code, char: p.char })) : [] };
+        } catch (e) {
+            body = { ok: false, error: e.message };
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(body));
         return;
     }
     if (req.url === '/state') {

@@ -71,14 +71,36 @@ const RUN_MIN = 6, RUN_MAX = 34;
 const STAY_MIN = 4, STAY_MAX = 8;
 const STAY_CHANCE = 1 / 4;
 
-const MAX_X = PLAZA_W - SPRITE;
-const MAX_Y = PLAZA_H - SPRITE - 2;   // 見下方 LABEL_RESERVE
 // 底部保留一個 cell 列（2 dot）給名牌。名牌固定標在**腳下**（見 plaza.js
 // buildLabels），沒有這段保留區的話，角色走到最底時腳下那一列會落到畫面外，
 // 名牌就整個不見。代價只有 2 dot 的可走範圍，換到的是「名牌位置永遠固定」。
 const LABEL_RESERVE = 2;
-const MIN_X = 0;
-const MIN_Y = 0;
+
+/**
+ * 場地。廣場與院子是**不同的空間**，尺寸各自決定 ——
+ * 廣場要塞 20 個人但得跟家裡的舞台擠同一個版面；院子最多 8 隻、獨佔畫面，可以大方些。
+ * 所以場地不是模組層的常數，而是一個傳進來的物件。
+ *
+ * 用工廠函式而不是各自宣告一組常數，是因為 minX/maxY 這些是**推導**出來的
+ * （要扣角色寬高、扣名牌保留區）；讓呼叫端自己算遲早會有人算錯一格，
+ * 而算錯的症狀是「偶爾有隻角色被裁掉半個身體」這種很難聯想到原因的東西。
+ */
+function makeField(w, h) {
+    return {
+        w, h,
+        minX: 0, maxX: w - SPRITE,
+        minY: 0, maxY: h - SPRITE - LABEL_RESERVE,
+    };
+}
+
+const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
+// 院子：128 x 80 dot（1024 x 640 px）。8 隻在 96x48 裡太擠，而且院子不必跟
+// 家裡的舞台共用版面寬度。
+const YARD_FIELD  = makeField(128, 80);
+
+// 向後相容：既有呼叫端仍在用這幾個常數（＝廣場的場地）
+const MIN_X = PLAZA_FIELD.minX, MAX_X = PLAZA_FIELD.maxX;
+const MIN_Y = PLAZA_FIELD.minY, MAX_Y = PLAZA_FIELD.maxY;
 
 // ── 雜湊（與 agumon-core 的 seedRand01 同一族，但這裡吃兩個參數）──────
 function hash2(a, b) {
@@ -92,10 +114,11 @@ const rand01 = (a, b) => hash2(a, b) / 0x100000000;
 
 // 進場位置也由 seed 決定 —— 否則所有人都從 (0,0) 疊在一起。
 // 用 k = -1 / -2 這兩個「決策序號之外」的槽，避免與走路的 k >= 0 撞號。
-function startPos(seed) {
+function startPos(seed, field = PLAZA_FIELD) {
+    const { minX, maxX, minY, maxY } = field;
     return {
-        x: MIN_X + Math.min(MAX_X - MIN_X, Math.floor(rand01(seed, -1) * (MAX_X - MIN_X + 1))),
-        y: MIN_Y + Math.min(MAX_Y - MIN_Y, Math.floor(rand01(seed, -2) * (MAX_Y - MIN_Y + 1))),
+        x: minX + Math.min(maxX - minX, Math.floor(rand01(seed, -1) * (maxX - minX + 1))),
+        y: minY + Math.min(maxY - minY, Math.floor(rand01(seed, -2) * (maxY - minY + 1))),
         facing: rand01(seed, -3) < 0.5 ? 'left' : 'right',
     };
 }
@@ -130,7 +153,8 @@ function offsetAt(vx, vy, t) {
  * 依賴這一段起點的座標，所以不是純 f(seed,k) —— 但座標本身是決定性的，
  * 整條鏈仍然可重播。
  */
-function legAt(seed, k, x, y) {
+function legAt(seed, k, x, y, field = PLAZA_FIELD) {
+    const { minX, maxX, minY, maxY } = field;
     if (rand01(seed, k * 3) < STAY_CHANCE) {
         const len = STAY_MIN + Math.floor(rand01(seed, k * 3 + 1) * (STAY_MAX - STAY_MIN + 1));
         return { vx: 0, vy: 0, len: Math.min(len, STAY_MAX), stay: true };
@@ -144,7 +168,7 @@ function legAt(seed, k, x, y) {
         let n = Math.min(want, RUN_MAX);
         while (n > 0) {
             const [ox, oy] = offsetAt(vx, vy, n);
-            if (x + ox >= MIN_X && x + ox <= MAX_X && y + oy >= MIN_Y && y + oy <= MAX_Y) return n;
+            if (x + ox >= minX && x + ox <= maxX && y + oy >= minY && y + oy <= maxY) return n;
             n--;
         }
         return 0;
@@ -174,17 +198,27 @@ function legAt(seed, k, x, y) {
  * @param {{k:number,at:number,x:number,y:number,facing:string}|null} cache
  * @returns {{x,y,facing,k,moving,cache}}
  */
-function posAt(occ, step, cache) {
+// 一次呼叫最多重播幾拍。超過就把起點往前拉，等同「這隻是那時候才進場的」。
+//
+// 這道保險是被實際咬過才加的：yard 那邊一開始把 joinStep 寫死成 0，但餵進來的 step
+// 是牆鐘算出來的（約 24 億），於是 posAt 要跑一億六千萬次迴圈 —— 而它是同步的，
+// **整個 daemon 的 event loop 就卡死了**，連無關的 /state 都一起停擺。
+// 呼叫端傳錯參數不該讓伺服器當掉，所以這裡自己擋住。
+//
+// 24 小時（= 廣場的 MAX_STAY）約 11.5 萬拍，遠在這個上限之內，正常路徑碰不到。
+const MAX_REPLAY = 200000;
+
+function posAt(occ, step, cache, field = PLAZA_FIELD) {
     const { seed, joinStep } = occ;
-    const target = Math.max(0, step - joinStep);
+    const target = Math.min(MAX_REPLAY, Math.max(0, step - joinStep));
 
     // 快取只在「沒有倒退」時可用（倒退＝時鐘校正把 step 拉回來了）
     let st = (cache && cache.at <= target)
         ? { ...cache }
-        : { ...startPos(seed), k: 0, at: 0 };
+        : { ...startPos(seed, field), k: 0, at: 0 };
 
     // 推進完整的段
-    let leg = legAt(seed, st.k, st.x, st.y);
+    let leg = legAt(seed, st.k, st.x, st.y, field);
     while (st.at + leg.len <= target) {
         const [ox, oy] = offsetAt(leg.vx, leg.vy, leg.len);
         st.x += ox; st.y += oy;
@@ -193,7 +227,7 @@ function posAt(occ, step, cache) {
         // 純垂直 / 停 → 維持前一個面向（只有左右兩種幀，美術限制）
         st.at += leg.len;
         st.k  += 1;
-        leg = legAt(seed, st.k, st.x, st.y);
+        leg = legAt(seed, st.k, st.x, st.y, field);
     }
 
     // 這一段已經走了幾拍（零頭）→ 補上，移動才連續而不是每段瞬移
@@ -220,6 +254,7 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
-    DIR_VECTORS, RUN_MIN, RUN_MAX, STAY_MIN, STAY_MAX, STAY_CHANCE,
+    makeField, PLAZA_FIELD, YARD_FIELD,
+    DIR_VECTORS, RUN_MIN, RUN_MAX, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
     hash2, rand01, startPos, offsetAt, legAt, posAt, stepAt,
 };

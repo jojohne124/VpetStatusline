@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','keep','swap','release'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 
 function printHelp() {
@@ -45,7 +45,11 @@ function printHelp() {
     console.log('  vpet help                   顯示這份指令說明');
     console.log('  vpet card                   顯示狀態卡（角色 / 階級 / 戰力 / 勝率）');
     console.log('  vpet tree                   顯示進化歷程（走過的彩色、未到的黑影問號）');
-    console.log('  vpet reset                  重抽一隻起始桌寵');
+    console.log('  vpet reset                  重抽一隻起始桌寵（舊的不保留）');
+    console.log('  vpet ranch                  牧場：列出收藏的桌寵');
+    console.log('  vpet keep                   現役收進牧場 + 抽一隻新的（保留版 reset）');
+    console.log('  vpet swap <編號|名稱>       現役收進牧場，叫出指定那隻');
+    console.log('  vpet release <編號|名稱>    放生牧場裡的一隻（永久刪除）');
     console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet album                  開啟圖鑑（瀏覽器）');
@@ -575,6 +579,120 @@ if (args[0] === '--evolve') {
     writeForce(force);
     console.log(`✓ 已排入進化：→ ${target}（下次 refresh 生效）`);
     process.exit(0);
+}
+
+// ── 牧場（見 docs/ranch-spec.md）───────────────────────────────────
+// CLI 這一側只是冰箱：收進 / 拿出 / 列清單 / 放生。真正的互動（看牠們散步、
+// 點牠）是 daemon 專屬 —— 狀態列只有一行，塞不下一座院子。
+//
+// 這裡**只驗參數並寫 force**，實際的狀態搬移由「當家」那一端在下一拍做
+// （core.applyRanchOp）。原因是 color-state.json 是單一寫入者制，CLI 直接改會把
+// 那個保證破壞掉。與 battle / evolve / reset 同一條路。
+const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release'];
+if (RANCH_CMDS.includes(args[0])) {
+    const ranch = core.loadRanch();
+    const cap   = ranch.cap || core.RANCH_CAP;
+    const pets  = ranch.pets;
+
+    const label = (p) => {
+        const id = p.state && p.state.characterId;
+        const power = (() => {
+            try {
+                return Math.min(core.getBasePower(p.state, id) + (p.state.trainingBonus || 0),
+                                core.getTierCap(core.getCharacterStage(id)));
+            } catch (e) { return '?'; }
+        })();
+        const stage = (() => { try { return core.getCharacterStage(id); } catch (e) { return '?'; } })();
+        const ago = (() => {
+            const s = Math.max(0, (Date.now() - (p.keptAt || 0)) / 1000);
+            const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
+            return d ? `${d} 天前` : h ? `${h} 小時前` : '剛剛';
+        })();
+        return `${core.getDisplayName(id)}  ${stage}  戰力 ${power}  收於 ${ago}`;
+    };
+
+    // 編號是權威；名稱只在牧場裡唯一時才能用 —— 一直 reset 會有好幾隻 agumon，不要猜。
+    const resolve = (key) => {
+        if (!key) return { err: '要指定編號或角色名（vpet ranch 可以看編號）' };
+        const idx = parseInt(key, 10);
+        if (!isNaN(idx) && String(idx) === String(key).trim()) {
+            if (idx < 1 || idx > pets.length) return { err: `沒有編號 ${idx}（目前 ${pets.length} 隻）` };
+            return { pet: pets[idx - 1] };
+        }
+        const k = String(key).toLowerCase();
+        const hit = pets.filter(p => String(p.state && p.state.characterId).toLowerCase() === k);
+        if (!hit.length) return { err: `牧場裡沒有 ${key}` };
+        if (hit.length > 1) {
+            return { err: `牧場裡有 ${hit.length} 隻 ${key}，請改用編號（vpet ranch 可以看）` };
+        }
+        return { pet: hit[0] };
+    };
+
+    if (args[0] === '--ranch') {
+        console.log(`牧場（${pets.length}/${cap}）`);
+        if (!pets.length) {
+            console.log('  (空的) —— vpet keep 可以把現役的收進來，並抽一隻新的');
+        } else {
+            pets.forEach((p, i) => console.log(`  #${i + 1}  ${label(p)}`));
+        }
+        console.log('');
+        console.log('  vpet swap <編號|名稱>     現役收進牧場，叫出指定那隻');
+        console.log('  vpet keep                 現役收進牧場 + 抽一隻新的');
+        console.log('  vpet release <編號|名稱>  放生（永久刪除）');
+        process.exit(0);
+    }
+
+    if (args[0] === '--keep') {
+        if (pets.length >= cap) {
+            console.log(`牧場已滿（${pets.length}/${cap}）。先 vpet release <編號> 騰出位置，或改用 vpet swap 交換。`);
+            process.exit(1);
+        }
+        // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
+        const pool = starters.filter(x => roster.includes(x));
+        const next = weightedPickStarter(pool.length ? pool : starters);
+        const force = readForce();
+        force.ranchTriggerTs = Date.now();
+        force.ranchOp        = { op: 'keep' };
+        force.character      = next;          // 由既有的換角色路徑處理「抽新的」
+        force.resetCostBase  = true;
+        force.dropTriggerTs  = Date.now();    // 空降表演
+        delete force.evolveTriggerTs; delete force.evolveTarget;
+        writeForce(force);
+        console.log(`✓ 已排入：現役收進牧場（${pets.length + 1}/${cap}），新夥伴 🎲 ${core.getDisplayName(next)}（下次 refresh 生效）`);
+        process.exit(0);
+    }
+
+    if (args[0] === '--swap') {
+        const { pet, err } = resolve(args[1]);
+        if (err) { console.log(err); process.exit(1); }
+        const force = readForce();
+        force.ranchTriggerTs = Date.now();
+        force.ranchOp        = { op: 'swap', id: pet.id };
+        // 不要設 force.character —— 那條路徑會把狀態清空，交換要的是整包還原
+        delete force.character; delete force.evolveTriggerTs; delete force.evolveTarget;
+        writeForce(force);
+        console.log(`✓ 已排入交換：→ ${core.getDisplayName(pet.state.characterId)}（下次 refresh 生效）`);
+        process.exit(0);
+    }
+
+    if (args[0] === '--release') {
+        const { pet, err } = resolve(args[1]);
+        if (err) { console.log(err); process.exit(1); }
+        // 唯一不可逆的動作 → 要二次確認。做成「再打一次並加 yes」而不是互動式提問，
+        // 因為這支也會被 daemon 以 subprocess 呼叫，不能吊在等輸入。
+        if (args[2] !== 'yes') {
+            console.log(`確定要放生嗎？這會**永久刪除**，救不回來：`);
+            console.log(`  ${label(pet)}`);
+            console.log(`確定的話請打：vpet release ${args[1]} yes`);
+            process.exit(1);
+        }
+        const force = readForce();
+        force.ranchTriggerTs = Date.now();
+        force.ranchOp        = { op: 'release', id: pet.id };
+        writeForce(force);
+        console.log(`✓ 已排入放生：${core.getDisplayName(pet.state.characterId)}（下次 refresh 生效）`);
+        process.exit(0);
+    }
 }
 
 // ── 切換角色 / reset ─────────────────────────────────────────────

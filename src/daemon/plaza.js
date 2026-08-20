@@ -140,17 +140,18 @@ const NPCS = [
  * @param core       agumon-core（用它的 getFacingRows / loadCharacter / visLen）
  * @param occupants  [{code, char, seed, joinStep}]
  * @param step       目前是第幾拍（已用 serverNow 校正過）
- * @param opts       { caches: Map, bg: dots|null, me: code, npc: bool }
+ * @param opts       { caches: Map, bg: dots|null, me: code, npc: bool, field }
  * @returns          { lines, placed, labels }
  */
 function composePlaza(core, occupants, step, opts = {}) {
     const caches = opts.caches instanceof Map ? opts.caches : new Map();
+    const field  = opts.field || W.PLAZA_FIELD;
 
     // 1. 空的 dot 緩衝（或底圖）+ 同尺寸的「這個 dot 是誰的」緩衝
     const dots = [], owner = [];
-    for (let y = 0; y < W.PLAZA_H; y++) {
-        dots.push(new Array(W.PLAZA_W).fill(null));
-        owner.push(new Array(W.PLAZA_W).fill(-1));
+    for (let y = 0; y < field.h; y++) {
+        dots.push(new Array(field.w).fill(null));
+        owner.push(new Array(field.w).fill(-1));
     }
     if (opts.bg) blit(dots, opts.bg, 0, 0);
 
@@ -162,7 +163,7 @@ function composePlaza(core, occupants, step, opts = {}) {
     for (const o of all) {
         // key 而不是 code：NPC 沒有 code，全部共用一個快取槽會互相汙染
         const key = o.key || o.code;
-        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep }, step, caches.get(key));
+        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep }, step, caches.get(key), field);
         caches.set(key, p.cache);
         placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving });
     }
@@ -178,8 +179,8 @@ function composePlaza(core, occupants, step, opts = {}) {
     });
 
     // 4. dot -> cell -> ANSI，名牌另外走文字層（見下）
-    const cells  = dotsToCells(dots, W.PLAZA_W);
-    const labels = buildLabels(placed, core, opts.me, owner);
+    const cells  = dotsToCells(dots, field.w);
+    const labels = buildLabels(placed, core, opts.me, owner, field);
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱
     return { lines: renderWithLabels(cells, labels), placed, labels };
 }
@@ -192,14 +193,14 @@ function composePlaza(core, occupants, step, opts = {}) {
  * cell，沒有 dot 級的字模。既有 PvP 名牌也是渲染成 ANSI 之後才貼字（captionRow），
  * 這裡沿用同樣的分層，只是位置從「畫面最底一列」改成「各自腳下」。
  */
-function buildLabels(placed, core, me, owner) {
-    const lastRow = W.PLAZA_H / 2 - 1;
+function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
+    const lastRow = field.h / 2 - 1;
     const vis = (t) => (core && core.visLen ? core.visLen(t) : t.length);
     const rows = new Map();
     for (const p of placed) {
         if (!p.code) continue;
         const wide = vis(p.code);
-        const col0 = Math.max(0, Math.min(W.PLAZA_W - wide,
+        const col0 = Math.max(0, Math.min(field.w - wide,
                      p.x + Math.floor((W.SPRITE - wide) / 2)));
 
         // 名牌**一律標在腳下**（固定位置，不會忽上忽下）。腳下是慣例 ——
@@ -294,9 +295,66 @@ function cellToAnsi(c) {
     return '⠀';
 }
 
+// ── 牧場院子（docs/ranch-spec.md 階段 2）──────────────────────────────
+// 與廣場的差別只有「名單從哪來」：廣場是伺服器發的在場名單，院子是本機 ranch.json。
+// 畫面層（走路、y 排序、名牌、遮擋）完全共用，一行都不用改 —— 這正是先做牧場
+// 再做廣場的理由。
+//
+// seed 由每隻的 id 雜湊而來，不需要伺服器分配（那是廣場為了跨 client 一致才需要的）。
+// 同一隻每次開院子的走位都一樣，看久了會有「這隻習慣待在那一角」的感覺。
+// joinStep 一律用「這個 daemon 這次啟動的時間」，不是 0，也不是 keptAt。
+//   joinStep = 0  → 要從 epoch 重播 24 億拍（實際踩過，daemon 直接卡死）
+//   joinStep = keptAt → 收很久的那隻要重播數百萬拍，第一次開院子會頓一下
+// 院子只有一個 client，不需要跨機器一致，所以「這次開機才開始走」完全夠用；
+// 副作用是重開 daemon 大家會回到各自的起點，那反而像「早上剛出門」。
+const SESSION_START = Date.now();
+
+function yardOccupants(core, ranch, activeState) {
+    const base = W.stepAt(SESSION_START);
+    void activeState;   // 現役不進院子（見下），保留參數是為了呼叫端不用改
+    const list = [];
+    for (const p of (ranch.pets || [])) {
+        const id = p.state && p.state.characterId;
+        if (!id) continue;
+        list.push({
+            key:  'ranch:' + p.id,
+            code: core.getDisplayName ? core.getDisplayName(id) : id,
+            char: id,
+            seed: W.hash2(hashStr(p.id), 0),
+            joinStep: base,
+        });
+    }
+    // 現役**不**放進院子。草案原本要放（想說「不然院子會像少了一隻」），但那是搞混了
+    // 兩件事：院子是「收起來的那些」，現役正在你身邊過生活，不在冰箱裡。
+    // 兩邊都出現反而看不出「收進去」和「拿出來」的差別。
+    return list;
+}
+
+/** 字串 → 32-bit 整數。id 是亂數字串，要先變成數字才能餵給 seed。 */
+function hashStr(s) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < String(s).length; i++) {
+        h ^= String(s).charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+}
+
+/**
+ * 畫出院子。回傳 null 代表牧場是空的 —— 呼叫端自己決定顯示什麼（不要畫一張空圖，
+ * 那看起來像壞掉）。
+ * NPC 一律關掉：院子是你自己的地方，不該有野生 vpet 亂入。
+ */
+function composeYard(core, ranch, activeState, step, opts = {}) {
+    const occ = yardOccupants(core, ranch, activeState);
+    if (!occ.length) return null;
+    return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD });
+}
+
 module.exports = {
-    PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H,
+    PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD,
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
+    yardOccupants, composeYard, hashStr,
 };

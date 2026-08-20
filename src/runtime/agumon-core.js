@@ -116,6 +116,62 @@ function saveState(stateFile, s) {
     } catch(e) {}
 }
 
+/**
+ * 牧場操作（keep / swap / release）。由 CLI 寫進 force，由「當家」那一端實際執行。
+ *
+ * 為什麼不讓 CLI 直接改：color-state.json 是單一寫入者制（C 方案，daemon 當家時
+ * statusLine 退唯讀）。CLI 直接寫會把那個保證破壞掉，所以一律走 force —— 與
+ * battle / evolve / reset 同一條路。CLI 只負責驗參數與回報「已排入」。
+ *
+ * ⚠️ 寫入順序：**先寫 ranch.json，再改 st**。兩個檔要一起換，中途死掉必然有一邊沒完成；
+ * 這個順序下最壞是「牧場多一份、現役沒換成」，玩家看得到也救得回。
+ * 反過來則是桌寵直接消失 —— 同樣是失敗，代價差很多。
+ */
+function applyRanchOp(st, force, ranchFile) {
+    const op = force.ranchOp;
+    if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
+    st.lastRanchTriggerTs = force.ranchTriggerTs;   // 不論成敗都記，避免 stale 重放
+
+    // 過期的指令不補做。下界給 5 秒的餘裕而不是 0 —— CLI 與當家端可能是不同 process，
+    // 系統時鐘微調（NTP、休眠喚醒）就足以讓時戳看起來「來自未來」，
+    // 嚴格要求 age >= 0 會讓指令無聲消失，而使用者只會看到「打了沒反應」。
+    const age = Date.now() - force.ranchTriggerTs;
+    if (!(age >= -5000 && age < 300000)) return null;
+
+    // 表演中不動牧場：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀
+    if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) return null;
+
+    const ranch = loadRanch(ranchFile);
+
+    if (op.op === 'release') {
+        const i = ranch.pets.findIndex(p => p.id === op.id);
+        if (i < 0) return null;
+        ranch.pets.splice(i, 1);
+        saveRanch(ranch, ranchFile);
+        return { op: 'release' };
+    }
+
+    if (op.op === 'keep') {
+        if (ranch.pets.length >= (ranch.cap || RANCH_CAP)) return null;   // 滿了就不收（CLI 已擋，這是第二道）
+        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        saveRanch(ranch, ranchFile);
+        // 抽新的那一步交給 force.character（CLI 一併寫入），走既有的換角色路徑
+        return { op: 'keep' };
+    }
+
+    if (op.op === 'swap') {
+        const i = ranch.pets.findIndex(p => p.id === op.id);
+        if (i < 0) return null;
+        const incoming = ranch.pets[i];
+        ranch.pets.splice(i, 1);
+        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        saveRanch(ranch, ranchFile);
+        restorePet(st, incoming.state);
+        return { op: 'swap', to: st.characterId };
+    }
+    return null;
+}
+
 // ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────
 // 讀 force-char.json 把 cheat/指令轉成 st 上的 _force* 旗標與持續開關；每拍都要跑
 // （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
@@ -123,6 +179,11 @@ const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
 function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
     let force;
     try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
+
+    // 牧場操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
+    // 順序反過來的話收進牧場的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
+    applyRanchOp(st, force);
+
     if (force.character) {
         const changed = st.characterId !== force.character;
         st.characterId = force.character;
@@ -356,6 +417,88 @@ function evoSpendTotal(st) {
 // 門檻採「寬鬆」：成為過那隻就記（含 vpet <name> 直接切換）。之所以敢寬鬆，是因為
 // 直接切換角色在 release 版被 gate 擋掉，一般玩家只能靠實際養成累積。
 const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
+
+// ── 牧場（見 docs/ranch-spec.md）───────────────────────────────────
+// 心智模型是冰箱：同時只有一隻現役，現役會成長，牧場裡的全部凍結。
+// 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），牧場收「個體」（這一隻本人）。
+const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
+const RANCH_CAP  = 8;
+
+// 收進牧場時**丟掉**的欄位。其餘一律保存。
+//
+// ⚠️ 這裡用黑名單而不是白名單，是因為兩種漏掉的後果差很多：
+//   白名單漏掉一個成長欄位 → 玩家的訓練值/勝率/進化歷程永久消失，而且不會有
+//                            任何錯誤訊息，只是他幾十小時的心血無聲不見。
+//   黑名單漏掉一個暫態欄位 → 還原出一個過期的動畫狀態，下一拍就自我修正。
+// 所以判準是「**不確定就不要加進黑名單**」。
+//
+// 用規則而不是純列舉，是因為這個 codebase 的暫態欄位命名很一致
+// （xxxStartStep / xxxShownElapsed / lastXxxTriggerTs / _forceXxx），
+// 日後新增同型欄位會自動被涵蓋，不會因為忘了加而被誤存。
+const RANCH_TRANSIENT_EXACT = new Set([
+    '_albumLast',                                                   // 圖鑑去重快取，重算即可
+    '_forceSleep', '_freezeEvolve', '_noAutoBattle', '_petHidden',  // 每拍從 force 重讀
+    'battleArmHookTs', 'battleFiredHookTs', 'battlePending', 'battleNoCount',  // hook 武裝狀態，屬於這台機器不屬於這隻
+    'battleEnemy', 'battleWin', 'battleVersion', 'evoNextCharId', 'exprIdx',   // 演出中的一次性資料
+    'lastActivityAt', 'lastHookTs',                                 // 使用者活動時戳，全域不是個體的
+    'lastFacing', 'lastPos', 'walkPhaseOffset', 'lastStepSeen',     // 走路相位
+    'wasSleeping',
+]);
+const RANCH_TRANSIENT_RE = [
+    /StartStep$/,                 // 各種表演的起始拍
+    /ShownElapsed$/,              // 各種表演的播放進度
+    /^last[A-Za-z]*TriggerTs$/,   // force 去重時戳 —— 還原舊值會讓現在的 trigger 被當成新的而重放
+    /^_force/, /^_pvp/, /^pvp/,   // 一次性旗標與 PvP 名牌
+];
+const isRanchTransient = (k) =>
+    RANCH_TRANSIENT_EXACT.has(k) || RANCH_TRANSIENT_RE.some(re => re.test(k));
+
+/** 把現役的狀態打包成可以收進牧場的一份快照 */
+function snapshotPet(st) {
+    const snap = {};
+    for (const k of Object.keys(st)) {
+        if (isRanchTransient(k)) continue;
+        snap[k] = st[k];
+    }
+    return JSON.parse(JSON.stringify(snap));   // 深拷貝，之後改 st 不會動到牧場裡那份
+}
+
+/**
+ * 把牧場裡的一份快照還原成現役（就地改 st）。
+ *
+ * 先刪掉 st 上所有「非暫態」的鍵再套用 —— 只做 Object.assign 的話，
+ * 舊角色有、新角色沒有的欄位（例如 inheritedPower、某個 _evo_* latch）會殘留下來，
+ * 變成兩隻寵物的狀態混在一起。這種 bug 只在特定組合下才顯現，很難查。
+ */
+function restorePet(st, snap) {
+    for (const k of Object.keys(st)) {
+        if (!isRanchTransient(k)) delete st[k];
+    }
+    Object.assign(st, JSON.parse(JSON.stringify(snap)));
+    return st;
+}
+
+function loadRanch(file) {
+    try {
+        const r = JSON.parse(fs.readFileSync(file || RANCH_FILE, 'utf8'));
+        if (r && Array.isArray(r.pets)) return r;
+    } catch (e) {}
+    return { v: 1, cap: RANCH_CAP, pets: [] };
+}
+function saveRanch(r, file) {
+    atomicWrite(file || RANCH_FILE, JSON.stringify(r));
+}
+
+// 短亂數 id。**不能用 characterId 當識別** —— 一直 reset 會有好幾隻 agumon，
+// 牠們是不同個體。這裡的隨機不影響任何模擬結果，只是產生一個名字。
+function newRanchId(ranch) {
+    const taken = new Set((ranch.pets || []).map(p => p.id));
+    for (let i = 0; i < 1000; i++) {
+        const id = Math.random().toString(36).slice(2, 7);
+        if (!taken.has(id)) return id;
+    }
+    return 'r' + Date.now().toString(36);
+}
 
 function loadAlbum(file) {
     try {
@@ -2006,6 +2149,8 @@ module.exports = {
     getBasePower, computeInheritedPower,
     bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
+    RANCH_FILE, RANCH_CAP, loadRanch, saveRanch, newRanchId,
+    snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     getDisplayName,
     getCharacterTags,
     getCharacterPower,

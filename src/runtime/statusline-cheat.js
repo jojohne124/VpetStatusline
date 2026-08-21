@@ -608,7 +608,10 @@ if (RANCH_CMDS.includes(args[0])) {
             const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
             return d ? `${d} 天前` : h ? `${h} 小時前` : '剛剛';
         })();
-        return `${core.getDisplayName(id)}  ${stage}  戰力 ${power}  收於 ${ago}`;
+        // 在牧場裡自己變掉的（大便獸彩蛋）要講清楚原本是誰 ——
+        // 只顯示新角色的話，玩家會以為收藏不見了，那是 bug 的體感不是彩蛋的體感。
+        const was = p.evolvedFrom ? `（原：${core.getDisplayName(p.evolvedFrom)}）` : '';
+        return `${core.getDisplayName(id)}${was}  ${stage}  戰力 ${power}  收於 ${ago}`;
     };
 
     // 編號是權威；名稱只在牧場裡唯一時才能用 —— 一直 reset 會有好幾隻 agumon，不要猜。

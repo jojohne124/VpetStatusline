@@ -21,7 +21,7 @@
     "check-pricing": "node scripts/check-pricing.js",
     "plaza-preview": "node scripts/plaza-preview-web.js",
     "plaza-preview-tty": "node scripts/plaza-preview.js",
-    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js && node scripts/test-plaza.js && node scripts/test-ranch.js && node scripts/test-daemon-page.js"
+    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js && node scripts/test-plaza.js && node scripts/test-ranch.js && node scripts/test-weather.js && node scripts/test-daemon-page.js"
   },
   "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],
   "author": "kaihsiangchang",

@@ -179,6 +179,8 @@ function composePlaza(core, occupants, step, opts = {}) {
     });
 
     // 4. dot -> cell -> ANSI，名牌另外走文字層（見下）
+    //    天氣**不在這裡**：做過「依天氣把角色調色」，實際看了拿掉 —— 16x16 的點陣圖
+    //    顏色本來就少，一染就分不出誰是誰。天氣整層都在前端疊，不動角色本身。
     const cells  = dotsToCells(dots, field.w);
     const labels = buildLabels(placed, core, opts.me, owner, field);
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱

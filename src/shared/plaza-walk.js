@@ -47,6 +47,9 @@ const DOT_PER  = 1;   // 每拍移動 1 dot
 // 沒有這個風險。
 
 // 分量 |v| <= 3 的互質向量（含各象限）。互質才不會有重複角度（(2,2) 等同 (1,1)）。
+// 掃描替代方向時的跳躍步長。與 DIR_VECTORS.length（32）互質才會走遍全部方向；
+// 用 1 的話會一路試相鄰角度，那些方向對著同一面牆，等於白掃。
+const DIR_SCAN_STRIDE = 7;
 const DIR_VECTORS = (() => {
     const gcd = (a, b) => (b ? gcd(b, a % b) : a);
     const out = [];
@@ -63,6 +66,8 @@ const DIR_VECTORS = (() => {
 // 一段路走幾拍：連續整數，不是固定清單。v2 的清單全是偶數，
 // 導致每段的終點永遠落在同一個奇偶晶格上，轉彎點也跟著規律化。
 const RUN_MIN = 6, RUN_MAX = 34;
+// 撞牆截短之後還剩幾拍，才算「這段值得走」。低於這個數就改抽別的方向 —— 見 legAt。
+const MIN_LEG = 5;
 // 停一次幾拍。注意「抽中停的機率」與「站著的時間佔比」差很多 ——
 // 一段路平均 15 拍、一次停平均 6 拍，所以 1/4 的抽中率換算成時間只有約 12%。
 // v1 曾經是時間 37%，畫面上就是一群角色在發呆。
@@ -163,7 +168,7 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
         const len = STAY_MIN + Math.floor(rand01(seed, k * 3 + 1) * (STAY_MAX - STAY_MIN + 1));
         return { vx: 0, vy: 0, len: Math.min(len, STAY_MAX), stay: true };
     }
-    const v    = DIR_VECTORS[Math.floor(rand01(seed, k * 3 + 1) * DIR_VECTORS.length) % DIR_VECTORS.length];
+    const idx  = Math.floor(rand01(seed, k * 3 + 1) * DIR_VECTORS.length) % DIR_VECTORS.length;
     const want = RUN_MIN + Math.floor(rand01(seed, k * 3 + 2) * (RUN_MAX - RUN_MIN + 1));
 
     // 截短到剛好停在牆邊。位移在兩軸都單調，往回找第一個界內的 t 即可；
@@ -178,14 +183,26 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
         return 0;
     };
 
-    let len = fit(v[0], v[1]);
-    if (len > 0) return { vx: v[0], vy: v[1], len, stay: false };
-
-    // 已經貼在牆上、朝外走一步都不行 → 掉頭走同一條線。
-    // 不這樣做的話只能當成「停」，而貼牆是很常發生的事，停留比例會被灌水
-    // （實測 12% → 21%），畫面上就是一堆角色在邊緣發呆。
-    len = fit(-v[0], -v[1]);
-    if (len > 0) return { vx: -v[0], vy: -v[1], len, stay: false };
+    // 抽到的方向被牆截得太短就換一個，而不是硬走那一兩拍。
+    //
+    // 為什麼需要這一段：貼著牆的時候，「幾乎與牆平行、但帶一點朝外分量」的方向
+    // 會被 fit 截成 1~2 拍，於是角色每一兩拍就重抽一次方向，在原地抖 —— 看起來
+    // 就是卡在邊界。牧場場地小（可走範圍只有 37x25），這件事特別明顯：
+    // 實測貼邊時間 19.2%、角落 (0,24) 的出現率是平均值的 6 倍。
+    //
+    // 掃描順序從抽到的那個方向開始、以與 32 互質的步長跳，所以會走遍全部 32 個方向
+    // 而不偏袒任何一邊；起點仍是亂數決定的，路線的多樣性不受影響。
+    // 全程只用整數與 seed，決定性不變。
+    const n = DIR_VECTORS.length;
+    let bestLen = 0, bestV = null;
+    for (let i = 0; i < n; i++) {
+        const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
+        const len = fit(c[0], c[1]);
+        if (len >= MIN_LEG) return { vx: c[0], vy: c[1], len, stay: false };
+        if (len > bestLen) { bestLen = len; bestV = c; }
+    }
+    // 32 個方向沒有一個走得滿 MIN_LEG（場地極小或縮在角落）→ 走能走的最長那個。
+    if (bestLen > 0) return { vx: bestV[0], vy: bestV[1], len: bestLen, stay: false };
 
     return { vx: 0, vy: 0, len: STAY_MIN, stay: true };   // 理論上到不了（場地至少放得下一步）
 }
@@ -259,6 +276,6 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
     makeField, PLAZA_FIELD, YARD_FIELD,
-    DIR_VECTORS, RUN_MIN, RUN_MAX, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
+    DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
     hash2, rand01, startPos, offsetAt, legAt, posAt, stepAt,
 };

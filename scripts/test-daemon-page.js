@@ -65,6 +65,21 @@ setTimeout(async () => {
         ok(y.ok === true, '/yard 回應失敗');
         ok(typeof y.cols === 'number' && typeof y.rows === 'number',
            '/yard 沒有回傳場地尺寸（空牧場時畫布會塌成家裡的大小）');
+
+        console.log('— 天氣 —');
+        ok(y.weather && typeof y.weather.sky === 'string', '/yard 沒有回傳天氣');
+        ok(y.weather && typeof y.weather.label === 'string', '/yard 的天氣缺少顯示文字');
+        // ⚠️ 查詢字串裡的 + 會被解碼成空白：前端忘了 encodeURIComponent 就會送出
+        //    "clear cold"，伺服器比對不到 → 整個退回真實天氣。症狀是「選了寒流卻
+        //    什麼都沒發生」，而且畫面完全正常，很難聯想到是網址編碼。踩過一次。
+        const enc = JSON.parse(await get('/yard?w=' + encodeURIComponent('clear+cold')));
+        ok(enc.weather && enc.weather.cold === true && enc.weather.sky === 'clear',
+           '?w=clear+cold（已編碼）應回傳晴天＋寒流');
+        const raw = JSON.parse(await get('/yard?w=clear+cold'));
+        ok(raw.weather && raw.weather.cold === true,
+           '?w=clear+cold（未編碼，伺服器收到空白）也要吃得下來');
+        const junk = JSON.parse(await get('/yard?w=%3Cscript%3E'));
+        ok(junk.weather && junk.weather.preview !== true, '看不懂的天氣參數應忽略');
     } catch (e) {
         fail++; console.log('  ✗ 例外：' + e.message);
     }

@@ -127,6 +127,111 @@ function saveState(stateFile, s) {
  * 這個順序下最壞是「牧場多一份、現役沒換成」，玩家看得到也救得回。
  * 反過來則是桌寵直接消失 —— 同樣是失敗，代價差很多。
  */
+// ── 特殊進化（規則型）─────────────────────────────────────────────
+// 「任一幼年期在牧場放置 48 小時 → 大便獸」這種進化，**刻意不寫進 config.evolvesTo**。
+//
+// 理由是那會變成 19 條邊（目前 roster 有 19 隻 Child），同時汙染三個地方：
+//   vpet tree / 圖鑑（19 條線收斂到同一顆）、進化路線編輯器的 SVG、
+//   以及 parentsOf()（大便獸會有 19 個 parent，血緣長度算出來很奇怪）。
+//   而且每新增一隻 Child 就得記得補一條，遲早漏掉。
+// 寫成規則之後那三個地方**一行都不用改** —— 它們讀的是 evolvesTo，看不到這裡的規則。
+// 要露出來就走反方向：在大便獸自己的圖鑑頁寫「來源：幼年期在牧場放置 48 小時」，
+// 一行字取代 19 條箭頭。
+//
+// ⚠️ 為什麼是獨立檔案而不是塞進 roster.json：進化路線編輯器存檔時會**整份重寫**
+//    roster.json，而且只寫 roster/starters/starterWeights/highTierStarters 四個 key
+//    （route_editor_server.js:273）—— 加在那裡會在下次存檔時被無聲刪掉。
+const SPECIAL_EVO_FILE = path.join(ASSETS_DIR, 'special-evolutions.json');
+
+function loadSpecialEvolutions(file) {
+    try {
+        const j = JSON.parse(fs.readFileSync(file || SPECIAL_EVO_FILE, 'utf8'));
+        return Array.isArray(j.rules) ? j.rules : [];
+    } catch (e) { return []; }   // 沒有檔案 = 沒有特殊進化，不是錯誤
+}
+
+/**
+ * 這隻牧場成員符不符合某條規則。
+ * 未知的條件型別一律回 false —— 寧可不觸發，也不要因為看不懂就亂把人家的收藏變掉。
+ */
+function matchRanchRule(rule, pet, now, opts = {}) {
+    const s = pet && pet.state;
+    if (!rule || !rule.to || !s || !s.characterId) return false;
+    if (rule.to === s.characterId) return false;                 // 已經是了，不重複觸發
+    // 未實裝（不在 roster）就不生效 —— 與 checkEvolution 同一條 gate。
+    // 所以規則可以先寫好，等美術進 roster 才會真的開始變。
+    const roster = opts.rosterSet || getRosterSet();
+    if (roster && roster.size && !roster.has(rule.to)) return false;
+    if (rule.from && rule.from !== s.characterId) return false;
+    if (rule.fromStage && getCharacterStage(s.characterId) !== rule.fromStage) return false;
+
+    for (const c of (rule.conditions || [])) {
+        if (c.type === 'ranch_hours') {
+            // 「完全不動到 N 小時」不需要任何新狀態：keep / swap 都是新開一筆
+            // keptAt，被換出來的那隻是整筆從 ranch 移除 —— 之後再收進去是全新 id。
+            // 所以 keptAt 天生就是「連續待在牧場多久」，中途取出自然歸零。
+            if (!(now - (pet.keptAt || 0) >= c.hours * 3600e3)) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 每隻最多幾毫秒檢查一次。48 小時的判定不需要每秒重算，而這條路徑每拍都會經過。
+const RANCH_AGE_CHECK_MS = 60000;
+
+/**
+ * 套用牧場裡的時間類進化。回傳有變動的清單，沒變動回 null。
+ *
+ * 惰性判定（不是計時器）：牧場本來就是冰箱、裡面的東西不會自己長大，這是唯一的例外。
+ * 用 keptAt 現算，所以 daemon 關掉的那段時間照樣算數 —— 你下次打開牧場才發現牠變了，
+ * 那正好就是「默默變成」該有的體感。
+ */
+function applyRanchAging(st, ranchFile, opts = {}) {
+    const now = opts.now || Date.now();
+    if (st && !opts.force) {
+        if (st._ranchAgeCheckedAt && now - st._ranchAgeCheckedAt < RANCH_AGE_CHECK_MS) return null;
+        st._ranchAgeCheckedAt = now;
+    }
+    const rules = loadSpecialEvolutions(opts.rulesFile);
+    if (!rules.length) return null;
+
+    const ranch = loadRanch(ranchFile);
+    const changed = [];
+    for (const pet of (ranch.pets || [])) {
+        for (const rule of rules) {
+            if (!matchRanchRule(rule, pet, now, opts)) continue;
+            const from = pet.state.characterId;
+            applySpecialEvo(pet.state, rule.to, now);
+            // 右鍵選單要顯示「大便獸（原：亞古獸）」。全藏起來的話玩家會以為收藏不見了
+            // 而恐慌 —— 那是 bug 的體感，不是彩蛋的體感。
+            pet.evolvedFrom = from;
+            pet.evolvedAt   = now;
+            changed.push({ id: pet.id, from, to: rule.to, rule: rule.id || null });
+            recordAlbumChar(rule.to, opts.albumFile);
+            break;                                   // 一隻一次只套一條規則
+        }
+    }
+    if (changed.length) saveRanch(ranch, ranchFile);
+    return changed.length ? changed : null;
+}
+
+/** 把一筆快照就地變成 to。比照正常進化 commit 的清理，不多不少。 */
+function applySpecialEvo(snap, to, now) {
+    const prev = snap.characterId;
+    snap.characterId = to;
+    delete snap.inheritedPower;      // 非 SU 目標：回歸 config.power
+    resetStageStats(snap, now);      // 訓練值 / 勝率 / 隱藏統計 / 心情歸零（同正常進化）
+    // evoHistory 要自己接上。放著不管的話，之後換出來時 updateEvoHistory 會發現
+    // 「大便獸不是前一隻的 evolvesTo 目標」而判定為斷點，把整條血緣清成單一顆 ——
+    // vpet tree 的格數就沒了。使用者的定位是「視做一種進化」，血緣就該留著。
+    const h = Array.isArray(snap.evoHistory) ? snap.evoHistory.slice() : [];
+    if (h[h.length - 1] !== to) h.push(to);
+    snap.evoHistory = h;
+    return prev;
+}
+
 function applyRanchOp(st, force, ranchFile) {
     const op = force.ranchOp;
     if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
@@ -177,6 +282,13 @@ function applyRanchOp(st, force, ranchFile) {
 // （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
 const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
 function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
+    // 牧場的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
+    // ⚠️ 放在下面的話，force-char.json 不存在時 parse 會 throw、整個函式提早 return，
+    //    牧場就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
+    //    任何 vpet 指令）。實測就是這樣抓到的：測試全綠但真機上放了一隻 Child 進牧場，
+    //    規則永遠不會觸發。
+    applyRanchAging(st);
+
     let force;
     try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
 
@@ -436,7 +548,7 @@ const RANCH_CAP  = 8;
 // （xxxStartStep / xxxShownElapsed / lastXxxTriggerTs / _forceXxx），
 // 日後新增同型欄位會自動被涵蓋，不會因為忘了加而被誤存。
 const RANCH_TRANSIENT_EXACT = new Set([
-    '_albumLast',                                                   // 圖鑑去重快取，重算即可
+    '_albumLast', '_ranchAgeCheckedAt',                                                   // 圖鑑去重快取，重算即可
     '_forceSleep', '_freezeEvolve', '_noAutoBattle', '_petHidden',  // 每拍從 force 重讀
     'battleArmHookTs', 'battleFiredHookTs', 'battlePending', 'battleNoCount',  // hook 武裝狀態，屬於這台機器不屬於這隻
     'battleEnemy', 'battleWin', 'battleVersion', 'evoNextCharId', 'exprIdx',   // 演出中的一次性資料
@@ -514,6 +626,14 @@ function recordAlbumIfChanged(st, file) {
     const id = st && st.characterId;
     if (!id || st._albumLast === id) return false;
     st._albumLast = id;
+    return recordAlbumChar(id, file);
+}
+
+// 直接登錄某個角色（不經過 st）。牧場裡發生的進化需要這個 ——
+// recordAlbumIfChanged 看的是**現役**的 characterId，而大便獸是在冰箱裡變的，
+// 從頭到尾都沒當過現役，走那條路永遠不會被收錄。
+function recordAlbumChar(id, file) {
+    if (!id) return false;
     const f = file || ALBUM_FILE;
     const a = loadAlbum(f);
     if (a.chars[id]) return false;          // 已收錄，不覆蓋首次取得時間
@@ -2151,6 +2271,8 @@ module.exports = {
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
     RANCH_FILE, RANCH_CAP, loadRanch, saveRanch, newRanchId,
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
+    SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
+    recordAlbumChar,
     getDisplayName,
     getCharacterTags,
     getCharacterPower,

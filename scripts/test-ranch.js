@@ -279,6 +279,127 @@ console.log('— 重播上限 —');
     ok(p.x >= W.MIN_X && p.x <= W.MAX_X && p.y >= W.MIN_Y && p.y <= W.MAX_Y, '重播上限之後位置出界');
 }
 
+// ── 牧場裡的時間類進化（大便獸彩蛋）──────────────────────────────
+// 「任一幼年期在牧場放置 48 小時 → 大便獸」。這裡最該釘住的是**不該觸發時不觸發**：
+// 誤觸的代價是玩家的收藏被無聲換成別的角色，而且不可逆。
+console.log('— 特殊進化（牧場時效）—');
+{
+    const H = 3600e3;
+    const RULES = path.join(TMP, 'special-evolutions.json');
+    const ALBUM = path.join(TMP, 'album.json');
+    // 目標必須是 roster 成員才會生效。這裡借一隻穩定存在的 Adult 當替身，
+    // 不用 sukamon —— 測試不該綁在「某個彩蛋角色目前有沒有實裝」上。
+    const TO = 'greymon';
+    const rule = (extra = {}) => {
+        fs.writeFileSync(RULES, JSON.stringify({ rules: [{
+            id: 'test-neglect', to: TO, fromStage: 'Child',
+            conditions: [{ type: 'ranch_hours', hours: 48 }], ...extra }] }));
+    };
+    const child = (over = {}) => ({
+        characterId: 'agumon', trainingBonus: 12, battleTotalCount: 9, battleWinCount: 5,
+        mood: 2, stats: { x: { n: 1, t: 2 } }, evoHistory: ['agumon'], ...over,
+    });
+    const put = (keptAgoH, state) => {
+        fs.writeFileSync(RANCH, JSON.stringify({ cap: 8, seq: 1, pets: [
+            { id: 'r1', keptAt: Date.now() - keptAgoH * H, state } ] }));
+    };
+    const load = () => JSON.parse(fs.readFileSync(RANCH, 'utf8')).pets[0];
+    const age = (o = {}) => core.applyRanchAging(null, RANCH,
+                                                 { rulesFile: RULES, albumFile: ALBUM, ...o });
+
+    rule();
+    put(49, child());
+    const ch = age();
+    ok(ch && ch.length === 1 && ch[0].to === TO, '放了 49 小時應該要變');
+    {
+        const p1 = load();
+        ok(p1.state.characterId === TO, '角色沒有換成目標');
+        ok(p1.evolvedFrom === 'agumon', '沒有記下原本是誰（右鍵選單要顯示，不然像收藏不見了）');
+        // 比照正常進化 commit：訓練值 / 勝率 / 隱藏統計 / 心情全部歸零
+        ok(p1.state.trainingBonus === undefined && p1.state.battleTotalCount === undefined
+           && p1.state.mood === undefined && p1.state.stats === undefined,
+           '應比照正常進化把本階段資料歸零');
+        // 血緣要接上，否則換出來時 updateEvoHistory 會判定斷點、把 tree 清成一格
+        ok(JSON.stringify(p1.state.evoHistory) === JSON.stringify(['agumon', TO]),
+           `evoHistory 沒接上（得到 ${JSON.stringify(p1.state.evoHistory)}）`);
+        const alb = JSON.parse(fs.readFileSync(ALBUM, 'utf8'));
+        ok(!!alb.chars[TO], '圖鑑沒登錄 —— 牠從沒當過現役，recordAlbumIfChanged 收不到');
+    }
+    ok(age() === null, '已經變過的不該再變一次');
+
+    // ── 不該觸發的情況 ──
+    rule();
+    put(47, child());
+    ok(age() === null, '47 小時不該觸發');
+    ok(load().state.characterId === 'agumon', '47 小時卻已經被改掉');
+
+    // 「中途取出就重製」＝ keep/swap 會新開一筆 keptAt。這裡直接驗那個語意：
+    // 只要 keptAt 是新的，先前待多久都不算數。
+    put(0.1, child());
+    ok(age() === null, '剛收進去的不該觸發（取出再放回＝新的 keptAt）');
+
+    rule();
+    put(200, child({ characterId: 'greymon' }));   // Adult
+    ok(age() === null, 'fromStage 不符（Adult）不該觸發');
+
+    put(200, child({ characterId: TO }));
+    ok(age() === null, '已經是目標角色的不該再觸發');
+
+    // 看不懂的條件一律不成立 —— 寧可不觸發，也不要亂把人家的收藏變掉
+    fs.writeFileSync(RULES, JSON.stringify({ rules: [{
+        to: TO, fromStage: 'Child', conditions: [{ type: 'no_such_condition' }] }] }));
+    put(200, child());
+    ok(age() === null, '未知的條件型別不該觸發');
+
+    // 未實裝的目標不生效 → 規則可以先寫好等美術再進 roster。
+    // 這裡用一個一定不存在的 id，不要拿真角色 —— 拿 sukamon 的話，
+    // 它一進 roster 這條測試就會無聲失效（本來就發生過：規則先寫、美術後補）。
+    fs.writeFileSync(RULES, JSON.stringify({ rules: [{
+        to: 'not-a-real-character', fromStage: 'Child',
+        conditions: [{ type: 'ranch_hours', hours: 48 }] }] }));
+    put(200, child());
+    ok(age() === null, '目標不在 roster 時不該觸發（美術未進 roster 前規則應該是惰性的）');
+    ok(load().state.characterId === 'agumon', '未實裝目標卻已經把角色改掉');
+
+    // 沒有規則檔 = 沒有特殊進化，不是錯誤
+    ok(core.applyRanchAging(null, RANCH, { rulesFile: path.join(TMP, 'nope.json') }) === null,
+       '沒有規則檔時不該爆');
+
+    // 節流：這條路徑每拍都會經過，48 小時的判定不需要每秒重算
+    rule();
+    put(49, child());
+    const st = {};
+    ok(core.applyRanchAging(st, RANCH, { rulesFile: RULES, albumFile: ALBUM }) !== null,
+       '第一次應該要跑');
+    put(49, child());
+    ok(core.applyRanchAging(st, RANCH, { rulesFile: RULES, albumFile: ALBUM }) === null,
+       `節流沒生效（${core.RANCH_AGE_CHECK_MS}ms 內不該重跑）`);
+    ok(core.isRanchTransient('_ranchAgeCheckedAt'),
+       '_ranchAgeCheckedAt 必須是暫態，否則會被存進快照跟著角色跑');
+
+    // ⚠️ 老化不可以依賴 force-char.json 存在。
+    // 第一版把 applyRanchAging 放在 applyForceFlags 讀完 force 檔之後，而那個 parse
+    // 失敗就整個 return —— 「檔案不存在」是很正常的狀態（全新安裝、從沒下過 vpet 指令）。
+    // 結果是測試全綠但真機上放了 Child 進牧場永遠不會變。真的踩過。
+    {
+        const S = path.join(TMP, 'st'); fs.mkdirSync(S, { recursive: true });
+        const noForce = path.join(S, 'does-not-exist.json');
+        rule();
+        put(49, child());
+        // applyForceFlags 用預設的 ranch/album 路徑，這裡只驗「有沒有跑到老化那一步」：
+        // 換個角度 —— 直接確認 force 檔不存在時函式不會在老化之前就 return。
+        const st2 = {};
+        let ran = false;
+        const orig = core.applyRanchAging;
+        // 不能 monkey-patch（模組內部是直接呼叫），改用可觀察的副作用：
+        // applyForceFlags 會在 st 上蓋 _ranchAgeCheckedAt，那個時戳只有老化路徑會寫。
+        core.applyForceFlags(st2, noForce);
+        ran = typeof st2._ranchAgeCheckedAt === 'number';
+        void orig;
+        ok(ran, 'force-char.json 不存在時，applyForceFlags 就沒跑到牧場老化（會提早 return）');
+    }
+}
+
 cleanup();
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

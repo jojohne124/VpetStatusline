@@ -63,6 +63,43 @@ console.log('— 邊界 —');
     ok(oob === 0, `走出場地邊界 ${oob} 次（y 下限是 MIN_Y=${W.MIN_Y}，頂端要留給名牌）`);
 }
 
+// ── 2a. 貼牆的時候不可以在原地抖 ─────────────────────────────────────
+// 回報過「牧場滿有機會卡在邊界」。真因是「幾乎與牆平行、但帶一點朝外分量」的方向
+// 會被截成 1~2 拍，角色每一兩拍就重抽方向，看起來像在原地抖。
+// 牧場場地小（可走範圍只有 37x25），這件事特別明顯。
+{
+    for (const [nm, F] of [['廣場', W.PLAZA_FIELD], ['牧場', W.YARD_FIELD]]) {
+        let shortest = Infinity, legs = 0;
+        const heat = new Map();
+        let tot = 0;
+        for (let seed = 1; seed <= 24; seed++) {
+            let st = { ...W.startPos(seed, F), k: 0 };
+            for (let i = 0; i < 400; i++) {
+                const leg = W.legAt(seed, st.k, st.x, st.y, F);
+                if (!leg.stay) { shortest = Math.min(shortest, leg.len); legs++; }
+                const [ox, oy] = W.offsetAt(leg.vx, leg.vy, leg.len);
+                st.x += ox; st.y += oy; st.k += 1;
+            }
+            let c = null;
+            for (let s = 0; s < 3000; s++) {
+                const p = W.posAt({ seed, joinStep: 0 }, s, c, F); c = p.cache;
+                const k = p.x + ',' + p.y;
+                heat.set(k, (heat.get(k) || 0) + 1); tot++;
+            }
+        }
+        ok(shortest >= W.MIN_LEG,
+           `${nm}：最短的移動段只有 ${shortest} 拍（應 >= MIN_LEG=${W.MIN_LEG}，否則貼牆時會抖）`);
+        // 集中度。門檻 4.5 不是憑感覺挑的，是量出來的：
+        //   修正前 廣場 4.8 倍 / 牧場 4.3 倍 → 修正後 廣場 4.0 / 牧場 3.3。
+        // 抓在 4.5 能擋住退回舊行為，但廣場只剩 0.5 的餘裕 —— 如果哪天這條紅了，
+        // 先確認是真的變差，而不是換了場地尺寸或方向表之後的正常抖動。
+        const cells = (F.maxX - F.minX + 1) * (F.maxY - F.minY + 1);
+        const hottest = Math.max(...heat.values()) / tot;
+        ok(hottest < 4.5 / cells,
+           `${nm}：最熱的一格是平均值的 ${(hottest * cells).toFixed(1)} 倍（應 < 4.5 倍）`);
+    }
+}
+
 // ── 2b. 場地常數本身要自洽 ───────────────────────────────────────────
 console.log('— 場地常數 —');
 {

@@ -28,6 +28,8 @@ catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js
 
 const { computeUsage } = require('./token-source');
 const plaza = require('./plaza');   // 廣場／院子的合成器（走路在 ../shared/plaza-walk.js）
+const WX    = require('../shared/weather.js');
+const wxSrc = require('./weather-source.js');
 
 const {
     STATE_DIR, EVO_LENGTH, MAX_POS,
@@ -310,6 +312,28 @@ const yardCaches = new Map();
 // 用牆鐘算，重開 daemon 也接得上，日後接共用廣場時同一條式子還要加上 serverNow 校正。
 const plazaStep = () => require('../shared/plaza-walk.js').stepAt(Date.now());
 
+// 天氣。daemon 唯一的對外連線（見 weather-source.js 開頭的規則）——
+// get() 永遠立刻回傳快取，需要更新時在背景抓，/yard 這條路徑不等網路。
+const weather = wxSrc.create({
+    installRoot: core.INSTALL_ROOT,
+    stateDir:    STATE_DIR,
+    log:         (m) => console.log('   ' + m),
+});
+// 天氣預覽：?w=rain 之類的參數強制指定，讓五種表演不用等真的下雨才看得到。
+// 只影響回傳的畫面，不寫進任何檔案，也不影響真實天氣的抓取。
+function weatherFor(q) {
+    const real = weather.get();
+    // 開發專屬。跟其他 dev 功能同一條規矩：只把 UI 藏起來是不夠的，
+    // /yard 是公開端點，伺服器端必須一起擋，否則 release 版照樣能用網址切天氣。
+    if (!q || IS_RELEASE) return real;
+    // 分隔符同時吃 + 與空白：查詢字串的 + 本來就會被解碼成空白，
+    // 直接在網址列手打 ?w=clear+cold 的人不該踩到這個坑。
+    const [sky, ...rest] = String(q).trim().split(/[+ ]+/);
+    if (sky === 'auto') return real;
+    if (!WX.SKY_ORDER.includes(sky)) return real;
+    return { ...real, sky, cold: rest.includes('cold'), preview: true };
+}
+
 let startedAt = Date.now();
 let latest = { tick: 0, kind: 'init', petLines: null, usage: null, at: startedAt, err: null };
 
@@ -493,6 +517,53 @@ const HAS_BG    = fs.existsSync(BG_FILE);
 // 否則組出來的是「字串字面值中間有真的換行」，瀏覽器整個 script 直接 SyntaxError
 // （伺服器端完全正常，node --check 也過，只有頁面死掉）。
 // scripts/test-daemon-page.js 會把頁面拉下來做語法檢查，釘住這類壞法。
+// ── 寒風用的點陣 ─────────────────────────────────────────────────────
+// 直接借天狐獸的子彈美術（使用者指名的參考）。它本來就是一團青色的風 ——
+// 中心亮、外圍青、周圍散幾點閃光，那幾點閃光是這個造型好看的關鍵，自己畫很難拿捏。
+//
+// 借現成的還有一個好處：它是**點陣**。先前用向量畫的螺旋是畫面上唯一不是像素風的
+// 東西，就算形狀對了也還是格格不入。
+//
+// 抽成 [dx,dy,r,g,b] 的扁平清單再內嵌進頁面：只有數字，不含反斜線，
+// 塞進 template literal 是安全的（見 HTML 常數上方的警告）。
+function loadWindArt() {
+    try {
+        const f = path.join(core.ASSETS_DIR, 'tenkomon', 'bullet-art.json');
+        const rows = JSON.parse(fs.readFileSync(f, 'utf8')).frames[0];
+        const out = [];
+        rows.forEach((row, r) => (row || []).forEach((c, x) => {
+            if (!c) return;
+            if (c[0] >= 0) out.push([x, r * 2,     c[0], c[1], c[2]]);
+            if (c[3] >= 0) out.push([x, r * 2 + 1, c[3], c[4], c[5]]);
+        }));
+        if (!out.length) throw new Error('空的');
+        return packWind(out);
+    } catch (e) {
+        // 美術不在（換過角色表、精簡過 release）也不能讓牧場開不起來 ——
+        // 退回一小團青色方塊，形狀差一點但不會是空白。
+        const P = [[1,0],[2,0],[0,1],[1,1],[2,1],[3,1],[1,2],[2,2],[5,0],[6,3]];
+        return packWind(P.map(([x, y]) => [x, y, 117, 232, 240]));
+    }
+}
+
+/**
+ * [x,y,r,g,b] → 依顏色分組的 [{c:'rgb(...)', p:[x,y,x,y,...]}]。
+ * 分組是為了前端每幀只設三次 fillStyle 而不是 49 次；順便把左上角推到 (0,0)，
+ * 前端就不用管原圖的留白。
+ */
+function packWind(dots) {
+    const mx = Math.min(...dots.map(d => d[0])), my = Math.min(...dots.map(d => d[1]));
+    const by = new Map();
+    for (const [x, y, r, g, b] of dots) {
+        const key = r + ',' + g + ',' + b;
+        if (!by.has(key)) by.set(key, []);
+        by.get(key).push(x - mx, y - my);
+    }
+    const w = Math.max(...dots.map(d => d[0])) - mx + 1;
+    return { w, groups: [...by.entries()].map(([c, p]) => ({ c: 'rgb(' + c + ')', p })) };
+}
+const WIND_ART = loadWindArt();
+
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>Vpet daemon</title>
 <style>
@@ -531,6 +602,21 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 院子不鋪底圖：那張圖是為家裡 52x8 的橫幅舞台烘的（center/cover），
      放到 96x24 會被裁成完全不同的一塊，看起來像另一張圖。等院子有自己的美術再說。 */
   body.yard #stage{background:rgb(24,24,24)}
+  /* 天氣層：疊在角色畫布正上方，只有牧場會出現。
+     刻意不用 image-rendering:pixelated —— 雨絲、光線是向量畫的，柵格化反而變鋸齒。
+     pointer-events:none 是必要的，否則它會吃掉右鍵選單的命中判定。 */
+  #wx{position:absolute;display:none;pointer-events:none;z-index:2}
+  body.yard #wx{display:block}
+  /* 右上角的日期／時間／天氣。用 HTML 疊層而不是畫點陣字：52 dot 寬塞一整行日期
+     會佔掉整列又糊掉，而這裡本來就不是像素風的一部分，是「看板」。 */
+  #hud{position:absolute;display:none;top:6px;right:8px;z-index:3;text-align:right;
+       pointer-events:none;font-size:11px;line-height:1.4;color:#e6edf3;
+       text-shadow:0 1px 3px #000, 0 0 6px #000, 0 0 2px #000}
+  body.yard #hud{display:block}
+  #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
+  #hud .prev{color:#d29922;font-size:10px}
+  #wxsel{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;
+         font:inherit;font-size:11px;padding:1px 4px;margin-left:6px}
   /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
      仍然看得到底圖，只有邊緣被收乾淨。用偽元素而不是換整片 background，
      否則整個舞台會變黑、底圖在戰鬥期間整段消失。 */
@@ -581,7 +667,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -590,6 +676,16 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <span id="yardinfo">–</span>
       <span class="k">（在牠身上按右鍵）</span>
+${IS_RELEASE ? '' : `
+      <label class="k">天氣預覽 <span class="devtag">dev</span><select id="wxsel">
+        <option value="">自動（實際天氣）</option>
+        <option value="clear">晴天</option>
+        <option value="cloudy">陰天</option>
+        <option value="rain">雨天</option>
+        <option value="storm">大雨</option>
+        <option value="clear+cold">寒流</option>
+        <option value="storm+cold">大雨＋寒流</option>
+      </select></label>`}
     </div>
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
@@ -623,6 +719,12 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 </div>
 <script>
 const CW=${CW}, CH=${CH};   // 由伺服器端同一組常數帶入（見 daemon.js 頂部）
+// 寒風的點陣（天狐獸的子彈，依顏色分好組）。伺服器端抽好再內嵌，見 loadWindArt。
+const WIND_ART=${JSON.stringify(WIND_ART)};
+// 風往哪邊吹：+1 = 由左至右，-1 = 由右至左。
+// 造型會跟著轉向（見 wxGust），所以改這一個數字就好，不用動美術也不用動繪圖。
+// 子彈原圖是朝右的（角色預設朝右發射），所以 +1 時不鏡射。
+const WIND_DIR=1;
 function parseAnsi(line){
   // 回傳每個 cell：半格 {top,bot}、真文字 {ch,col}（卡片數值/PvP名牌）、空白 null。
   const cells=[]; let fg=null,bg=null,idx=0;
@@ -715,11 +817,182 @@ function setView(v){
     // 牧場這邊按了是回到現役那隻。用「前線」指現役、「牧場」指收藏，不會混。
     b.textContent = (v==='yard') ? '⚔ 前線' : '🐮 牧場';
   });
+  hudTick();
   poll();
 }
 
+// ── 天氣表演 ────────────────────────────────────────────────────────────
+// 分兩層：**色調**在後端（跑在 dot 緩衝上，會吃到角色身上 —— 陽光照在怪身上、
+// 寒流把怪凍得發青），**會動的粒子**在這裡。理由是節奏：/yard 是 500ms 輪詢、
+// 走路 750ms 一拍，用那個節奏畫雨會變成一格一格瞬移的點，完全不像下雨。
+// 這一層走 requestAnimationFrame，跟輪詢完全脫鉤。
+//
+// 雨滴位置用固定種子起始，重整看到同一場雨；但之後**不需要**跨 client 一致
+// （沒有人分得出你我的雨滴有沒有對齊），所以接廣場時這段原封不動就能用。
+// 走路那邊就不一樣了，那個必須逐拍決定性，見 shared/plaza-walk.js。
+const wxState = {sky:'clear', cold:false};
+let wxParts=null, wxLast=0, wxSeed=1;
+function wxRand(){ wxSeed=(Math.imul(wxSeed,1664525)+1013904223)>>>0; return wxSeed/4294967296; }
+
+// 天氣畫布要精準疊在角色畫布上。角色畫布每次 draw() 都會依內容重建尺寸，
+// 所以每次畫完都要重新對位一次。
+function syncWx(){
+  const pet=document.getElementById('pet'), wx=document.getElementById('wx');
+  const w=pet.offsetWidth, h=pet.offsetHeight;
+  wx.style.left=pet.offsetLeft+'px'; wx.style.top=pet.offsetTop+'px';
+  if(wx.width!==w||wx.height!==h){ wx.width=w; wx.height=h; }
+}
+
+function wxBuild(w,h){
+  wxSeed=20260821;
+  const P={w:w,h:h,shaft:[],cloud:[],drop:[],wind:[]};
+  for(let i=0;i<3;i++)  P.shaft.push({x:wxRand()*w, w:16+wxRand()*26});
+  for(let i=0;i<8;i++)  P.cloud.push({x:wxRand()*w, y:2+wxRand()*(h*0.20),
+                                      w:24+wxRand()*44, h:2.5+wxRand()*3.5,
+                                      v:3+wxRand()*5, a:0.05+wxRand()*0.06});
+  for(let i=0;i<120;i++)P.drop.push({x:wxRand()*w, y:wxRand()*h, s:0.7+wxRand()*0.6});
+  // 冷風：數量刻意少。每一陣都是一個看得出來的造型，這種東西一多就變成一團毛球
+  // —— 密度要靠「還認得出單一個形狀」來定。
+  // 尺寸對著角色抓：畫布 416x320，一隻角色 16 dot = 128px 高。
+  // 子彈點陣約 10x10 dot，每 dot 畫 4~7px → 一陣風 40~70px，約角色的一半。
+  // s 取整數，方塊才會對齊像素格。
+  for(let i=0;i<5;i++)  P.wind.push({x:wxRand()*w, y:16+wxRand()*(h-72),
+                                     s:4+Math.floor(wxRand()*4),
+                                     v:34+wxRand()*40, a:0.42+wxRand()*0.28,
+                                     vy:(wxRand()-0.5)*5});
+  return P;
+}
+
+// 密度／速度全部集中在這裡，方便實測後調。場地只有 52x20 格（416x320px），
+// 粒子稍微多一點畫面就會爛成雜訊、看不出誰是誰 —— 寧可保守。
+const WXR = { rain:{n:40,  vy:175, vx:-28, len:9,  a:0.30, lw:1},
+              storm:{n:110, vy:300, vx:-52, len:15, a:0.42, lw:1.4} };
+
+// 一陣風 = 天狐獸子彈的點陣，s 是每個 dot 畫幾 px。
+// 起點取整數、s 也是整數 → 每個方塊都對齊在整數像素上，邊緣不會被反鋸齒糊掉。
+// 這是它跟先前那個向量螺旋最大的差別：畫面上其他東西全是像素，
+// 只有天氣是平滑曲線的話，形狀再對也還是格格不入。
+function wxGust(g,x,y,s){
+  const gx=Math.round(x), gy=Math.round(y), flip=WIND_DIR<0, W=WIND_ART.w;
+  for(const grp of WIND_ART.groups){
+    g.fillStyle=grp.c;
+    const p=grp.p;
+    for(let i=0;i<p.length;i+=2){
+      const dx=flip?(W-1-p[i]):p[i];
+      g.fillRect(gx+dx*s, gy+p[i+1]*s, s, s);
+    }
+  }
+}
+
+function wxDraw(ts){
+  requestAnimationFrame(wxDraw);
+  const cv=document.getElementById('wx');
+  if(view!=='yard'||!cv.width||!cv.height){ wxLast=ts; return; }
+  const dt=Math.min(0.1,(ts-wxLast)/1000)||0; wxLast=ts;
+  const w=cv.width, h=cv.height, g=cv.getContext('2d');
+  if(!wxParts||wxParts.w!==w||wxParts.h!==h) wxParts=wxBuild(w,h);
+  const P=wxParts, sky=wxState.sky;
+  g.clearRect(0,0,w,h);
+
+  // 晴：斜射的光柱。用 lighter 疊加，只加亮不遮擋 —— 光線蓋住角色會很怪。
+  if(sky==='clear'){
+    g.globalCompositeOperation='lighter';
+    for(const f of P.shaft){
+      f.x+=7*dt; if(f.x>w+h) f.x-=w+h+80;
+      const grd=g.createLinearGradient(f.x,0,f.x+h*0.55,h);
+      grd.addColorStop(0,'rgba(255,238,180,0.13)');
+      grd.addColorStop(1,'rgba(255,238,180,0)');
+      g.fillStyle=grd;
+      g.beginPath();
+      g.moveTo(f.x,0); g.lineTo(f.x+f.w,0);
+      g.lineTo(f.x+f.w+h*0.55,h); g.lineTo(f.x+h*0.55,h);
+      g.closePath(); g.fill();
+    }
+    g.globalCompositeOperation='source-over';
+  }
+
+  // 陰／雨／大雨：最上方一層薄雲。越糟的天氣雲越厚、飄越快。
+  if(sky!=='clear'){
+    const boost=sky==='storm'?1.8:sky==='rain'?1.35:1;
+    const speed=sky==='storm'?2.4:sky==='rain'?1.5:1;
+    for(const c of P.cloud){
+      c.x+=c.v*speed*dt; if(c.x-c.w>w) c.x=-c.w*2;
+      g.fillStyle='rgba(202,210,222,'+(c.a*boost).toFixed(3)+')';
+      g.beginPath(); g.ellipse(c.x,c.y,c.w,c.h,0,0,6.2832); g.fill();
+    }
+  }
+
+  // 雨／大雨。
+  // ⚠️ 規格原本寫「最上方一些淺淺的雨」，這裡改成**整片**由上落下 ——
+  //    只在上緣下雨看起來像天花板漏水，不像下雨。改用低透明度控制存在感，
+  //    角色一樣看得清楚。要回到只在上方，把 d.y 的範圍夾住即可。
+  if(sky==='rain'||sky==='storm'){
+    const r=WXR[sky];
+    g.strokeStyle='rgba(155,192,255,'+r.a+')'; g.lineWidth=r.lw;
+    g.beginPath();
+    for(let i=0;i<r.n;i++){
+      const d=P.drop[i];
+      d.y+=r.vy*d.s*dt; d.x+=r.vx*d.s*dt;
+      if(d.y>h){ d.y-=h+r.len; d.x=wxRand()*w; }
+      if(d.x<-r.len) d.x+=w+r.len;
+      g.moveTo(d.x,d.y); g.lineTo(d.x+r.vx/r.vy*r.len, d.y+r.len);
+    }
+    g.stroke();
+  }
+
+  // 寒流：橫向吹過的冷風。這是**疊加**在天空狀態上的，不是第五種天空 ——
+  // 台灣冬天「寒流 + 下雨」是常態，做成互斥的話那天只能二選一。
+  // 寒流：少少幾陣「捲」橫著吹過。疊加在任何天空狀態上。
+  //
+  // 走過三版：
+  //   1. 26 條細直線、alpha 0.05~0.17 → 等於看不見，回報「寒流沒顯示」。
+  //   2. 40 條加粗加亮 → 看得見了，但變成流星雨。密的直線一律讀成「掉落物」，
+  //      不管它是水平的還是垂直的。
+  //   3. 5 陣向量畫的螺旋 → 風要靠形狀認不是靠數量，這點對了；但它是畫面上
+  //      唯一的平滑曲線，跟滿場的像素格格不入。
+  //   4. 5 陣天狐獸子彈的點陣（本版）→ 借現成的美術：中心亮、外圍青、周圍散幾點
+  //      閃光。那幾點閃光是造型的關鍵，而且它本來就是點陣，總算跟場景同一種語言。
+  //
+  // ⚠️ 造型是有方向性的（尾巴上的散點在後面），所以**吹的方向與圖必須一致**。
+  //    第一次接的時候風往左吹、圖卻朝右，尾巴跑到前面去了 —— 一眼就看得出怪。
+  //    現在由 WIND_DIR 同時決定移動方向與要不要鏡射，不可能再對不上。
+  if(wxState.cold){
+    for(const k of P.wind){
+      const wide=WIND_ART.w*k.s;
+      k.x+=k.v*WIND_DIR*dt; k.y+=k.vy*dt;
+      // 出畫面（或被垂直漂移帶出上下緣）就從逆風那一側重新進場
+      if(k.y<0||k.y+wide>h||(WIND_DIR>0 ? k.x>w : k.x+wide<0)){
+        k.x=(WIND_DIR>0 ? -wide-wxRand()*90 : w+wxRand()*90);
+        k.y=16+wxRand()*(h-72); k.vy=(wxRand()-0.5)*5;
+      }
+      g.globalAlpha=k.a;
+      wxGust(g,k.x,k.y,k.s);
+    }
+    g.globalAlpha=1;
+  }
+}
+requestAnimationFrame(wxDraw);
+
+// 右上角的日期／時間。時間走本機時鐘、每秒自己跳，不跟著 /yard 輪詢 ——
+// 500ms 輪詢一次就為了更新分鐘數太浪費，而且斷線時時鐘不該跟著停。
+const WXWD=['日','一','二','三','四','五','六'];
+function hudTick(){
+  if(view!=='yard') return;
+  const d=new Date(), p2=n=>(n<10?'0':'')+n;
+  document.getElementById('hudTime').textContent =
+    d.getFullYear()+'/'+p2(d.getMonth()+1)+'/'+p2(d.getDate())+' ('+WXWD[d.getDay()]+')　'
+    + p2(d.getHours())+':'+p2(d.getMinutes());
+}
+setInterval(hudTick,1000);
+
 async function pollYard(){
-  const y = await (await fetch('/yard',{cache:'no-store'})).json();
+  // ⚠️ 一定要 encodeURIComponent：查詢字串裡的 + 會被解碼成空白，
+  //    clear+cold 送出去在伺服器端會變成 "clear cold"，比對不到就整個退回真實天氣
+  //    —— 症狀是「選了寒流卻什麼都沒發生」。踩過一次。
+  const es = document.getElementById('wxsel');
+  const sel = es ? es.value : '';
+  const y = await (await fetch('/yard'+(sel?'?w='+encodeURIComponent(sel):''),
+                               {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   lastYard=y;
   document.getElementById('yardinfo').textContent = y.kept
@@ -727,6 +1000,14 @@ async function pollYard(){
     : '牧場是空的 —— 進階區的「📥 收進牧場」可以把現役收進來（隨時換得回去）';
   document.getElementById('kind').textContent='yard';
   document.getElementById('tick').textContent='#'+y.step;
+  if(y.weather){
+    wxState.sky = y.weather.sky; wxState.cold = !!y.weather.cold;
+    document.getElementById('hudWx').innerHTML =
+      y.weather.icon+' '+y.weather.label+(y.weather.temp?'　'+y.weather.temp:'')
+      + (y.weather.city?' <span class="k">'+y.weather.city+'</span>':'')
+      + (y.weather.preview?' <span class="prev">預覽</span>'
+         : y.weather.stale?' <span class="prev">離線</span>':'');
+  }
   if(y.lines){ draw(y.lines); }
   else {
     // 空牧場：仍然把畫布撐成完整的場地大小再清空。
@@ -736,6 +1017,7 @@ async function pollYard(){
     cv.width=y.cols*CW; cv.height=y.rows*CH;
     cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
   }
+  syncWx();
 }
 
 // 命中判定用「這一拍畫出來的位置」，所以要記住最後一次 /yard 的結果。
@@ -767,7 +1049,9 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   // 所以不再給一顆「名片」鈕—— 那顆鈕是把同一份資料倒到畫布下方的 #cmdout，
   // 而牧場畫面的畫布是滿尺寸、外層會捲動，輸出區常常落在看不到的位置，
   // 看起來就像「按了沒反應」。
-  el.innerHTML='<div class="hd"><b>'+hit.name+'</b><br><span class="k2">'+
+  el.innerHTML='<div class="hd"><b>'+hit.name+'</b>'+
+               (hit.wasName?' <span class="k2">（原：'+hit.wasName+'）</span>':'')+
+               '<br><span class="k2">'+
                hit.stage+'　戰力 '+hit.power+'　'+wr+'<br>收於 '+
                new Date(hit.keptAt).toLocaleString()+'</span></div>';
   const add=(txt,fn,cls)=>{const b=document.createElement('button');b.textContent=txt;
@@ -866,6 +1150,9 @@ document.querySelectorAll('#adv .form').forEach(row=>{
 });
 // 點角色＝摸摸（連戳會生氣）。牧場畫面不吃這一下：畫布上那幾隻都是收起來的，
 // 摸摸只會作用在沒顯示在畫面上的現役那隻 —— 摸了一隻、爽到另一隻，比不能摸更難懂。
+// release 版沒有這顆下拉（dev 專屬），所以要防呆
+{const es=document.getElementById('wxsel');
+ if(es) es.addEventListener('change',()=>{ if(view==='yard') poll(); });}
 document.getElementById('pet').addEventListener('click',()=>{ if(view!=='yard') sendCmd('pet'); });
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 setInterval(poll,500); poll();
@@ -888,12 +1175,15 @@ const server = http.createServer((req, res) => {
     // 院子：牧場成員 + 現役在同一個舞台散步（docs/ranch-spec.md 階段 2）。
     // 每次請求現算 —— 合成 20 隻約 0.3ms，沒必要放進主 tick 迴圈給不看院子的人付成本。
     // 名單直接讀 ranch.json，不經過 latest 快取：牧場剛改完就要看得到。
-    if (req.url === '/yard') {
+    if (req.url === '/yard' || req.url.startsWith('/yard?')) {
         let body;
         try {
             const ranch = core.loadRanch();
             const st    = loadState(STATE_FILE);
             const step  = plazaStep();
+            // ?w=rain / ?w=storm+cold → 預覽指定天氣（見 weatherFor）
+            const wq    = new URL(req.url, 'http://x').searchParams.get('w');
+            const wx    = weatherFor(wq);
             const out   = plaza.composeYard(core, ranch, st, step, { caches: yardCaches });
             // 場地尺寸一定要回傳，**空牧場時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空牧場看起來就變成
@@ -914,9 +1204,12 @@ const server = http.createServer((req, res) => {
                 } catch (e) {}
                 const b = st.battleTotalCount || 0, w = st.battleWinCount || 0;
                 return { stage, power, battles: b, wins: w,
-                         winPct: b ? Math.floor(w / b * 100) : null, keptAt: p.keptAt };
+                         winPct: b ? Math.floor(w / b * 100) : null, keptAt: p.keptAt,
+                         // 在牧場裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
+                         wasName: p.evolvedFrom ? core.getDisplayName(p.evolvedFrom) : null };
             };
             body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE,
+                     weather: { ...wx, ...WX.describe(wx) },
                      cap: ranch.cap || core.RANCH_CAP,
                      kept: (ranch.pets || []).length,
                      lines: out ? out.lines : null,

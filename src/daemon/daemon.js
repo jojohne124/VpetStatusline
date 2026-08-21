@@ -71,11 +71,14 @@ const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server']
 // ⚠️ 這是「UI 露不露臉」，跟下面伺服器端的 DEV_ONLY 是兩回事 —— sleep/wake 在 CLI
 //    的 release 版是開放的（vpet help 的玩家區就有），所以不能進 DEV_ONLY，否則
 //    會變成「終端機打得動、網頁 POST 卻被擋」。這裡只是不把按鈕擺出來。
+// scope：這顆鈕在哪個畫面出現。'home' = 只在前線、'both' = 兩邊都有。
+// 前線的鈕多半是對「現役那一隻」下指令（卡片、進化樹、睡覺…），在牧場畫面按了
+// 只會影響一隻根本沒顯示在畫面上的桌寵 —— 那比按鈕消失更難懂。
 const UI_BUTTONS = [
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
-    ['album',  '📖 圖鑑'],
-    ['yard',   '🐮 牧場'],
+    ['album',  '📖 圖鑑', { scope: 'both' }],
+    ['yard',   '🐮 牧場', { scope: 'both' }],
     ['sleep',  '😴 睡覺', { dev: true }],
     ['wake',   '☀ 喚醒', { dev: true }],
 ];
@@ -89,14 +92,14 @@ const UI_FORMS = [
       confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
     { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
     { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
-    { label: '📋 牧場清單', action: 'ranch',     fields: [] },
-    { label: '📥 收進牧場', action: 'keep',      fields: [],
+    { label: '📋 牧場清單', action: 'ranch',     fields: [], scope: 'both' },
+    { label: '📥 收進牧場', action: 'keep',      fields: [], scope: 'both',
       confirm: '會把現役收進牧場，並抽一隻新的桌寵。收進去的隨時可以換回來。確定嗎？' },
-    { label: '🔄 換出牧場', action: 'swap',      fields: [['which', '編號或角色名']] },
-    { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']],
+    { label: '🔄 換出牧場', action: 'swap',      fields: [['which', '編號或角色名']], scope: 'both' },
+    { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']], scope: 'both',
       confirm: '放生會**永久刪除**那一隻，救不回來。確定嗎？' },
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
-    { label: '🩺 doctor',   action: 'doctor',    fields: [] },
+    { label: '🩺 doctor',   action: 'doctor',    fields: [], scope: 'both' },
     { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
     { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
     { label: '🔧 PvP 設定', action: 'pvp-setup', fields: [['url', 'Worker URL'], ['key', 'API key'], ['name', '名牌（可留空）']] },
@@ -485,6 +488,11 @@ const PAD_DOTS  = 1;    // 舞台上下各留幾個 dot（1 dot = 半格 = CH/2 
 const BG_FILE   = path.join(core.INSTALL_ROOT, 'bg.png');
 const HAS_BG    = fs.existsSync(BG_FILE);
 
+// 整份前端都塞在這個 template literal 裡，所以裡面的反斜線會被吃掉一層 ——
+// 連註解也一樣。要在前端字串裡放換行，用 String.fromCharCode(10)，不要寫跳脫字元，
+// 否則組出來的是「字串字面值中間有真的換行」，瀏覽器整個 script 直接 SyntaxError
+// （伺服器端完全正常，node --check 也過，只有頁面死掉）。
+// scripts/test-daemon-page.js 會把頁面拉下來做語法檢查，釘住這類壞法。
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>Vpet daemon</title>
 <style>
@@ -518,7 +526,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 院子是 96 欄（768px），比家裡的 52 欄寬。canvas 的 max-width:100% 在窄視窗會把它
      縮小，而縮小後 1 dot 不再是整數個 px，像素風會糊掉 —— 家裡那邊為了地平線對齊
      已經踩過一次。院子寧可讓 petbox 裁掉右邊，也不要非整數倍縮放。 */
-  body.yard canvas{max-width:none}
+  body.yard canvas{max-width:none;cursor:default}
   body.yard #petbox{overflow:auto}
   /* 院子不鋪底圖：那張圖是為家裡 52x8 的橫幅舞台烘的（center/cover），
      放到 96x24 會被裁成完全不同的一塊，看起來像另一張圖。等院子有自己的美術再說。 */
@@ -559,22 +567,34 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #cmdout{margin-top:8px;max-width:480px;display:none;background:#0d1117;border:1px solid #30363d;
           border-radius:6px;padding:8px 10px;font-size:12px;color:#c9d1d9;
           white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
+  /* 右鍵選單。position:fixed + 依點擊座標定位，不塞進舞台裡 ——
+     舞台有 overflow:hidden，選單擺進去會被裁掉。 */
+  #ctx{position:fixed;z-index:50;display:none;min-width:150px;background:#161b22;
+       border:1px solid #30363d;border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+  #ctx .hd{padding:4px 8px;font-size:12px;color:#c9d1d9;border-bottom:1px solid #30363d;margin-bottom:4px}
+  #ctx .hd .k2{color:#8b949e;font-size:11px}
+  #ctx button{display:block;width:100%;text-align:left;margin:0;border:0;background:none;
+              color:#c9d1d9;padding:6px 8px;border-radius:4px;font-size:12px;cursor:pointer}
+  #ctx button:hover{background:#21262d}
+  #ctx button.danger{color:#f85149}
 </style></head><body>
+<div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
   <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
     </div>
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <span id="yardinfo">–</span>
+      <span class="k">（在牠身上按右鍵）</span>
     </div>
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
       ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
-                .map(f => `<div class="form"${f.action ? ` data-cmd="${f.action}"` : ''}>
+                .map(f => `<div class="form" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
         <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
         ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
         ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
@@ -686,6 +706,9 @@ let view = 'home';
 function setView(v){
   view = v;
   document.body.classList.toggle('yard', v==='yard');
+  document.querySelectorAll('[data-scope]').forEach(el=>{
+    el.style.display = (el.dataset.scope==='both' || el.dataset.scope===v) ? '' : 'none';
+  });
   document.getElementById('yardbar').style.display = (v==='yard') ? '' : 'none';
   document.querySelectorAll('[data-cmd="yard"]').forEach(b=>{
     // 「家」在這裡有兩個意思會打架：廣場那邊的「回家」是從廣場回到自己的舞台，
@@ -698,6 +721,7 @@ function setView(v){
 async function pollYard(){
   const y = await (await fetch('/yard',{cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
+  lastYard=y;
   document.getElementById('yardinfo').textContent = y.kept
     ? '牧場 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
     : '牧場是空的 —— 進階區的「📥 收進牧場」可以把現役收進來（隨時換得回去）';
@@ -713,6 +737,48 @@ async function pollYard(){
     cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
   }
 }
+
+// 命中判定用「這一拍畫出來的位置」，所以要記住最後一次 /yard 的結果。
+// 位置每拍都在動，若改成點下去再問伺服器，回來時已經是下一拍的位置，會抓錯人。
+let lastYard=null;
+function closeCtx(){ document.getElementById('ctx').style.display='none'; }
+document.addEventListener('click',closeCtx);
+document.addEventListener('scroll',closeCtx,true);
+
+document.getElementById('pet').addEventListener('contextmenu',ev=>{
+  if(view!=='yard'||!lastYard||!lastYard.pets.length) return;
+  ev.preventDefault();
+  const cv=ev.currentTarget, r=cv.getBoundingClientRect();
+  // 畫布可能被 CSS 縮放過 → 用 width/rect 的比例換回內部座標，再換成 dot
+  const px=(ev.clientX-r.left)*(cv.width/r.width);
+  const py=(ev.clientY-r.top )*(cv.height/r.height);
+  const dx=px/CW, dy=py/(CH/2);
+  const S=lastYard.sprite||16;
+  // 由後往前找 = 從畫在最上層的那隻開始，跟眼睛看到的一致
+  let hit=null;
+  for(let i=lastYard.pets.length-1;i>=0;i--){
+    const p=lastYard.pets[i];
+    if(dx>=p.x&&dx<p.x+S&&dy>=p.y&&dy<p.y+S){ hit=p; break; }
+  }
+  if(!hit) return;
+  const el=document.getElementById('ctx');
+  const wr=hit.winPct==null?'尚無戰績':(hit.wins+'/'+hit.battles+'　'+hit.winPct+'%');
+  // 選單表頭就把該講的都講完了（名字 / 階段 / 戰力 / 勝率 / 收進來的時間），
+  // 所以不再給一顆「名片」鈕—— 那顆鈕是把同一份資料倒到畫布下方的 #cmdout，
+  // 而牧場畫面的畫布是滿尺寸、外層會捲動，輸出區常常落在看不到的位置，
+  // 看起來就像「按了沒反應」。
+  el.innerHTML='<div class="hd"><b>'+hit.name+'</b><br><span class="k2">'+
+               hit.stage+'　戰力 '+hit.power+'　'+wr+'<br>收於 '+
+               new Date(hit.keptAt).toLocaleString()+'</span></div>';
+  const add=(txt,fn,cls)=>{const b=document.createElement('button');b.textContent=txt;
+    if(cls)b.className=cls;b.onclick=e=>{e.stopPropagation();closeCtx();fn();};el.appendChild(b);};
+  add('🔄 換出來（與現役交換）',()=>sendCmd('swap',{which:hit.id}));
+  add('🗑 放生（永久刪除）',()=>{ if(confirm('放生「'+hit.name+'」？永久刪除，救不回來。'))
+      sendCmd('release',{which:hit.id}); },'danger');
+  el.style.display='block';
+  el.style.left=Math.min(ev.clientX, innerWidth-el.offsetWidth-8)+'px';
+  el.style.top =Math.min(ev.clientY, innerHeight-el.offsetHeight-8)+'px';
+});
 
 async function poll(){
   if(view==='yard'){
@@ -798,7 +864,9 @@ document.querySelectorAll('#adv .form').forEach(row=>{
   row.querySelectorAll('input').forEach(i=>
     i.addEventListener('keydown',e=>{ if(e.key==='Enter')sendCmd(row.dataset.cmd,collect()); }));
 });
-document.getElementById('pet').addEventListener('click',()=>sendCmd('pet'));   // 點角色＝摸摸（連戳會生氣）
+// 點角色＝摸摸（連戳會生氣）。牧場畫面不吃這一下：畫布上那幾隻都是收起來的，
+// 摸摸只會作用在沒顯示在畫面上的現役那隻 —— 摸了一隻、爽到另一隻，比不能摸更難懂。
+document.getElementById('pet').addEventListener('click',()=>{ if(view!=='yard') sendCmd('pet'); });
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 setInterval(poll,500); poll();
 </script></body></html>`;
@@ -831,11 +899,31 @@ const server = http.createServer((req, res) => {
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空牧場看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
             const F = plaza.YARD_FIELD;
-            body = { ok: true, step, cols: F.w, rows: F.h / 2,
+            // 帶座標與資料出去，讓前端能做右鍵選單：click 座標 -> 哪一隻。
+            // 命中判定放前端而不是再開一個 /yard/hit 端點 —— 位置每拍都在動，
+            // 多一次往返就會對到上一拍的位置，點了會抓錯人。
+            const byId = Object.fromEntries((ranch.pets || []).map(p => [p.id, p]));
+            const info = (id) => {
+                const p = byId[id]; if (!p) return {};
+                const st = p.state || {}, cid = st.characterId;
+                let stage = '?', power = '?';
+                try { stage = core.getCharacterStage(cid); } catch (e) {}
+                try {
+                    power = Math.min(core.getBasePower(st, cid) + (st.trainingBonus || 0),
+                                     core.getTierCap(stage));
+                } catch (e) {}
+                const b = st.battleTotalCount || 0, w = st.battleWinCount || 0;
+                return { stage, power, battles: b, wins: w,
+                         winPct: b ? Math.floor(w / b * 100) : null, keptAt: p.keptAt };
+            };
+            body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE,
                      cap: ranch.cap || core.RANCH_CAP,
                      kept: (ranch.pets || []).length,
                      lines: out ? out.lines : null,
-                     pets: out ? out.placed.map(p => ({ code: p.code, char: p.char })) : [] };
+                     pets: out ? out.placed.map(p => ({
+                         id: p.ranchId, name: p.name, char: p.char,
+                         x: p.x, y: p.y, ...info(p.ranchId),
+                     })) : [] };
         } catch (e) {
             body = { ok: false, error: e.message };
         }

@@ -85,18 +85,22 @@ const LABEL_RESERVE = 2;
  * （要扣角色寬高、扣名牌保留區）；讓呼叫端自己算遲早會有人算錯一格，
  * 而算錯的症狀是「偶爾有隻角色被裁掉半個身體」這種很難聯想到原因的東西。
  */
-function makeField(w, h) {
+function makeField(w, h, labelReserve = LABEL_RESERVE) {
     return {
         w, h,
         minX: 0, maxX: w - SPRITE,
-        minY: 0, maxY: h - SPRITE - LABEL_RESERVE,
+        minY: 0, maxY: h - SPRITE - labelReserve,
     };
 }
 
 const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
-// 院子：128 x 80 dot（1024 x 640 px）。8 隻在 96x48 裡太擠，而且院子不必跟
-// 家裡的舞台共用版面寬度。
-const YARD_FIELD  = makeField(128, 80);
+// 院子：52 x 40 dot（416 x 320 px）。寬度刻意對齊家裡（前線）的舞台 —— 兩個畫面
+// 在同一個版位切換，寬度一樣才不會每按一次按鈕整頁就跳一下。
+// ⚠️ 這個尺寸對 8 隻來說很擠：可站位置只有 37 x 24，而角色是 16 x 16，
+// 幾乎一定會互相重疊。是刻意先試小的，不是算錯。
+// 第三個參數 0 = 不留名牌位：院子不顯示名字（要看是誰就右鍵），
+// 省下來的 2 dot 直接還給可走範圍。
+const YARD_FIELD  = makeField(52, 40, 0);
 
 // 向後相容：既有呼叫端仍在用這幾個常數（＝廣場的場地）
 const MIN_X = PLAZA_FIELD.minX, MAX_X = PLAZA_FIELD.maxX;

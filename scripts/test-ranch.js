@@ -217,13 +217,25 @@ console.log('— 院子 —');
         const F = W.YARD_FIELD;
         ok(out && out.lines.length === F.h / 2, `院子列數應為 ${F.h / 2}，實際 ${out && out.lines.length}`);
         ok(out.lines[0].replace(/\[[0-9;]*m/g, '').length === F.w, `院子欄數應為 ${F.w}`);
-        ok(F.w > W.PLAZA_W && F.h > W.PLAZA_H, '院子沒有比廣場大');
+        // 寬度對齊家裡的舞台（BASE_COLS = 52）—— 兩個畫面在同一個版位切換，
+        // 寬度一樣才不會每按一次按鈕整頁就跳一下。
+        ok(F.w === 52, `院子寬度應與前線舞台同寬（52），實際 ${F.w}`);
+        ok(F.maxX > 0 && F.maxY > 0, '院子小到放不下一隻角色');
         // 院子只有「收起來的那些」。現役正在你身邊過生活，不在冰箱裡 ——
         // 兩邊都出現的話看不出「收進去」和「拿出來」的差別。
         ok(out.placed.length === 2, `院子應只有 2 隻收藏，實際 ${out.placed.length}`);
         ok(!out.placed.some(p => p.char === 'greymon'), '現役跑進院子裡了');
         // 院子是自己的地方，不該有野生 vpet 亂入
         ok(!out.placed.some(p => String(p.key).startsWith('npc:')), '院子出現了 NPC');
+
+        // 院子不畫名牌：52 dot 寬塞 8 隻，名牌會互相擠掉一半，要知道是誰改用右鍵選單。
+        let labelCount = 0;
+        for (const [, l] of out.labels) labelCount += l.length;
+        ok(labelCount === 0, `院子畫了 ${labelCount} 個名牌（應該一個都沒有）`);
+        // 右鍵選單靠這兩個欄位做命中判定與送指令
+        ok(out.placed.every(p => p.ranchId && p.name), '院子成員缺 ranchId / name（右鍵選單會壞）');
+        // 不留名牌位 → 可走高度要比留的時候多 2
+        ok(F.maxY === F.h - W.SPRITE, `院子不該保留名牌位（maxY=${F.maxY}，應為 ${F.h - W.SPRITE}）`);
 
         // 空的就回 null，讓呼叫端自己決定顯示什麼（而不是畫一張空圖，那看起來像壞掉）
         ok(P.composeYard(core, { pets: [] }, null, step, {}) === null, '空牧場應回 null');

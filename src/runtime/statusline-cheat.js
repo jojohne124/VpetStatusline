@@ -614,6 +614,10 @@ if (RANCH_CMDS.includes(args[0])) {
     // 編號是權威；名稱只在牧場裡唯一時才能用 —— 一直 reset 會有好幾隻 agumon，不要猜。
     const resolve = (key) => {
         if (!key) return { err: '要指定編號或角色名（vpet ranch 可以看編號）' };
+        // 內部 id：daemon 的右鍵選單用這個。編號會隨清單增減而位移，
+        // 「選單畫出來的當下是 #3，送出時已經變成別人」是很實際的風險。
+        const byId = pets.find(p => p.id === key);
+        if (byId) return { pet: byId };
         const idx = parseInt(key, 10);
         if (!isNaN(idx) && String(idx) === String(key).trim()) {
             if (idx < 1 || idx > pets.length) return { err: `沒有編號 ${idx}（目前 ${pets.length} 隻）` };

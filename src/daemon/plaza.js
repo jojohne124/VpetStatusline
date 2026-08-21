@@ -316,11 +316,15 @@ function yardOccupants(core, ranch, activeState) {
     for (const p of (ranch.pets || [])) {
         const id = p.state && p.state.characterId;
         if (!id) continue;
+        // 刻意不給 code —— buildLabels 看到沒有 code 就不畫名牌（與 NPC 同一條路）。
+        // 院子只有 52 dot 寬，8 隻的名牌會互相擠掉一半；要知道是誰改用右鍵選單，
+        // 那比一排彼此覆蓋的名字可靠。
         list.push({
-            key:  'ranch:' + p.id,
-            code: core.getDisplayName ? core.getDisplayName(id) : id,
-            char: id,
-            seed: W.hash2(hashStr(p.id), 0),
+            key:      'ranch:' + p.id,
+            ranchId:  p.id,
+            name:     core.getDisplayName ? core.getDisplayName(id) : id,
+            char:     id,
+            seed:     W.hash2(hashStr(p.id), 0),
             joinStep: base,
         });
     }
@@ -352,7 +356,7 @@ function composeYard(core, ranch, activeState, step, opts = {}) {
 }
 
 module.exports = {
-    PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD,
+    PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD, SPRITE: W.SPRITE,
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,

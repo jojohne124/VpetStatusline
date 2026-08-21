@@ -89,14 +89,35 @@ console.log('— 邊界 —');
         }
         ok(shortest >= W.MIN_LEG,
            `${nm}：最短的移動段只有 ${shortest} 拍（應 >= MIN_LEG=${W.MIN_LEG}，否則貼牆時會抖）`);
-        // 集中度。門檻 4.5 不是憑感覺挑的，是量出來的：
-        //   修正前 廣場 4.8 倍 / 牧場 4.3 倍 → 修正後 廣場 4.0 / 牧場 3.3。
-        // 抓在 4.5 能擋住退回舊行為，但廣場只剩 0.5 的餘裕 —— 如果哪天這條紅了，
-        // 先確認是真的變差，而不是換了場地尺寸或方向表之後的正常抖動。
+        // 集中度。門檻是量出來的，不是憑感覺挑：
+        //   一開始 廣場 4.8 / 牧場 4.3 倍
+        //   → 加了 MIN_LEG（貼牆不再原地抖）廣場 4.0 / 牧場 3.3
+        //   → 加了「撞牆一定往離開牆的方向走」廣場 2.6 / 牧場 2.0
+        // 抓在 3.5 擋得住退回前兩版。哪天這條紅了，先確認是真的變差，
+        // 而不是換了場地尺寸或方向表之後的正常抖動。
         const cells = (F.maxX - F.minX + 1) * (F.maxY - F.minY + 1);
         const hottest = Math.max(...heat.values()) / tot;
-        ok(hottest < 4.5 / cells,
-           `${nm}：最熱的一格是平均值的 ${(hottest * cells).toFixed(1)} 倍（應 < 4.5 倍）`);
+        ok(hottest < 3.5 / cells,
+           `${nm}：最熱的一格是平均值的 ${(hottest * cells).toFixed(1)} 倍（應 < 3.5 倍）`);
+
+        // 撞牆就往外走：不沿著牆滑、也不在牆邊發呆。
+        // 「卡在邊界」的體感主要來自這兩件事，光看最熱格看不出來。
+        let edge = 0, stayOnEdge = 0, n2 = 0;
+        for (let seed = 1; seed <= 24; seed++) {
+            let c = null;
+            for (let s2 = 0; s2 < 3000; s2++) {
+                const q = W.posAt({ seed, joinStep: 0 }, s2, c, F); c = q.cache;
+                const onEdge = q.x <= F.minX || q.x >= F.maxX || q.y <= F.minY || q.y >= F.maxY;
+                n2++; if (onEdge) edge++;
+                if (onEdge && !q.moving) stayOnEdge++;
+            }
+        }
+        ok(stayOnEdge === 0,
+           `${nm}：有 ${stayOnEdge} 拍站在牆邊發呆（貼牆時不該抽到「停」）`);
+        // 均勻分布下貼邊本來就有 8.8%（廣場）/ 13%（牧場）——
+        // 現在遠低於那個值，因為角色一碰到牆就往裡面走。
+        ok(edge / n2 < 0.08,
+           `${nm}：貼邊時間 ${(edge / n2 * 100).toFixed(1)}%（撞牆應該立刻離開，實測約 3~5%）`);
     }
 }
 
@@ -294,6 +315,31 @@ else {
 }
 
 // ── 7. 名牌不穿透 ────────────────────────────────────────────────────
+// ── 牧場摸摸的反應幀 ───────────────────────────────────────────────
+// 牧場的摸摸是**純表演**：只換一幀表情，不動心情值、不寫 ranch.json。
+// 這裡驗的是換幀這件事本身，「不寫檔」由 test-ranch.js 那邊的契約保證
+// （反應只活在 daemon 的 Map 裡，根本沒有寫入路徑）。
+console.log('— 摸摸反應幀 —');
+{
+    const idle0 = P.spriteDots(core, 'agumon', 0, 'right');
+    const idle1 = P.spriteDots(core, 'agumon', 1, 'right');
+    const happy = P.spriteDots(core, 'agumon', 0, 'right', 'HAPPY');
+    const ser = (d) => JSON.stringify(d);
+    ok(happy && ser(happy) !== ser(idle0) && ser(happy) !== ser(idle1),
+       'HAPPY 反應幀應該與兩張待機幀都不同');
+    // 同一個 react 不該再受 step 影響 —— 不然反應期間還會跟著待機動畫閃
+    ok(ser(P.spriteDots(core, 'agumon', 1, 'right', 'HAPPY')) === ser(happy),
+       '反應期間不該再跟著 step 交替（會閃）');
+    ok(ser(P.spriteDots(core, 'agumon', 0, 'right', 'REFUSE')) !== ser(happy),
+       'REFUSE 應與 HAPPY 不同');
+    // 有些角色的美術不完整 → 查不到那個幀時要退回待機，不能畫出錯幀或炸掉
+    ok(ser(P.spriteDots(core, 'agumon', 0, 'right', 'NO_SUCH_FRAME')) === ser(idle0),
+       '查不到的幀名應退回待機');
+    // 沒傳 react 的行為完全不變（廣場與 NPC 都走這條）
+    ok(ser(P.spriteDots(core, 'agumon', 0, 'right', null)) === ser(idle0),
+       'react 為空時不該影響原本的待機動畫');
+}
+
 console.log('— 名牌遮擋 —');
 if (!hasArt) { skip++; console.log('  – 讀不到角色美術，跳過'); }
 else {

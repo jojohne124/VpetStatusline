@@ -257,7 +257,7 @@ function applyRanchOp(st, force, ranchFile) {
     }
 
     if (op.op === 'keep') {
-        if (ranch.pets.length >= (ranch.cap || RANCH_CAP)) return null;   // 滿了就不收（CLI 已擋，這是第二道）
+        if (ranch.pets.length >= ranchCap()) return null;   // 滿了就不收（CLI 已擋，這是第二道）
         ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
         saveRanch(ranch, ranchFile);
         // 抽新的那一步交給 force.character（CLI 一併寫入），走既有的換角色路徑
@@ -534,7 +534,7 @@ const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 // 心智模型是冰箱：同時只有一隻現役，現役會成長，牧場裡的全部凍結。
 // 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），牧場收「個體」（這一隻本人）。
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
-const RANCH_CAP  = 8;
+const RANCH_CAP  = 5;
 
 // 收進牧場時**丟掉**的欄位。其餘一律保存。
 //
@@ -593,10 +593,20 @@ function restorePet(st, snap) {
 function loadRanch(file) {
     try {
         const r = JSON.parse(fs.readFileSync(file || RANCH_FILE, 'utf8'));
-        if (r && Array.isArray(r.pets)) return r;
+        if (r && Array.isArray(r.pets)) {
+            // ⚠️ 舊檔把 cap 存進去了（第一版寫的 8）。上限是**產品設定**不是存檔設定 ——
+            //    留著的話改常數對既有玩家完全無效，而且那種 bug 很難聯想（程式改了、
+            //    測試也綠，就只有自己那台沒變）。這裡直接丟掉，下次存檔就消失。
+            //    日後真要做「牧場擴充」，加一個 capBonus 欄位，不要復活這個。
+            delete r.cap;
+            return r;
+        }
     } catch (e) {}
-    return { v: 1, cap: RANCH_CAP, pets: [] };
+    return { v: 1, pets: [] };
 }
+
+/** 目前的收納上限。一律以常數為準，不看存檔。 */
+function ranchCap() { return RANCH_CAP; }
 function saveRanch(r, file) {
     atomicWrite(file || RANCH_FILE, JSON.stringify(r));
 }
@@ -2269,7 +2279,7 @@ module.exports = {
     getBasePower, computeInheritedPower,
     bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
-    RANCH_FILE, RANCH_CAP, loadRanch, saveRanch, newRanchId,
+    RANCH_FILE, RANCH_CAP, ranchCap, loadRanch, saveRanch, newRanchId,
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
     recordAlbumChar,

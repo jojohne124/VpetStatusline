@@ -164,7 +164,18 @@ function offsetAt(vx, vy, t) {
  */
 function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     const { minX, maxX, minY, maxY } = field;
-    if (rand01(seed, k * 3) < STAY_CHANCE) {
+
+    // 貼在哪幾面牆上。撞到牆的那一拍，下一段一定要「離開那面牆」——
+    // 不然可以沿著牆邊一直滑，看起來就是黏在邊界。
+    const wL = x <= minX, wR = x >= maxX, wT = y <= minY, wB = y >= maxY;
+    const onWall = wL || wR || wT || wB;
+    // 注意 y 向下為正：離開上緣是 vy > 0，離開下緣是 vy < 0。
+    const leaves = (vx, vy) => (!wL || vx > 0) && (!wR || vx < 0)
+                            && (!wT || vy > 0) && (!wB || vy < 0);
+
+    // 貼牆時不抽「停」。停在牆邊 4~8 拍是「卡在邊界」體感最大的來源 ——
+    // 一般位置照舊有 STAY_CHANCE 的機率停下來發呆。
+    if (!onWall && rand01(seed, k * 3) < STAY_CHANCE) {
         const len = STAY_MIN + Math.floor(rand01(seed, k * 3 + 1) * (STAY_MAX - STAY_MIN + 1));
         return { vx: 0, vy: 0, len: Math.min(len, STAY_MAX), stay: true };
     }
@@ -193,15 +204,23 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     // 掃描順序從抽到的那個方向開始、以與 32 互質的步長跳，所以會走遍全部 32 個方向
     // 而不偏袒任何一邊；起點仍是亂數決定的，路線的多樣性不受影響。
     // 全程只用整數與 seed，決定性不變。
+    //
+    // 掃兩輪：第一輪額外要求「離開所貼的牆」（= 撞牆就往外走，不沿著牆滑）；
+    // 沒有位置在牆上時 leaves() 恆真，兩輪等價。第二輪拿掉那個要求當退路 ——
+    // 場地極小或縮在角落時可能真的沒有同時滿足兩者的方向，寧可走得動也不要卡死。
     const n = DIR_VECTORS.length;
     let bestLen = 0, bestV = null;
-    for (let i = 0; i < n; i++) {
-        const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
-        const len = fit(c[0], c[1]);
-        if (len >= MIN_LEG) return { vx: c[0], vy: c[1], len, stay: false };
-        if (len > bestLen) { bestLen = len; bestV = c; }
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < n; i++) {
+            const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
+            if (pass === 0 && !leaves(c[0], c[1])) continue;
+            const len = fit(c[0], c[1]);
+            if (len >= MIN_LEG) return { vx: c[0], vy: c[1], len, stay: false };
+            if (len > bestLen) { bestLen = len; bestV = c; }
+        }
+        if (!onWall) break;   // 沒貼牆 → 第一輪就是全掃，不需要再來一次
     }
-    // 32 個方向沒有一個走得滿 MIN_LEG（場地極小或縮在角落）→ 走能走的最長那個。
+    // 所有方向都走不滿 MIN_LEG（場地極小或縮在角落）→ 走能走的最長那個。
     if (bestLen > 0) return { vx: bestV[0], vy: bestV[1], len: bestLen, stay: false };
 
     return { vx: 0, vy: 0, len: STAY_MIN, stay: true };   // 理論上到不了（場地至少放得下一步）

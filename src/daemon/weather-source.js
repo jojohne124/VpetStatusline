@@ -49,11 +49,27 @@ function url(cfg) {
          + '&current=temperature_2m,weather_code';
 }
 
-/** 把 Open-Meteo 的回應轉成我們的天氣狀態。抽出來是為了測試不用真的連網。 */
-function parse(json, cfg) {
+/**
+ * Open-Meteo 的回應 → **原始觀測**（不是判定結果）。抽出來是為了測試不用真的連網。
+ *
+ * ⚠️ 這裡刻意只留 code / tempC，不做 classify。快取存的必須是**觀測**而不是**判定** ——
+ *    存判定的話，只要對照表或 coldBelowC 改了，快取那 30 分鐘就還是給舊答案，
+ *    而且快取會落地，重開 daemon 也救不回來。
+ *    真的踩過：加了雷雨（WMO 95 從 storm 改判 thunder）之後，畫面照樣是大雨，
+ *    因為快取裡寫死了 sky:"storm"。
+ */
+function parse(json) {
     const cur = (json && json.current) || {};
-    const w = WX.classify(cur.weather_code, cur.temperature_2m, { coldBelowC: cfg.coldBelowC });
-    return { ...w, city: cfg.city, at: Date.now() };
+    const num = (v) => (Number.isFinite(v) ? v : null);
+    return { code: num(cur.weather_code), tempC: num(cur.temperature_2m), at: Date.now() };
+}
+
+/** 原始觀測 + 設定 → 對外的天氣狀態。每次 get() 都重算，所以改對照表立刻生效。 */
+function view(raw, cfg) {
+    const w = WX.classify(raw.code, raw.tempC, { coldBelowC: cfg.coldBelowC });
+    const out = { ...w, city: cfg.city, at: raw.at || 0 };
+    if (!raw.at) out.stale = true;
+    return out;
 }
 
 /**
@@ -62,13 +78,12 @@ function parse(json, cfg) {
  */
 function create({ installRoot, stateDir, log = () => {} }) {
     const cfg = loadConfig(installRoot);
-    let cur = readCache(stateDir);
+    // 只留原始觀測。舊版的快取檔存的是判定過的物件，但那個物件裡本來就有 code/tempC，
+    // 所以直接沿用同一個檔、不需要遷移，讀進來就會用新的對照表重新判定。
+    const c0 = readCache(stateDir) || {};
+    let raw = { code: c0.code ?? null, tempC: c0.tempC ?? null, at: c0.at || 0 };
     let inflight = false;
     let nextTry = 0;
-
-    // 沒有快取先給一個「晴、沒溫度」的預設，這樣第一次開頁面不會空白。
-    // stale 旗標讓前端知道「這是猜的」—— 溫度會是空字串，不會顯示假數字。
-    if (!cur) cur = { ...WX.classify(null, null), city: cfg.city, at: 0, stale: true };
 
     async function refresh() {
         if (!cfg.enabled || inflight || Date.now() < nextTry) return;
@@ -78,13 +93,13 @@ function create({ installRoot, stateDir, log = () => {} }) {
         try {
             const res = await fetch(url(cfg), { signal: ac.signal });
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            cur = parse(await res.json(), cfg);
-            writeCache(stateDir, cur);
-            log(`天氣：${cfg.city} ${WX.describe(cur).label} ${WX.describe(cur).temp}`);
+            raw = parse(await res.json());
+            writeCache(stateDir, raw);
+            const d = WX.describe(view(raw, cfg));
+            log(`天氣：${cfg.city} ${d.label} ${d.temp}`);
         } catch (e) {
-            // 沉默降級。不 throw、不改 cur —— 上一次抓到的比「什麼都沒有」有用。
+            // 沉默降級。不 throw、不動 raw —— 上一次抓到的比「什麼都沒有」有用。
             nextTry = Date.now() + RETRY_MS;
-            if (cur.at === 0) cur = { ...cur, stale: true };
             log('天氣抓取失敗（不影響其他功能）：' + e.message);
         } finally {
             clearTimeout(timer);
@@ -96,11 +111,12 @@ function create({ installRoot, stateDir, log = () => {} }) {
         cfg,
         /** 現在的天氣。順手判斷要不要在背景更新 —— 不 await，這條路徑不等網路。 */
         get() {
-            if (cfg.enabled && Date.now() - (cur.at || 0) > REFRESH_MS) refresh();
-            return cur;
+            if (cfg.enabled && Date.now() - raw.at > REFRESH_MS) refresh();
+            return view(raw, cfg);
         },
         refresh,
+        raw: () => ({ ...raw }),
     };
 }
 
-module.exports = { create, parse, loadConfig, DEFAULTS, REFRESH_MS, RETRY_MS };
+module.exports = { create, parse, view, loadConfig, DEFAULTS, REFRESH_MS, RETRY_MS };

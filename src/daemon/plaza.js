@@ -104,11 +104,17 @@ function loadArt(core, charId) {
  * 結果是角色連動畫都停掉，看起來像整個畫面當掉而不是「站著休息」——
  * 家裡的桌寵沒走動時也是持續交替的，這裡沿用同一個處理。
  */
-function spriteDots(core, charId, step, facing) {
+/**
+ * @param {string|null} react 表情幀名（'HAPPY' / 'REFUSE' …）。給就蓋掉待機動畫，
+ *   讓牧場的摸摸能有反應。查不到那個幀就退回待機 —— 有些角色的美術不完整，
+ *   寧可沒反應也不要畫出錯幀。
+ */
+function spriteDots(core, charId, step, facing, react) {
     const a = loadArt(core, charId);
     if (!a) return null;
     const F = a.F || {};
-    const frameIdx = step % 2 === 0 ? F.IDLE_1 : F.IDLE_2;
+    const forced = react && F[react] != null ? F[react] : null;
+    const frameIdx = forced != null ? forced : (step % 2 === 0 ? F.IDLE_1 : F.IDLE_2);
     const rows = core.getFacingRows(a.art, frameIdx ?? 0, facing, a.rightOffset);
     return rows ? cellsToDots(rows) : null;
 }
@@ -173,7 +179,7 @@ function composePlaza(core, occupants, step, opts = {}) {
     placed.sort((a, b) => (a.y - b.y) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
     placed.forEach((p, i) => {
-        const sp = spriteDots(core, p.char, step, p.facing);
+        const sp = spriteDots(core, p.char, step, p.facing, p.react);
         if (sp) blit(dots, sp, p.x, p.y, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
@@ -311,7 +317,7 @@ function cellToAnsi(c) {
 // 副作用是重開 daemon 大家會回到各自的起點，那反而像「早上剛出門」。
 const SESSION_START = Date.now();
 
-function yardOccupants(core, ranch, activeState) {
+function yardOccupants(core, ranch, activeState, react) {
     const base = W.stepAt(SESSION_START);
     void activeState;   // 現役不進院子（見下），保留參數是為了呼叫端不用改
     const list = [];
@@ -328,6 +334,9 @@ function yardOccupants(core, ranch, activeState) {
             char:     id,
             seed:     W.hash2(hashStr(p.id), 0),
             joinStep: base,
+            // 摸摸的反應幀。**只存在記憶體裡**（daemon 的 Map），不寫進 ranch.json ——
+            // 牧場是冰箱，反應是純表演，不該在快照裡留下任何痕跡。
+            react:    react ? react.get(p.id) : null,
         });
     }
     // 現役**不**放進院子。草案原本要放（想說「不然院子會像少了一隻」），但那是搞混了
@@ -352,7 +361,7 @@ function hashStr(s) {
  * NPC 一律關掉：院子是你自己的地方，不該有野生 vpet 亂入。
  */
 function composeYard(core, ranch, activeState, step, opts = {}) {
-    const occ = yardOccupants(core, ranch, activeState);
+    const occ = yardOccupants(core, ranch, activeState, opts.react);
     if (!occ.length) return null;
     return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD });
 }

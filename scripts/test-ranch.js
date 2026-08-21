@@ -146,26 +146,33 @@ console.log('— swap —');
 // ── 5. 上限與 release ──────────────────────────────────────────────────
 console.log('— 上限 / release —');
 {
-    const full = { v: 1, cap: 2, pets: [
-        { id: 'a', keptAt: 1, state: { characterId: 'agumon' } },
-        { id: 'b', keptAt: 2, state: { characterId: 'gabumon' } },
-    ] };
+    const CAP = core.ranchCap();
+    // ⚠️ 塞滿要用 ranchCap() 而不是在檔案裡寫一個小 cap ——
+    // 上限是產品設定、不吃存檔（見 loadRanch 的說明），檔案裡寫 cap 沒有任何作用。
+    const full = { v: 1, pets: Array.from({ length: CAP }, (_, i) => (
+        { id: 'p' + i, keptAt: i + 1, state: { characterId: i % 2 ? 'gabumon' : 'agumon' } })) };
     fs.writeFileSync(RANCH, JSON.stringify(full));
     const st = veteran();
     core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' } }, RANCH);
-    ok(core.loadRanch(RANCH).pets.length === 2, '滿了還是收得進去（應該要拒絕）');
+    ok(core.loadRanch(RANCH).pets.length === CAP, `滿了（${CAP}）還是收得進去（應該要拒絕）`);
+
+    // 存檔裡的 cap 一律不作數：舊檔存過 cap:8，改常數若被它蓋掉，既有玩家完全不受影響
+    fs.writeFileSync(RANCH, JSON.stringify({ v: 1, cap: 99, pets: full.pets }));
+    core.applyRanchOp(veteran(), { ranchTriggerTs: Date.now() - 3, ranchOp: { op: 'keep' } }, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === CAP, '存檔裡的 cap 蓋過了常數（上限不該吃存檔）');
+    ok(!('cap' in core.loadRanch(RANCH)), 'loadRanch 應該把舊的 cap 欄位丟掉');
 
     // 滿的時候 swap 仍要可用（一進一出，數量不變）
     const st2 = { characterId: 'greymon' };
-    core.applyRanchOp(st2, { ranchTriggerTs: Date.now() - 1, ranchOp: { op: 'swap', id: 'a' } }, RANCH);
+    core.applyRanchOp(st2, { ranchTriggerTs: Date.now() - 1, ranchOp: { op: 'swap', id: 'p0' } }, RANCH);
     ok(st2.characterId === 'agumon', '牧場滿的時候 swap 失敗了（一進一出不該受上限影響）');
-    ok(core.loadRanch(RANCH).pets.length === 2, 'swap 之後數量變了');
+    ok(core.loadRanch(RANCH).pets.length === CAP, 'swap 之後數量變了');
 
     // release
     const before = core.loadRanch(RANCH).pets.length;
-    core.applyRanchOp({}, { ranchTriggerTs: Date.now() - 2, ranchOp: { op: 'release', id: 'b' } }, RANCH);
+    core.applyRanchOp({}, { ranchTriggerTs: Date.now() - 2, ranchOp: { op: 'release', id: 'p1' } }, RANCH);
     ok(core.loadRanch(RANCH).pets.length === before - 1, 'release 沒有刪掉');
-    ok(!core.loadRanch(RANCH).pets.some(p => p.id === 'b'), 'release 刪錯人');
+    ok(!core.loadRanch(RANCH).pets.some(p => p.id === 'p1'), 'release 刪錯人');
 }
 
 // ── 6. 表演中不動牧場 ──────────────────────────────────────────────────

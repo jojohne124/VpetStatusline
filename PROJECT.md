@@ -90,7 +90,41 @@ agumon-cli/                              ← Git 管理範圍
 └── (其餘 Claude CLI 自己的 sessions/ cache/ skills/ hooks/ …)
 ```
 
-### 1.2 製作工具鏈（`char-cli.js`）
+### 1.2 加一隻新角色（`scripts/add-character.js`）
+
+**日常流程用這支，不要自己重寫檢查。** `char-cli` 是底層工具（見 1.3），
+這支把「每次都一樣的事」包起來：偵測邏輯網格、判版面、正規化 CutIn 檔名、
+產 config、轉檔、**逐點比對轉出來的圖與原圖**、部署。
+
+```bash
+node scripts/add-character.js <Name> --check                    # 只偵測，什麼都不寫
+node scripts/add-character.js <Name> --power 50                 # config + 轉檔 + 部署
+node scripts/add-character.js <Name> --power 50 --bullet Agumon --implant
+```
+
+| 選項 | 作用 |
+|---|---|
+| `--check` | 只偵測並回報 |
+| `--power N` | 基礎戰力（stage 由它推導並回報） |
+| `--stage S` | 覆寫推導出來的階段 |
+| `--bullet <Name>` | 借用某角色的子彈（預設產暫代白球） |
+| `--implant` | 加進 roster（＝實裝） |
+| `--no-deploy` | 不同步到 installed |
+| `--force` | 覆寫既有 config.json |
+
+**刻意不自動決定的事**：命名、power、要不要實裝、進化鏈怎麼接。
+那些是設計決策，猜錯了很久以後才會發現。
+
+最關鍵的一項是**邏輯網格偵測**：PNG 的實體尺寸完全無所謂，重要的是「一格幾像素」。
+48×48（一格 3×3）與 256×256（一格 16×16）都是合法的 16×16 網格；
+網格若不等於 `targetSize`，中心點取樣會取到格子邊緣，轉出來跟原圖不一樣而且很難看出原因。
+這段以前每次加角色都在現場重寫，現在固化成程式並有測試（`scripts/test-add-character.js`）。
+
+⚠️ `scripts/gen-new-char-scaffold.js` 是 2026 年那批 63 隻的**一次性**腳本，
+會覆寫那 63 個 config.json 連同已接好的 `evolvesTo`。現在要 `--yes` 才會動 ——
+曾經只是想看它在做什麼就順手跑起來，996 行當場被洗掉。
+
+### 1.2.1 底層工具鏈（`char-cli.js`）
 
 統一指令：
 

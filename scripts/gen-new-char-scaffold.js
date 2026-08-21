@@ -8,8 +8,23 @@
  *      evolvesTo 先留空，待「實裝」階段再接鏈）。
  *
  * 不做轉檔本身（art.json）；那一步用 char-cli process / cutin。也不部署。
- * 用法：node scripts/gen-new-char-scaffold.js
+ *
+ * ⚠️ **這是 2026 年那一批 63 隻的一次性腳本，已經沒有日常用途。**
+ *    它會**無條件覆寫那 63 隻的 config.json**，包含已經接好的 evolvesTo ——
+ *    跑一次就把進化鏈全部清空（實際發生過：只是想看它在做什麼，順手跑起來，
+ *    63 個 config 當場被洗掉 996 行，靠 git 才救回來）。
+ *    所以現在要 --yes 才會真的寫。加單隻角色請用 scripts/add-character.js。
+ *
+ * 用法：node scripts/gen-new-char-scaffold.js --yes
  */
+if (!process.argv.includes('--yes')) {
+    console.log('這支腳本會覆寫 63 隻角色的 config.json（含已接好的 evolvesTo），');
+    console.log('是 2026 年那批新角色的一次性工具，日常不該跑。');
+    console.log('');
+    console.log('  加單隻新角色 →  node scripts/add-character.js <Name> --check');
+    console.log('  真的要重跑   →  node scripts/gen-new-char-scaffold.js --yes');
+    process.exit(0);
+}
 const fs   = require('fs');
 const path = require('path');
 const sharp = require('sharp');

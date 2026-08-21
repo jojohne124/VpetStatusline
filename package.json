@@ -9,8 +9,8 @@
   "scripts": {
     "install-runtime": "node scripts/install.js",
     "install-runtime:daemon-only": "node scripts/install.js --daemon-only",
-  "build-release": "node scripts/build-release.js",
-  "publish-release": "node scripts/publish-release.js",
+    "build-release": "node scripts/build-release.js",
+    "publish-release": "node scripts/publish-release.js",
     "uninstall-runtime": "node scripts/uninstall.js",
     "uninstall-runtime:purge": "node scripts/uninstall.js --purge",
     "char": "node src/tools/char-cli.js",
@@ -21,16 +21,27 @@
     "check-pricing": "node scripts/check-pricing.js",
     "plaza-preview": "node scripts/plaza-preview-web.js",
     "plaza-preview-tty": "node scripts/plaza-preview.js",
-    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js && node scripts/test-plaza.js && node scripts/test-ranch.js && node scripts/test-weather.js && node scripts/test-daemon-page.js"
+    "test": "node scripts/test-time-of-day.js && node scripts/test-shadow-fallback.js && node scripts/test-mood.js && node scripts/test-plaza.js && node scripts/test-ranch.js && node scripts/test-weather.js && node scripts/test-add-character.js && node scripts/test-daemon-page.js",
+    "add-char": "node scripts/add-character.js"
   },
-  "keywords": ["statusline", "claude-cli", "cursor-cli", "pixel-art", "agumon"],
+  "keywords": [
+    "statusline",
+    "claude-cli",
+    "cursor-cli",
+    "pixel-art",
+    "agumon"
+  ],
   "author": "kaihsiangchang",
   "license": "MIT",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
   },
-  "os": ["win32", "darwin", "linux"],
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
   "dependencies": {
     "log-update": "^8.0.0",
     "sharp": "^0.34.5"

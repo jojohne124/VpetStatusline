@@ -591,7 +591,7 @@ if (args[0] === '--evolve') {
 const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release'];
 if (RANCH_CMDS.includes(args[0])) {
     const ranch = core.loadRanch();
-    const cap   = ranch.cap || core.RANCH_CAP;
+    const cap   = core.ranchCap();
     const pets  = ranch.pets;
 
     const label = (p) => {

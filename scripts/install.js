@@ -69,7 +69,8 @@ const RUNTIME_FILES = [
     'statusline-agumon.js',
     'statusline-cheat.js',   // = vpet 指令通道（非顯示層），daemon-only 也要
     'agumon-hook.js',        // = 訓練值/自動戰鬥/活動時戳的脈搏，daemon-only 也要
-    'doctor.js',             // vpet doctor：檢查/清除 node 孤兒（漏掉會導致 ac doctor 失效）
+    'doctor.js',             // vpet doctor：檢查/清除 node 孤兒。漏掉會讓 vpet doctor 失效，
+                             // 而且 daemon 每 10 分鐘那輪自動收屍也會靜靜地什麼都不做
 ].filter(f => !(DAEMON_ONLY && STATUSLINE_ONLY_FILES.includes(f)));
 
 // 舊版散落在 ~/.claude/ 的檔案 → 新位置

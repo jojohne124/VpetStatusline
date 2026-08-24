@@ -124,8 +124,24 @@ function renderProbe(js) {
     ok((bolt.n.fillRect || 0) > 0, '雷雨沒有閃電');
 }
 
+// 等 daemon 真的開始聽，而不是固定睡一段時間。
+// 固定 2 秒撐了一陣子，但那是在賭機器當下的負載 —— 前一支測試在用 sharp 轉圖、
+// 或 daemon 啟動路徑多做了一點事，就會連不上而紅一整支，症狀（ECONNREFUSED）
+// 又完全指不到真正的原因。
+async function waitReady(ms = 20000) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+        try { await get('/state'); return; }
+        catch (e) {
+            if (Date.now() > deadline) throw new Error('daemon 起不來（等了 ' + ms + 'ms）：' + e.message);
+            await new Promise(r => setTimeout(r, 100));
+        }
+    }
+}
+
 setTimeout(async () => {
     try {
+        await waitReady();
         console.log('— 網頁 —');
         const html = await get('/');
         ok(html.includes('<canvas id="pet"'), '網頁沒有畫布');
@@ -187,4 +203,4 @@ setTimeout(async () => {
     }
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     done(fail ? 1 : 0);
-}, 2000);
+}, 100);

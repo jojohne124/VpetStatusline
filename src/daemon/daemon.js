@@ -404,6 +404,39 @@ const REAP_INTERVAL_MS = 30000;
 const PIDS_DIR = path.join(STATE_DIR, 'pids');
 setInterval(() => { try { core.reapStalePids(PIDS_DIR); } catch (e) {} }, REAP_INTERVAL_MS);
 
+// ── 補一輪「看作業系統行程表」的收屍 ──────────────────────────────────────
+// 上面那輪只看 state/pids/ 這份登記表，而**有一整類孤兒不在登記表裡**：
+//
+//   statusline 的 watchdog 8 秒後呼叫 process.exit(0)，'exit' handler 會刪掉自己的
+//   pid 檔（deregister）—— 但如果它在那之後卡在收尾出不去（多半是往已經斷掉的 stdout
+//   flush），行程就活著、登記卻已經撤銷。實測這種孤兒的樣貌是 **1 個執行緒、0 CPU、
+//   working set 0**：worker 執行緒都拆光了，只剩主執行緒卡住。
+//   一台開機 126 小時的機器上累積了 20 個，約每天 4 個。
+//
+// 換句話說：登記是由「快死的行程自己」撤銷的，一旦死到一半卡住就從名單上消失。
+// 唯一看得到它們的是作業系統行程表 —— 那正是 doctor 在做的事，所以直接叫 doctor，
+// 不重寫一份掃描邏輯（判定條件分兩份寫遲早會分叉）。
+//
+// ⚠️ 一定要 spawn 成獨立行程：doctor 的掃描是同步的 PowerShell CIM 查詢，實測 2.4 秒。
+//    在 daemon 主迴圈跑會卡掉兩三拍 → 走路跳幀，那正是當初把 token 掃描搬去 worker 的原因。
+const ORPHAN_SWEEP_MS = 10 * 60 * 1000;   // 每天才長 4 個，10 分鐘一輪綽綽有餘（≈0.4% 一顆核心）
+function sweepOrphans() {
+    const doctor = path.join(core.INSTALL_ROOT, 'doctor.js');
+    if (!fs.existsSync(doctor)) return;    // 沒安裝 doctor（例如直接跑 repo）就跳過
+    try {
+        const child = require('child_process')
+            .spawn(process.execPath, [doctor], { detached: true, stdio: 'ignore' });
+        child.unref();                     // 別讓它擋住 daemon 退出
+        child.on('error', () => {});
+    } catch (e) { /* 收屍失敗不該影響任何其他功能 */ }
+}
+setInterval(sweepOrphans, ORPHAN_SWEEP_MS).unref();
+// 啟動時先掃一輪：daemon 剛起來時往往正是「上一輪累積了一堆」的時候。
+// 但**延後**再做 —— 這行在 server.listen 之前，直接呼叫等於把一次 CreateProcess
+// 塞進啟動路徑。實測讓 test-daemon-page 的固定 2 秒等待偶爾不夠而連不上；
+// 收屍是家務事，沒有任何理由排在「開始服務」前面。
+setTimeout(sweepOrphans, 3000).unref();
+
 // ── UI 指令 → force-char.json（跟 vpet CLI 同一個指令通道）───────────────────
 // 當家時 daemon 自己讀套用；隔離時 statusLine 讀 → UI 等於「圖形版 vpet 指令」，兩模式皆可用。
 // merge 寫入（保留其他欄位），與 statusline-cheat 寫法一致。

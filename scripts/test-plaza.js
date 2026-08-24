@@ -63,6 +63,41 @@ console.log('— 邊界 —');
     ok(oob === 0, `走出場地邊界 ${oob} 次（y 下限是 MIN_Y=${W.MIN_Y}，頂端要留給名牌）`);
 }
 
+// ── 2z. 長時間開機不可以定格 ───────────────────────
+// 回報過「牧場的腳色不會移動了」。真因是 MAX_REPLAY 本來寫成
+//   target = min(MAX_REPLAY, step - joinStep)
+// —— 限制的是【目標拍數】而不是【重播距離】。超過之後 target 不再成長，
+// 全場永遠定格而 tick 照跳。院子的 joinStep 是「daemon 這次啟動的時間」，
+// daemon 一開就是好幾天，所以這不是理論上碰得到，是必然會碰：
+// 實際在開機 63.7 小時（> 41.7h = MAX_REPLAY x STEP_MS）後全員卡住。
+{
+    const F = W.YARD_FIELD, seed = 646533808;
+    const beyond = W.MAX_REPLAY + 1;
+    // 有快取就不受上限影響——daemon 輪詢走的就是這條路徑。
+    let c = null, prev = null, moves = 0;
+    for (let t = beyond; t < beyond + 400; t++) {
+        const q = W.posAt({ seed, joinStep: 0 }, t, c, F); c = q.cache;
+        if (prev && (q.x !== prev.x || q.y !== prev.y)) moves++;
+        prev = q;
+    }
+    ok(moves > 300, `超過 MAX_REPLAY 之後就不走了（400 拍只動了 ${moves} 拍）`);
+
+    // 冷啟動（沒快取）超過上限 = 「這隻現在才進場」：位置合法、且不重播。
+    const cold = W.posAt({ seed, joinStep: 0 }, 2383378291, null, F);
+    ok(cold.x >= F.minX && cold.x <= F.maxX && cold.y >= F.minY && cold.y <= F.maxY,
+       '冷啟動超過上限時位置跑出場地');
+    const t0 = process.hrtime.bigint();
+    W.posAt({ seed, joinStep: 0 }, 2383378291, null, F);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    // joinStep 傳錯（實際踩過：yard 把 joinStep 寫死 0，step 是牌鐘的 24 億）
+    // 不可以把同步的 event loop 卡死。
+    ok(ms < 50, `joinStep 傳錯時 posAt 花了 ${ms.toFixed(1)}ms，會拖垮 daemon`);
+
+    // 上限之內的行為不能變（廣場的 joinStep 是伺服器發的，永遠在射程內）
+    ok(W.posAt({ seed, joinStep: 0 }, 50, null, F).x === 31,
+       '上限之內的走位被改掉了（決定性必須維持）');
+}
+
 // ── 2a. 貼牆的時候不可以在原地抖 ─────────────────────────────────────
 // 回報過「牧場滿有機會卡在邊界」。真因是「幾乎與牆平行、但帶一點朝外分量」的方向
 // 會被截成 1~2 拍，角色每一兩拍就重抽方向，看起來像在原地抖。

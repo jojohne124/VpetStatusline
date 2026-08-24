@@ -180,7 +180,11 @@ function composePlaza(core, occupants, step, opts = {}) {
 
     placed.forEach((p, i) => {
         const sp = spriteDots(core, p.char, step, p.facing, p.react);
-        if (sp) blit(dots, sp, p.x, p.y, owner, i);
+        // 跳躍只影響**畫在哪**，不影響上面那個 y 排序，也不影響名牌（名牌釘在腳下的
+        // 地面位置）。跳起來就切到別人前面、名牌跟著飛，兩個都不對。
+        // 貼著上緣時往上頂會超出畫面 -> 夾住，那一下就看不到跳（很少見，可接受）。
+        p.jumpDy = p.jump ? Math.min(p.jump, p.y - field.minY) : 0;
+        if (sp) blit(dots, sp, p.x, p.y - p.jumpDy, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
 
@@ -317,6 +321,13 @@ function cellToAnsi(c) {
 // 副作用是重開 daemon 大家會回到各自的起點，那反而像「早上剛出門」。
 const SESSION_START = Date.now();
 
+/**
+ * 院子這次開機的起拍。導出純粹是為了讓測試餵得到有效的 step ——
+ * 不知道這個數字就只會餵到 target = 0（負的被夾成 0），每一拍都算出同一個起點，
+ * 斷言全部退化成「拿同一張圖跟自己比」而看起來是綠的。踩過：跳躍夾住那條就是這樣空掉的。
+ */
+function yardJoinStep() { return W.stepAt(SESSION_START); }
+
 function yardOccupants(core, ranch, activeState, react) {
     const base = W.stepAt(SESSION_START);
     void activeState;   // 現役不進院子（見下），保留參數是為了呼叫端不用改
@@ -327,16 +338,20 @@ function yardOccupants(core, ranch, activeState, react) {
         // 刻意不給 code —— buildLabels 看到沒有 code 就不畫名牌（與 NPC 同一條路）。
         // 院子只有 52 dot 寬，8 隻的名牌會互相擠掉一半；要知道是誰改用右鍵選單，
         // 那比一排彼此覆蓋的名字可靠。
+        // 摸摸的反應。**只存在記憶體裡**（daemon 的 Map），不寫進 ranch.json ——
+        // 牧場是冰箱，反應是純表演，不該在快照裡留下任何痕跡。
+        const r = react ? react.get(p.id) : null;
         list.push({
             key:      'ranch:' + p.id,
             ranchId:  p.id,
             name:     core.getDisplayName ? core.getDisplayName(id) : id,
             char:     id,
             seed:     W.hash2(hashStr(p.id), 0),
-            joinStep: base,
-            // 摸摸的反應幀。**只存在記憶體裡**（daemon 的 Map），不寫進 ranch.json ——
-            // 牧場是冰箱，反應是純表演，不該在快照裡留下任何痕跡。
-            react:    react ? react.get(p.id) : null,
+            // 開心的時候會原地跳，停走那幾拍要從時間軸扣掉，落地才不會瞬移
+            // （holdSteps 的來由見 daemon.js settleHold）。
+            joinStep: base + (r ? r.holdSteps || 0 : 0),
+            react:    r ? r.frame : null,
+            jump:     r ? r.jump || 0 : 0,
         });
     }
     // 現役**不**放進院子。草案原本要放（想說「不然院子會像少了一隻」），但那是搞混了
@@ -371,5 +386,5 @@ module.exports = {
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
-    yardOccupants, composeYard, hashStr,
+    yardOccupants, composeYard, hashStr, yardJoinStep,
 };

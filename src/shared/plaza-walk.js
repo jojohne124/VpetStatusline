@@ -245,17 +245,29 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
 // **整個 daemon 的 event loop 就卡死了**，連無關的 /state 都一起停擺。
 // 呼叫端傳錯參數不該讓伺服器當掉，所以這裡自己擋住。
 //
-// 24 小時（= 廣場的 MAX_STAY）約 11.5 萬拍，遠在這個上限之內，正常路徑碰不到。
+// ⚠️ 這個上限限制的是**重播的距離**，不是**目標的拍數**。
+// 第一版寫成 target = min(MAX_REPLAY, step - joinStep)，那是限制目標 ——
+// 後果是超過上限之後 target 就不再成長，全場所有人**永遠定格**，而 tick 照跳。
+// 院子的 joinStep 是「daemon 這次啟動的時間」，daemon 一開就是好幾天，
+// 所以這條路徑不是理論上碰得到，是必然會碰到：實際在開機 63.7 小時後全員卡住。
+// 現在改成把起點往前拉（見 posAt 的 from），也就是註解一開始就說要做的事。
 const MAX_REPLAY = 200000;
 
 function posAt(occ, step, cache, field = PLAZA_FIELD) {
     const { seed, joinStep } = occ;
-    const target = Math.min(MAX_REPLAY, Math.max(0, step - joinStep));
+    const target = Math.max(0, step - joinStep);
 
-    // 快取只在「沒有倒退」時可用（倒退＝時鐘校正把 step 拉回來了）
-    let st = (cache && cache.at <= target)
+    // 快取只在「沒有倒退」時可用（倒退＝時鐘校正把 step 拉回來了）。
+    // 有快取就完全不受 MAX_REPLAY 影響 —— 每次輪詢只往前推幾拍，
+    // 所以 daemon 跑再久都照走。上限真正管的是**沒有快取**的那一次冷啟動。
+    const usable = cache && cache.at <= target && target - cache.at <= MAX_REPLAY;
+    // 冷啟動又離得太遠 → 當作「這隻現在才進場」：從 startPos 起算、完全不重播。
+    // 不要改成「從 target - MAX_REPLAY 起算」：那等於每次都重播剛好 MAX_REPLAY 拍
+    // 的同一條鏈（鏈只由 seed 與 k 決定），算出來的位置是常數，一樣定格，
+    // 還白花 6ms。距離在上限內時照舊從 0 重播，既有行為與決定性都不變。
+    let st = usable
         ? { ...cache }
-        : { ...startPos(seed, field), k: 0, at: 0 };
+        : { ...startPos(seed, field), k: 0, at: target > MAX_REPLAY ? target : 0 };
 
     // 推進完整的段
     let leg = legAt(seed, st.k, st.x, st.y, field);

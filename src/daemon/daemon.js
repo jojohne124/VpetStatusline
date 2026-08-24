@@ -28,6 +28,8 @@ catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js
 
 const { computeUsage } = require('./token-source');
 const plaza = require('./plaza');   // 廣場／院子的合成器（走路在 ../shared/plaza-walk.js）
+const PW    = require('../shared/plaza-walk.js');   // 拍子換算（摸摸要把停走的拍數扣掉）
+const YT    = require('./yard-touch');              // 牧場摸摸的狀態機（輪詢間隔也從這裡取）
 const WX    = require('../shared/weather.js');
 const wxSrc = require('./weather-source.js');
 
@@ -309,41 +311,7 @@ let tick = 0;
 // 院子用的走路快取（key -> 走到第幾拍的快照）。長駐在 daemon 上，不必每次請求重播。
 const yardCaches = new Map();
 
-// ── 牧場的摸摸 ─────────────────────────────────────────────────────
-// 純表演：只換一幀表情，**不動心情值、不寫 ranch.json**。牧場是冰箱，裡面的東西
-// 不會因為你戳牠而成長或變壞 —— 這是使用者明確要的分界。所以反應只活在這個 Map 裡，
-// daemon 一關就沒了，那正好也是它該有的生命週期。
-//
-// 連戳判定跟現役那隻共用同一組門檻（TOUCH_WINDOW_MS / TOUCH_LIMIT / SULK_MS），
-// 但計數是**每隻各自獨立**的：戳 A 五下不該讓 B 也生氣。
-const YARD_REACT_MS = 1800;        // 一次反應演多久
-const yardTouch = new Map();       // ranchId -> { times:[], sulkUntil, until, frame }
 
-function yardPetTouch(id) {
-    const now = Date.now();
-    let t = yardTouch.get(id);
-    if (!t) { t = { times: [], sulkUntil: 0, until: 0, frame: null }; yardTouch.set(id, t); }
-    if (now < t.sulkUntil) return { ok: true, action: 'yardPet', mood: 'sulking' };
-    t.times = t.times.filter(x => now - x < TOUCH_WINDOW_MS);
-    t.times.push(now);
-    let mood = 'happy';
-    if (t.times.length >= TOUCH_LIMIT) { mood = 'refuse'; t.sulkUntil = now + SULK_MS; t.times = []; }
-    t.frame = (mood === 'refuse') ? 'REFUSE' : 'HAPPY';
-    t.until = now + YARD_REACT_MS;
-    return { ok: true, action: 'yardPet', mood };
-}
-
-/** 目前該用哪一幀。過期的順手清掉，不然離開的成員會一直留在 Map 裡。 */
-function yardReactMap() {
-    const now = Date.now();
-    const out = new Map();
-    for (const [id, t] of yardTouch) {
-        if (t.until > now) out.set(id, t.frame);
-        // 連戳窗口與鬧脾氣都過去了 → 這筆已經沒有資訊，回收
-        else if (now > t.sulkUntil && !t.times.length) yardTouch.delete(id);
-    }
-    return out;
-}
 // 院子的拍子與家裡的不同（750ms vs 1000ms），而且不依賴 daemon 的 tick 計數 ——
 // 用牆鐘算，重開 daemon 也接得上，日後接共用廣場時同一條式子還要加上 serverNow 校正。
 const plazaStep = () => require('../shared/plaza-walk.js').stepAt(Date.now());
@@ -450,6 +418,22 @@ function writeForce(patch) {
 const TOUCH_WINDOW_MS = 3000;   // 判定窗口
 const TOUCH_LIMIT     = 5;      // 窗口內達此次數 → 生氣
 const SULK_MS         = 3000;   // 生氣後鬧脾氣：這段期間再戳也不理
+
+// ── 牧場的摸摸 ─────────────────────────────────────────────────────
+// 純表演：只換一幀表情、開心時原地跳，**不動心情值、不寫 ranch.json**。
+// 牧場是冰箱，裡面的東西不會因為你戳牠而成長或變壞 —— 這是使用者明確要的分界。
+//
+// 狀態機本體在 ./yard-touch.js。抽出去唯一的理由是可測試：daemon.js 一 require
+// 就 server.listen，測試載不進來，而停走的拍數要累加、結清、還要跨反應保管，
+// 那種帳不該只靠肉眼在瀏覽器上驗。
+//
+// 連戳判定跟現役那隻共用同一組門檻（TOUCH_WINDOW_MS / TOUCH_LIMIT / SULK_MS），
+// 但計數是**每隻各自獨立**的：戳 A 五下不該讓 B 也生氣。
+const yardTouch = YT.create({
+    windowMs: TOUCH_WINDOW_MS, limit: TOUCH_LIMIT, sulkMs: SULK_MS, stepAt: PW.stepAt,
+});
+const yardPetTouch = (id) => ({ ok: true, action: 'yardPet', mood: yardTouch.pet(id) });
+const yardReactMap = (alive) => yardTouch.react(alive);
 let touchTimes = [];
 let sulkUntil  = 0;
 let forceSleeping = false;   // 由每拍的 doTick 更新（vpet sleep 狀態）
@@ -1206,6 +1190,9 @@ async function sendCmd(action,args){
     showOutput(r.output || r.error || '');
     // 牧場操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
     if(['keep','swap','release'].includes(action)) setTimeout(poll, 1300);
+    // 摸摸馬上刷一次，不然要等下一次輪詢（最多 500ms）才看到牠跳起來，
+    // 點下去到有反應之間那半秒會讓人以為沒點到。
+    if(action==='yardPet') poll();
   }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); }
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
@@ -1247,7 +1234,14 @@ document.getElementById('pet').addEventListener('click',ev=>{
   if(hit) sendCmd('yardPet',{which:hit.id});
 });
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
-setInterval(poll,500); poll();
+// 輪詢節奏依畫面而定：院子要 ${YT.POLL_MS}ms —— 摸摸的騰空只有那麼久，輪詢慢於它
+// 就會整個被取樣漏掉（跳躍的節奏與這個數字綁在一起，見 yard-touch.js）。
+// 家裡沒有這種需求，維持 500ms，不必為了沒人在看的畫面多打一倍的請求。
+//
+// 用自己排下一次而不是 setInterval：/yard 偶爾比間隔慢時，setInterval 會讓請求疊在
+// 一起，畫面反而更頓。
+const POLL_MS={home:500,yard:${YT.POLL_MS}};
+(function pollLoop(){ poll().finally(()=>setTimeout(pollLoop, POLL_MS[view]||500)); })();
 </script></body></html>`;
 
 const server = http.createServer((req, res) => {
@@ -1276,8 +1270,9 @@ const server = http.createServer((req, res) => {
             // ?w=rain / ?w=storm+cold → 預覽指定天氣（見 weatherFor）
             const wq    = new URL(req.url, 'http://x').searchParams.get('w');
             const wx    = weatherFor(wq);
+            const alive = new Set((ranch.pets || []).map(p => p.id));
             const out   = plaza.composeYard(core, ranch, st, step,
-                                            { caches: yardCaches, react: yardReactMap() });
+                                            { caches: yardCaches, react: yardReactMap(alive) });
             // 場地尺寸一定要回傳，**空牧場時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空牧場看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -1306,9 +1301,11 @@ const server = http.createServer((req, res) => {
                      cap: core.ranchCap(),
                      kept: (ranch.pets || []).length,
                      lines: out ? out.lines : null,
+                     // y 回傳**畫出來**的位置（含跳躍位移），不是地面的 y ——
+                     // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
                      pets: out ? out.placed.map(p => ({
                          id: p.ranchId, name: p.name, char: p.char,
-                         x: p.x, y: p.y, ...info(p.ranchId),
+                         x: p.x, y: p.y - (p.jumpDy || 0), ...info(p.ranchId),
                      })) : [] };
         } catch (e) {
             body = { ok: false, error: e.message };

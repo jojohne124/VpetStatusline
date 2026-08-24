@@ -114,6 +114,143 @@ function addUsage(bucket, u, price) {
     bucket.messages    += 1;
 }
 
+// ── 增量掃描 ────────────────────────────────────────────────────────────────
+//
+// 第一版每次呼叫都把整個 ~/.claude/projects 重讀一遍。實測那是 456 MB / 94 個檔 /
+// 103,398 行，單次 2.16 秒，而 daemon 每 5 秒跑一次 —— 等於**持續佔掉 43% 的一顆
+// 核心**，而且只會愈來愈糟（jsonl 只進不出）。拆開來看：讀檔 1324ms、split 172ms、
+// JSON.parse 640ms，所以 I/O 是大頭，光是少 parse 幾行救不了。
+//
+// 兩個事實讓增量掃描可行（都是實測，不是假設）：
+//   1. 456 MB 裡有 219 MB（90 個檔）是七天以上沒動過的 —— 重讀純屬浪費。
+//      其餘 233 MB 集中在當下這 3 個 session，而那些檔是**只往後追加**的。
+//   2. 「同一則訊息因串流被寫很多次」實測有 19,668 次，**去重不能省**。
+//      去重仍然是**全域**的（跟舊版一樣），只是那份表換成 key -> 哪個檔擁有它，
+//      這樣檔案被截斷或刪掉時能把它的 key 一起收回去。
+//      曾經想改成「每個檔各自去重」（實測跨檔重複是 0，看起來可以），
+//      但那是拿「目前的資料剛好如此」當設計前提 —— 全域表的成本只有 18k 個字串，
+//      不值得為它換一個哪天會無聲多算的假設。
+//
+// 於是每個檔記住「讀到第幾個 byte」與那個檔算出來的小計，下次只讀新追加的部分。
+// 沒變的檔完全不碰（連開檔都不用，只 stat）。
+//
+// 時間分桶（today / last5h / burn10m）不能只留小計，因為視窗會隨 now 移動。
+// 但實測近 25 小時只有 290 筆紀錄 —— 把這些逐筆留著重算，成本可以忽略。
+// 更舊的紀錄只會進 totals / byModel / bySession，那三個是單調累加的，直接沿用。
+//
+// 快取只活在記憶體裡：呼叫端（daemon 的 token worker）是長駐的。刻意不落地成檔案，
+// 這個模組「純唯讀、零副作用」的性質要保住。
+const RECENT_MS = 25 * 3600 * 1000;   // 時間分桶最寬的是 today（跨午夜最多 24h），多留 1h 餘裕
+
+const fileCache = new Map();   // 絕對路徑 -> entry
+// 去重表：message.id|requestId -> 擁有它的檔案。全域（跨檔）去重，與舊版同語意；
+// 記「哪個檔」而不只是存在與否，是為了在檔案被截斷／刪除時能精準收回它的 key。
+const seenOwner = new Map();
+
+/** 這個檔的所有 key 從全域去重表撤掉（檔案被換過或刪掉時）。 */
+function releaseIds(file, entry) {
+    for (const k of entry.ids) if (seenOwner.get(k) === file) seenOwner.delete(k);
+}
+
+function newEntry(kind, file) {
+    return {
+        kind, file,                             // 'claude' | 'codex'；file 給去重表回查用
+        size: 0, mtimeMs: 0,
+        carry: null,                            // 尾巴那行還沒收完的 bytes（見 readAppended）
+        ids: new Set(),                         // 檔內去重（串流會把同一則寫很多次）
+        totals: emptyBucket(), byModel: {}, bySession: {},
+        recent: [],                             // [{ts, b}] 近 RECENT_MS 的逐筆小計
+        lastTs: 0, rawLines: 0, dupSkipped: 0,
+        // codex 專用：total_token_usage 是單調遞增的累計值，要記住上一筆才能取差量
+        prev: null, sid: null, model: null,
+    };
+}
+
+function addBucket(dst, src) {
+    dst.input += src.input; dst.output += src.output;
+    dst.cacheCreate += src.cacheCreate; dst.cacheRead += src.cacheRead;
+    dst.tokens += src.tokens; dst.costUSD += src.costUSD; dst.messages += src.messages;
+}
+function sessionSlot(map, sid, cwd) {
+    if (!map[sid]) map[sid] = Object.assign(emptyBucket(), { lastTs: 0, cwd: cwd || null });
+    return map[sid];
+}
+
+/**
+ * 讀出這個檔從上次之後追加的內容。沒變動回 null（這是省下 456 MB 的那一步）。
+ *
+ * ⚠️ 兩個容易寫錯的地方：
+ *   1. **不能按 byte 直接 toString** —— 讀到的尾端可能切在一個 UTF-8 字元中間
+ *      （寫入方正在寫）。所以未結尾的那一行以 **Buffer** 留著，下次接上再解碼。
+ *   2. 檔案變小 = 被截斷或換過一份，之前的小計全部作廢，整個重來。
+ *      大小一樣但 mtime 變了 = 原地改寫，同樣不能信。
+ */
+function readAppended(file, entry) {
+    let st;
+    try { st = fs.statSync(file); } catch (e) { return null; }
+    if (st.size < entry.size || (st.size === entry.size && st.mtimeMs !== entry.mtimeMs)) {
+        releaseIds(file, entry);           // 舊的 key 要還回去，否則重掃時會被當成重複而漏算
+        const fresh = newEntry(entry.kind, file);
+        fileCache.set(file, fresh);
+        entry = fresh;
+    }
+    if (st.size === entry.size) return null;      // 沒動過（連開檔都省了）
+
+    let buf;
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+        buf = Buffer.allocUnsafe(st.size - entry.size);
+        const got = fs.readSync(fd, buf, 0, buf.length, entry.size);
+        if (got < buf.length) buf = buf.subarray(0, got);
+    } catch (e) { return null; }
+    finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) {} } }
+
+    entry.size += buf.length;
+    entry.mtimeMs = st.mtimeMs;
+
+    const all = entry.carry ? Buffer.concat([entry.carry, buf]) : buf;
+    let cut = all.length;
+    while (cut > 0 && all[cut - 1] !== 0x0A) cut--;          // 退回最後一個換行
+    // subarray 是 view，直接留著會把整段 buffer 卡住不放 → 複製一份
+    entry.carry = cut < all.length ? Buffer.from(all.subarray(cut)) : null;
+    return cut ? all.subarray(0, cut).toString('utf8') : '';
+}
+
+/** 一筆用量進帳：同時更新這個檔的小計，以及（夠新的話）逐筆清單。 */
+function record(entry, usage, model, sid, cwd, ts, now) {
+    const b = emptyBucket();
+    addUsage(b, usage, priceFor(model));
+    addBucket(entry.totals, b);
+    addBucket(entry.byModel[model || 'unknown'] = entry.byModel[model || 'unknown'] || emptyBucket(), b);
+    const slot = sessionSlot(entry.bySession, sid || 'unknown', cwd);
+    addBucket(slot, b);
+    if (ts) {
+        if (ts > entry.lastTs) entry.lastTs = ts;
+        if (ts > slot.lastTs) slot.lastTs = ts;
+        if (ts >= now - RECENT_MS) entry.recent.push({ ts, b });
+    }
+}
+
+/** Claude Code 的 transcript：assistant 行的 message.usage 才有 token。 */
+function scanClaude(entry, text, now) {
+    for (const raw of text.split('\n')) {
+        const line = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(0, -1) : raw;
+        if (!line) continue;
+        let o; try { o = JSON.parse(line); } catch (e) { continue; }
+        const msg = o.message;
+        if (o.type !== 'assistant' || !msg || !msg.usage) continue;
+        entry.rawLines++;
+        // 同一則訊息因串流會被寫很多次（實測 103,398 行裡有 19,668 次重複）
+        const key = (msg.id || '') + '|' + (o.requestId || '');
+        if (seenOwner.has(key)) { entry.dupSkipped++; continue; }
+        seenOwner.set(key, entry.file);
+        entry.ids.add(key);
+        record(entry, msg.usage, msg.model, o.sessionId, o.cwd,
+               o.timestamp ? Date.parse(o.timestamp) : 0, now);
+    }
+}
+
 // ── Codex（OpenAI CLI）的用量紀錄 ────────────────────────────────────────────
 // 逐輪會寫一筆 event_msg / token_count，裡面同時有 last_token_usage（本輪）與
 // total_token_usage（本 session 累計）。
@@ -127,129 +264,121 @@ function addUsage(bucket, u, price) {
 // 欄位語意（照 OpenAI 慣例）：input_tokens 已含 cached_input_tokens，
 // 所以計價要拆成「未快取 input」× in 價 +「cached」× read 價；output_tokens 已含 reasoning。
 // OpenAI 沒有 prompt-cache「寫入」計費 → cw5m/cw1h 恆為 0。
-function scanCodex(dir, feed) {
-    const files = collectJsonlFiles(dir);
-    for (const file of files) {
-        let content;
-        try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
-        let model = null, sid = path.basename(file, '.jsonl');
-        const prev = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
-        for (const line of content.split(/\r?\n/)) {
-            if (!line) continue;
-            let o; try { o = JSON.parse(line); } catch (e) { continue; }
-            const pl = o.payload;
-            if (!pl) continue;
-            if (o.type === 'session_meta' && pl.id) { sid = pl.id; continue; }
-            if (o.type === 'turn_context' && pl.model) { model = pl.model; continue; }
-            if (o.type !== 'event_msg' || pl.type !== 'token_count') continue;
-            const tot = pl.info && pl.info.total_token_usage;
-            if (!tot) continue;
-            const d = {};
-            for (const k of Object.keys(prev)) {
-                d[k] = Math.max(0, (tot[k] || 0) - prev[k]);   // 只取正向差量
-                prev[k] = tot[k] || 0;
-            }
-            if (!(d.input_tokens || d.output_tokens)) continue;
-            feed({
-                ts: o.timestamp ? Date.parse(o.timestamp) : 0,
-                sessionId: sid,
-                model: model || 'gpt-5',
-                source: 'codex',
-                cwd: null,
-                // 轉成 Claude 那套 usage 形狀，直接餵給同一個 addUsage
-                usage: {
-                    input_tokens: Math.max(0, d.input_tokens - d.cached_input_tokens),
-                    output_tokens: d.output_tokens,
-                    cache_read_input_tokens: d.cached_input_tokens,
-                },
-            });
+//
+// 增量讀的額外要求：差量是跟「上一筆」比出來的，所以 prev / sid / model 這些檔案層級的
+// 狀態必須跟著快取一起留著，不能每次從頭推。
+function scanCodex(entry, text, now, file) {
+    if (!entry.prev) entry.prev = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+    if (!entry.sid) entry.sid = path.basename(file, '.jsonl');
+    for (const raw of text.split('\n')) {
+        const line = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(0, -1) : raw;
+        if (!line) continue;
+        let o; try { o = JSON.parse(line); } catch (e) { continue; }
+        const pl = o.payload;
+        if (!pl) continue;
+        if (o.type === 'session_meta' && pl.id) { entry.sid = pl.id; continue; }
+        if (o.type === 'turn_context' && pl.model) { entry.model = pl.model; continue; }
+        if (o.type !== 'event_msg' || pl.type !== 'token_count') continue;
+        const tot = pl.info && pl.info.total_token_usage;
+        if (!tot) continue;
+        const d = {};
+        for (const k of Object.keys(entry.prev)) {
+            d[k] = Math.max(0, (tot[k] || 0) - entry.prev[k]);   // 只取正向差量
+            entry.prev[k] = tot[k] || 0;
         }
+        if (!(d.input_tokens || d.output_tokens)) continue;
+        record(entry, {
+            input_tokens: Math.max(0, d.input_tokens - d.cached_input_tokens),
+            output_tokens: d.output_tokens,
+            cache_read_input_tokens: d.cached_input_tokens,
+        }, entry.model || 'gpt-5', entry.sid, null,
+           o.timestamp ? Date.parse(o.timestamp) : 0, now);
     }
-    return files.length;
 }
 
-// 主計算：掃 → 去重 → 聚合（全域 / 各模型 / 各 session / 今日 / 近 5h / 近 10m burn）
+/** 把這個檔追上最新狀態，回傳它的 entry。 */
+function syncFile(file, kind, now) {
+    let entry = fileCache.get(file);
+    if (!entry) { entry = newEntry(kind, file); fileCache.set(file, entry); }
+    const text = readAppended(file, entry);
+    entry = fileCache.get(file);            // readAppended 可能因為檔案被換過而重建
+    if (text) {
+        if (kind === 'codex') scanCodex(entry, text, now, file);
+        else scanClaude(entry, text, now);
+    }
+    return entry;
+}
+
+/** 丟掉所有快取。測試用（也讓「重算一次確認沒漂移」變得可能）。 */
+function resetCache() { fileCache.clear(); seenOwner.clear(); }
+
+// 主計算：增量掃 → 合併各檔小計 → 時間分桶（今日 / 近 5h / 近 10m burn）
 function computeUsage(opts) {
     opts = opts || {};
     const projectsDir = opts.projectsDir || DEFAULT_PROJECTS_DIR;
     const codexDir = opts.codexDir === false ? null : (opts.codexDir || DEFAULT_CODEX_DIR);
     const now = opts.now || Date.now();
-    const files = collectJsonlFiles(projectsDir);
+    if (opts.fresh) resetCache();
 
-    const seen = new Set();               // message.id|requestId 去重
-    const totals   = emptyBucket();
-    const byModel  = {};
+    const claudeFiles = collectJsonlFiles(projectsDir);
+    const codexFiles  = codexDir ? collectJsonlFiles(codexDir) : [];
+
+    // 檔案被刪掉／專案資料夾被清掉 → 快取也要跟著收，不然 daemon 開整天會一直長
+    const live = new Set([...claudeFiles, ...codexFiles]);
+    for (const k of [...fileCache.keys()]) {
+        if (live.has(k)) continue;
+        releaseIds(k, fileCache.get(k));
+        fileCache.delete(k);
+    }
+
+    const totals    = emptyBucket();
+    const byModel   = {};
     const bySession = {};
-    const today    = emptyBucket();
-    const last5h   = emptyBucket();
-    const last10m  = emptyBucket();
-    let lastActivityTs = 0;
-    let rawLines = 0, dupSkipped = 0;
+    const today     = emptyBucket();
+    const last5h    = emptyBucket();
+    const last10m   = emptyBucket();
+    const bySource  = { claude: emptyBucket() };
+    let lastActivityTs = 0, rawLines = 0, dupSkipped = 0;
 
     const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
     const todayMs = startOfToday.getTime();
     const fiveHMs = now - 5 * 3600 * 1000;
     const tenMMs  = now - 10 * 60 * 1000;
+    const keepMs  = now - RECENT_MS;
 
-    for (const file of files) {
-        let content;
-        try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
-        for (const line of content.split(/\r?\n/)) {
-            if (!line) continue;
-            let o; try { o = JSON.parse(line); } catch (e) { continue; }
-            const msg = o.message;
-            if (o.type !== 'assistant' || !msg || !msg.usage) continue;
-            rawLines++;
-            const key = (msg.id || '') + '|' + (o.requestId || '');
-            if (seen.has(key)) { dupSkipped++; continue; }
-            seen.add(key);
+    if (codexDir) bySource.codex = emptyBucket();
 
-            const price = priceFor(msg.model);
-            addUsage(totals, msg.usage, price);
-
-            const m = msg.model || 'unknown';
-            (byModel[m] = byModel[m] || emptyBucket()) && addUsage(byModel[m], msg.usage, price);
-
-            const sid = o.sessionId || 'unknown';
-            (bySession[sid] = bySession[sid] || Object.assign(emptyBucket(), { lastTs: 0, cwd: o.cwd })) ;
-            addUsage(bySession[sid], msg.usage, price);
-
-            const ts = o.timestamp ? Date.parse(o.timestamp) : 0;
-            if (ts) {
-                if (ts > lastActivityTs) lastActivityTs = ts;
-                if (ts > bySession[sid].lastTs) bySession[sid].lastTs = ts;
-                if (ts >= todayMs) addUsage(today,  msg.usage, price);
-                if (ts >= fiveHMs) addUsage(last5h, msg.usage, price);
-                if (ts >= tenMMs)  addUsage(last10m, msg.usage, price);
-            }
+    const merge = (file, kind) => {
+        const entry = syncFile(file, kind, now);
+        addBucket(totals, entry.totals);
+        addBucket(bySource[kind], entry.totals);
+        for (const [m, b] of Object.entries(entry.byModel))
+            addBucket(byModel[m] = byModel[m] || emptyBucket(), b);
+        for (const [sid, b] of Object.entries(entry.bySession)) {
+            const slot = sessionSlot(bySession, sid, b.cwd);
+            addBucket(slot, b);
+            if (b.lastTs > slot.lastTs) slot.lastTs = b.lastTs;
+            if (!slot.cwd && b.cwd) slot.cwd = b.cwd;
         }
-    }
+        if (entry.lastTs > lastActivityTs) lastActivityTs = entry.lastTs;
+        rawLines += entry.rawLines; dupSkipped += entry.dupSkipped;
 
-    // ── Codex：走同一組 bucket，所以 totals / today / burn10m 是「所有 AI 合計」──
-    const bySource = { claude: Object.assign({}, totals) };
-    let codexFiles = 0;
-    if (codexDir) {
-        const codexBucket = emptyBucket();
-        codexFiles = scanCodex(codexDir, (rec) => {
-            const price = priceFor(rec.model);
-            addUsage(totals, rec.usage, price);
-            addUsage(codexBucket, rec.usage, price);
-            const m = rec.model || 'unknown';
-            (byModel[m] = byModel[m] || emptyBucket()) && addUsage(byModel[m], rec.usage, price);
-            const sid = rec.sessionId;
-            bySession[sid] = bySession[sid] || Object.assign(emptyBucket(), { lastTs: 0, cwd: rec.cwd });
-            addUsage(bySession[sid], rec.usage, price);
-            const ts = rec.ts;
-            if (ts) {
-                if (ts > lastActivityTs) lastActivityTs = ts;
-                if (ts > bySession[sid].lastTs) bySession[sid].lastTs = ts;
-                if (ts >= todayMs) addUsage(today,  rec.usage, price);
-                if (ts >= fiveHMs) addUsage(last5h, rec.usage, price);
-                if (ts >= tenMMs)  addUsage(last10m, rec.usage, price);
+        // 逐筆的只留在視窗內的；過期的就地丟掉，這份清單才不會無限長
+        if (entry.recent.length) {
+            let live = 0;
+            for (const r of entry.recent) {
+                if (r.ts < keepMs) continue;
+                entry.recent[live++] = r;
+                if (r.ts >= todayMs) addBucket(today,  r.b);
+                if (r.ts >= fiveHMs) addBucket(last5h, r.b);
+                if (r.ts >= tenMMs)  addBucket(last10m, r.b);
             }
-        });
-        bySource.codex = codexBucket;
-    }
+            entry.recent.length = live;
+        }
+    };
+
+    for (const f of claudeFiles) merge(f, 'claude');
+    for (const f of codexFiles)  merge(f, 'codex');
 
     // 找「最近活躍」的 session（daemon 沒有 statusLine 那種 per-session 輸入，用最新時間戳推定）
     let activeSession = null, activeTs = 0;
@@ -260,9 +389,9 @@ function computeUsage(opts) {
     return {
         projectsDir, codexDir, now,
         bySource,                          // { claude, codex } 各自的小計（totals 是合計）
-        scannedFiles: files.length + codexFiles,
+        scannedFiles: claudeFiles.length + codexFiles.length,
         rawUsageLines: rawLines,
-        uniqueMessages: seen.size,
+        uniqueMessages: seenOwner.size,
         dupSkipped,
         totals,
         byModel,
@@ -322,4 +451,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { computeUsage, priceFor, PRICING };
+module.exports = { computeUsage, priceFor, PRICING, resetCache, RECENT_MS };

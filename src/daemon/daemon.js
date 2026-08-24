@@ -279,8 +279,13 @@ function renderTick(i, st, now) {
 }
 
 // ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
-// 這是走路跳幀的根治：computeUsage 掃 JSONL ~1.3s > 1s tick，若在主迴圈跑會拖慢每秒
-// render → step 跳 2 → 走路跳幀。改由 worker 算、主迴圈讀 cachedUsage（每 tick <10ms）。
+// 當初是走路跳幀的根治：computeUsage 整份重掃 JSONL 要 ~2.1s > 1s tick，
+// 在主迴圈跑會拖慢每秒 render → step 跳 2 → 走路跳幀。
+//
+// token-source 改成增量掃描之後（2026-08-24），單次已經降到 ~4ms，
+// 主迴圈其實跑得動了 —— 但 worker 保留：冷啟動那一次仍要 ~1.5s，而且「掃描多久」
+// 取決於使用者累積了多少 transcript，不該由主迴圈去賭那個數字。
+// 主迴圈永遠只讀 cachedUsage。
 function emptyBucket() { return { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, tokens: 0, costUSD: 0, messages: 0 }; }
 function emptyUsage() {
     return {

@@ -200,6 +200,12 @@ function installCharacters() {
 function installRoster() {
     console.log('\n[3/8] 安裝 roster.json');
     copyFile(path.join(REPO_ROOT, 'characters', 'roster.json'), path.join(ASSETS_DIR, 'roster.json'));
+    // 規則型特殊進化（牧場時效那類）。跟 roster 一樣是「資料」，不是某個角色的附屬檔案，
+    // 所以 installCharacters 那個迴圈掃不到，要單獨帶。沒有這個檔不是錯誤（＝沒有特殊進化）。
+    const specialEvo = path.join(REPO_ROOT, 'characters', 'special-evolutions.json');
+    if (fs.existsSync(specialEvo)) {
+        copyFile(specialEvo, path.join(ASSETS_DIR, 'special-evolutions.json'));
+    }
 }
 
 function installShared() {

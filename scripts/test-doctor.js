@@ -57,6 +57,18 @@ console.log('— install 必須部署 doctor.js —');
        "install.js 的部署清單沒有 doctor.js（或被註解掉了）—— daemon 的孤兒收屍會無聲失效");
 }
 
+console.log('— 背景執行不可以跳視窗 —');
+{
+    // 使用者回報「PowerShell 偶爾跳出小黑窗、不到一秒就關閉」。
+    // 真因是 daemon 每 10 分鐘在背景叫 doctor，而 doctor 內部用 execFileSync 叫 powershell。
+    // 只要少了 windowsHide，那一下就會在畫面上閃。
+    const dsrc = read('src/runtime/doctor.js');
+    const ps = dsrc.slice(dsrc.indexOf("execFileSync('powershell'")).replace(/\/\/.*$/gm, '');
+    ok(ps.length > 0, '找不到 doctor 呼叫 powershell 的地方，這節等於沒測到');
+    ok(/windowsHide:\s*true/.test(ps.slice(0, 300)),
+       'doctor 叫 powershell 時少了 windowsHide:true —— 背景掃描會跳出小黑窗');
+}
+
 console.log('— daemon 的排程 —');
 {
     const d = read('src/daemon/daemon.js');
@@ -67,13 +79,24 @@ console.log('— daemon 的排程 —');
        'doctor 的路徑應該從 INSTALL_ROOT 組出來（不是相對於 repo）');
 
     // 這條是重點：同步呼叫會卡住主迴圈 2.4 秒 → 走路跳幀
-    const sweep = d.slice(d.indexOf('function sweepOrphans'), d.indexOf('setInterval(sweepOrphans'));
+    // ⚠️ 一定要先把註解剝掉再比對。這幾條斷言找的是 `detached: true` / `windowsHide`
+    //    這種字串，而**說明它們的註解裡也會出現同樣的字** ——
+    //    實際踩到：修好之後測試照樣紅，因為它比到的是我寫來解釋的那行註解。
+    const strip = (t) => t.replace(/\/\/.*$/gm, '');
+    const sweep = strip(d.slice(d.indexOf('function sweepOrphans'), d.indexOf('setInterval(sweepOrphans')));
     ok(sweep.length > 0, '找不到 sweepOrphans 的內容，這節等於沒測到');
     ok(!/execFileSync|execSync|spawnSync/.test(sweep),
        'sweepOrphans 用了同步呼叫：doctor 掃描要 2.4 秒，會卡掉主迴圈好幾拍（走路跳幀）');
-    ok(/detached:\s*true/.test(sweep), 'spawn 應該 detached');
     ok(/\.unref\(\)/.test(sweep), 'spawn 出來的子行程要 unref，否則會擋住 daemon 退出');
     ok(/existsSync/.test(sweep), '沒裝 doctor 時應該安靜跳過，不是丟例外');
+    // ⚠️ Windows 上這兩件事都會讓使用者看到「每隔一陣子跳出小黑窗、不到一秒就關掉」：
+    //    detached:true 會開一個新的 console；沒有 windowsHide 則子行程自己會開。
+    //    背景家務事不該在畫面上閃 —— 實際回報過。
+    ok(!/detached:\s*true/.test(sweep),
+       'sweepOrphans 用了 detached:true —— Windows 上會開新的 console 視窗（每 10 分鐘閃一次）。'
+       + ' unref() 就足夠讓它不擋住 daemon 退出了');
+    ok(/windowsHide:\s*true/.test(sweep),
+       'sweepOrphans 少了 windowsHide:true —— 背景收屍會跳出小黑窗');
 
     ok(/setInterval\(sweepOrphans/.test(d), '應該有定期排程');
     // 啟動時要有獨立的一輪（不能只有每 10 分鐘那個 —— 剛起來時往往正是累積了一堆的時候）。

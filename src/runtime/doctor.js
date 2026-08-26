@@ -42,8 +42,10 @@ function scanWin() {
     ].join('\n');
     let out;
     try {
+        // windowsHide：doctor 會被 daemon 每 10 分鐘在背景叫一次，
+        // 少了它就會跳出一閃而過的黑視窗。使用者手動跑時也不需要看到那個。
         out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript],
-            { encoding: 'utf8', timeout: 30000 });
+            { encoding: 'utf8', timeout: 30000, windowsHide: true });
     } catch (e) { return null; }
     return out.trim().split(/\r?\n/).filter(Boolean).map(line => {
         const [pid, age, threads, kind] = line.split('|');

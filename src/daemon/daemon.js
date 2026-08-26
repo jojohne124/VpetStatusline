@@ -424,8 +424,13 @@ function sweepOrphans() {
     const doctor = path.join(core.INSTALL_ROOT, 'doctor.js');
     if (!fs.existsSync(doctor)) return;    // 沒安裝 doctor（例如直接跑 repo）就跳過
     try {
+        // ⚠️ Windows 上 detached:true 會**開一個新的 console 視窗** —— 使用者看到的就是
+        //    「每隔一陣子跳出小黑窗、不到一秒就關掉」。這裡本來就不需要 detached：
+        //    unref() 已經足夠讓它不擋住 daemon 退出，而 Windows 殺父本來就不會連帶殺子
+        //    （這個 repo 別處也是這個前提）。windowsHide 再保一層，doctor 內部還會叫
+        //    powershell。同樣的旗標 runCli 早就在用了。
         const child = require('child_process')
-            .spawn(process.execPath, [doctor], { detached: true, stdio: 'ignore' });
+            .spawn(process.execPath, [doctor], { stdio: 'ignore', windowsHide: true });
         child.unref();                     // 別讓它擋住 daemon 退出
         child.on('error', () => {});
     } catch (e) { /* 收屍失敗不該影響任何其他功能 */ }

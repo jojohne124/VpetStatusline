@@ -111,6 +111,8 @@ const YARD_FIELD  = makeField(52, 40, 0);
 const MIN_X = PLAZA_FIELD.minX, MAX_X = PLAZA_FIELD.maxX;
 const MIN_Y = PLAZA_FIELD.minY, MAX_Y = PLAZA_FIELD.maxY;
 
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
 // ── 雜湊（與 agumon-core 的 seedRand01 同一族，但這裡吃兩個參數）──────
 function hash2(a, b) {
     let h = (Math.floor(a) ^ 0x9e3779b9) >>> 0;
@@ -123,6 +125,11 @@ const rand01 = (a, b) => hash2(a, b) / 0x100000000;
 
 // 進場位置也由 seed 決定 —— 否則所有人都從 (0,0) 疊在一起。
 // 用 k = -1 / -2 這兩個「決策序號之外」的槽，避免與走路的 k >= 0 撞號。
+//
+// occ.origin（牧場把 vpet 拿起來又放下時用）會取代這個起點，見 posAt。
+// ⚠️ 「放下」不能寫成「把算出來的 x,y 塞回去」—— 位置是**算**出來的不是存的，
+//    快取一失效就會彈回 startPos。所以放下＝換一個起點 + 把 joinStep 設成當下，
+//    那隻從落點開始走一條全新的鏈。origin 是輸入，決定性不受影響。
 function startPos(seed, field = PLAZA_FIELD) {
     const { minX, maxX, minY, maxY } = field;
     return {
@@ -255,19 +262,34 @@ const MAX_REPLAY = 200000;
 
 function posAt(occ, step, cache, field = PLAZA_FIELD) {
     const { seed, joinStep } = occ;
+    // 被放下過的那隻從落點起算；沒有就用 seed 決定的進場位置
+    const from0 = occ.origin
+        ? { x: clamp(occ.origin.x, field.minX, field.maxX),
+            y: clamp(occ.origin.y, field.minY, field.maxY),
+            facing: occ.origin.facing || 'right' }
+        : startPos(seed, field);
     const target = Math.max(0, step - joinStep);
+
+    // 快取屬於「哪一條時間軸」。joinStep 或落點一變（＝被拿起來放到別的地方），
+    // 之前那份備忘就是另一條軸上的位置，必須整份作廢。
+    // ⚠️ 少了這個判斷會出現：放下之後那隻回到被抓起來前的位置，而 anchor 明明記對了。
+    //    因為剛放下時 target 是 0，而快取的 at 也可能是 0（還在第一段路裡），
+    //    `cache.at <= target` 就成立了 —— 舊位置被當成有效答案。
+    const epoch = joinStep + '|' + (occ.origin
+        ? occ.origin.x + ',' + occ.origin.y + ',' + (occ.origin.facing || '')
+        : '');
 
     // 快取只在「沒有倒退」時可用（倒退＝時鐘校正把 step 拉回來了）。
     // 有快取就完全不受 MAX_REPLAY 影響 —— 每次輪詢只往前推幾拍，
     // 所以 daemon 跑再久都照走。上限真正管的是**沒有快取**的那一次冷啟動。
-    const usable = cache && cache.at <= target && target - cache.at <= MAX_REPLAY;
+    const usable = cache && cache.epoch === epoch && cache.at <= target && target - cache.at <= MAX_REPLAY;
     // 冷啟動又離得太遠 → 當作「這隻現在才進場」：從 startPos 起算、完全不重播。
     // 不要改成「從 target - MAX_REPLAY 起算」：那等於每次都重播剛好 MAX_REPLAY 拍
     // 的同一條鏈（鏈只由 seed 與 k 決定），算出來的位置是常數，一樣定格，
     // 還白花 6ms。距離在上限內時照舊從 0 重播，既有行為與決定性都不變。
     let st = usable
         ? { ...cache }
-        : { ...startPos(seed, field), k: 0, at: target > MAX_REPLAY ? target : 0 };
+        : { ...from0, k: 0, at: target > MAX_REPLAY ? target : 0, epoch };
 
     // 推進完整的段
     let leg = legAt(seed, st.k, st.x, st.y, field);
@@ -308,5 +330,5 @@ module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
     makeField, PLAZA_FIELD, YARD_FIELD,
     DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
-    hash2, rand01, startPos, offsetAt, legAt, posAt, stepAt,
+    hash2, rand01, clamp, startPos, offsetAt, legAt, posAt, stepAt,
 };

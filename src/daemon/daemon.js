@@ -555,6 +555,42 @@ function applyCommand(action, args = {}) {
         return yardPetTouch(args.which);
     }
 
+    // 長壓把 vpet 拿起來。拿在手上的那隻**改由前端畫**（跟著游標，60fps 疊加層），
+    // 所以這裡要把牠的點陣交出去 —— 只在抓起的這一次傳，約 2 KB。
+    // 若走輪詢讓伺服器每幀重畫，就得把 /yard 拉到 60fps（15 KB x 60），完全不划算。
+    if (action === 'yardGrab') {
+        if (!args.which) return { ok: false, error: '要指定是哪一隻' };
+        const ranch = core.loadRanch();
+        const r = yardReactMap().get(args.which);
+        const sp = plaza.yardSpriteFor(core, ranch, args.which, plazaStep(), {
+            joinStep: (r && r.anchor ? r.anchor.step : plaza.yardJoinStep())
+                    + (r ? r.holdSteps || 0 : 0),
+            origin: r && r.anchor ? r.anchor.origin : null,
+        });
+        if (!sp) return { ok: false, error: '這隻不在牧場裡' };
+        if (!yardTouch.grab(args.which)) return { ok: false, error: '已經拿在手上了' };
+        // 兩張待機幀交給前端輪替 —— 拿在手上也要繼續呼吸，不是定格
+        return { ok: true, action: 'yardGrab', frames: sp.frames, x: sp.x, y: sp.y, facing: sp.facing };
+    }
+
+    // 放開。落點成為新的起點，那隻從那裡開始走一條全新的鏈（見 plaza-walk 的 origin）。
+    if (action === 'yardDrop') {
+        if (!args.which) return { ok: false, error: '要指定是哪一隻' };
+        const F = plaza.YARD_FIELD;
+        // ⚠️ /cmd 的白名單**只收字串**（刻意的：那些值會被送進 CLI 的 argv）。
+        //    座標所以是以字串傳過來的，這裡才轉數字。第一版直接讀 args.x 拿到 undefined，
+        //    落點永遠變成 (0,0) —— 而且 grab/drop 都回 ok:true，完全看不出哪裡錯。
+        const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : NaN; };
+        const x = num(args.x), y = num(args.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, error: '落點座標不合法' };
+        const cx = PW.clamp(x, F.minX, F.maxX);
+        const cy = PW.clamp(y, F.minY, F.maxY);
+        if (!yardTouch.drop(args.which, cx, cy, args.facing)) {
+            return { ok: false, error: '這隻沒有被拿著' };
+        }
+        return { ok: true, action: 'yardDrop', x: cx, y: cy };
+    }
+
     // 快路徑：純粹寫一個旗標的指令直接寫 force，省掉 140ms 的行程開銷。
     // 這些在 CLI 那邊也只是寫同樣的欄位，沒有額外邏輯，不會分叉。
     const fn = COMMANDS[action];
@@ -953,6 +989,36 @@ let wxBoltNext=0, wxBoltAt=0;
 // 起點取整數、s 也是整數 → 每個方塊都對齊在整數像素上，邊緣不會被反鋸齒糊掉。
 // 這是它跟先前那個向量螺旋最大的差別：畫面上其他東西全是像素，
 // 只有天氣是平滑曲線的話，形狀再對也還是格格不入。
+// 拿在手上的那隻。dots 是 [ [r,g,b]|null x16 ] x16，一個 dot = CW 寬 x CH/2 高，
+// 跟伺服器合成用的是同一套座標，所以放開時的落點不用換算。
+function drawHeld(g){
+  if(!drag||!drag.frames) return;
+  // 待機動畫跟著**伺服器的拍子**走（lastYard.step 的奇偶），不是自己另外計時 ——
+  // 這樣手上那隻跟場上其他人是同一個呼吸節奏，而不是各跳各的。
+  const st=(lastYard&&lastYard.step)||0;
+  const dots=drag.frames[st%2] || drag.frames[0];
+  const lift=liftNow(), k=Math.min(1,Math.abs(lift)/LIFT_DOTS);
+  // 對齊到整數像素：位置是跟著游標的浮點 dot，直接畫會落在半個像素上，
+  // 點陣圖被 anti-alias 糊掉（同樣的理由見 wxGust 的整數對齊）。
+  const px=Math.round(drag.x*CW), py=Math.round((drag.y+lift)*(CH/2));
+  // 影子留在**地面**（drag.y），身體才往上浮 —— 這是離地感的來源，
+  // 而且影子順便標出放開後會落在哪裡。影子跟著升高的話就只是整隻平移，看不出被拿起來。
+  g.save();
+  g.globalAlpha=0.25*(1-0.5*k); g.fillStyle='#000';
+  g.beginPath();
+  g.ellipse(px+8*CW, drag.y*(CH/2)+17*(CH/2), (7-2*k)*CW, (1.6-0.4*k)*(CH/2), 0, 0, Math.PI*2);
+  g.fill();
+  g.restore();
+  for(let y=0;y<dots.length;y++){
+    const row=dots[y];
+    for(let x=0;x<row.length;x++){
+      const c=row[x]; if(!c) continue;
+      g.fillStyle='rgb('+c[0]+','+c[1]+','+c[2]+')';
+      g.fillRect(px+x*CW, py+y*(CH/2), CW, CH/2);
+    }
+  }
+}
+
 function wxGust(g,x,y,s){
   const gx=Math.round(x), gy=Math.round(y), flip=WIND_DIR<0, W=WIND_ART.w;
   for(const grp of WIND_ART.groups){
@@ -1067,6 +1133,8 @@ function wxDraw(ts){
     }
     g.globalAlpha=1;
   }
+  // 拿在手上的那隻畫在最後 = 蓋在天氣之上。牠在你手裡，雨不該蓋過牠。
+  drawHeld(g);
 }
 requestAnimationFrame(wxDraw);
 
@@ -1130,12 +1198,17 @@ document.addEventListener('scroll',closeCtx,true);
 
 // 滑鼠事件 → 點到哪一隻（沒點到回 null）。左鍵摸摸與右鍵選單共用同一份判定，
 // 分兩份寫遲早會分叉成「右鍵選到 A、左鍵摸到 B」。
-function yardHit(ev){
-  if(view!=='yard'||!lastYard||!lastYard.pets||!lastYard.pets.length) return null;
+// 滑鼠事件 -> dot 座標。命中判定與拖曳共用同一份換算 ——
+// 分兩份寫遲早會差一格，而「差一格」的症狀是「看起來明明點到了卻沒反應」。
+function evDot(ev){
   const cv=document.getElementById('pet'), r=cv.getBoundingClientRect();
   // 畫布可能被 CSS 縮放過 → 用 width/rect 的比例換回內部座標，再換成 dot
-  const dx=(ev.clientX-r.left)*(cv.width/r.width)/CW;
-  const dy=(ev.clientY-r.top )*(cv.height/r.height)/(CH/2);
+  return { dx:(ev.clientX-r.left)*(cv.width/r.width)/CW,
+           dy:(ev.clientY-r.top )*(cv.height/r.height)/(CH/2) };
+}
+function yardHit(ev){
+  if(view!=='yard'||!lastYard||!lastYard.pets||!lastYard.pets.length) return null;
+  const {dx,dy}=evDot(ev);
   const S=lastYard.sprite||16;
   // 由後往前找 = 從畫在最上層的那隻開始，跟眼睛看到的一致
   for(let i=lastYard.pets.length-1;i>=0;i--){
@@ -1221,17 +1294,22 @@ async function sendCmd(action,args){
     const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
                                        body:JSON.stringify({action,args:args||{}})})).json();
     const MOOD={happy:'摸摸 ♥',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
-    flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action)),
-                r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
+    // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
+    // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
+    const quiet=(action==='yardGrab'||action==='yardDrop');
+    if(!(quiet&&r.ok))
+      flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action)),
+                  r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
     // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
-    showOutput(r.output || r.error || '');
+    if(!quiet) showOutput(r.output || r.error || '');
     // 牧場操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
     if(['keep','swap','release'].includes(action)) setTimeout(poll, 1300);
     // 摸摸馬上刷一次，不然要等下一次輪詢（最多 500ms）才看到牠跳起來，
     // 點下去到有反應之間那半秒會讓人以為沒點到。
     if(action==='yardPet') poll();
-  }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); }
+    return r;                        // 抓起來那次要拿回牠的點陣（見 startDrag）
+  }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); return null; }
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
   // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
@@ -1267,9 +1345,98 @@ for(const id of ['wxsel','wxcold']){
 // 直接送出去會變成「摸了一隻、爽到另一隻」。所以牧場走 yardPet + 內部 id。
 // 而且牧場的摸摸是**純表演，不動心情值** —— 冰箱裡的東西不會因為你戳牠而變好或變壞。
 document.getElementById('pet').addEventListener('click',ev=>{
-  if(view!=='yard'){ sendCmd('pet'); return; }
-  const hit=yardHit(ev);
-  if(hit) sendCmd('yardPet',{which:hit.id});
+  // 牧場改走 mousedown/mouseup（要分辨短按與長壓），這裡只剩家裡那條路
+  if(view!=='yard') sendCmd('pet');
+});
+
+// ── 長壓把 vpet 拿起來，放開丟下 ─────────────────────────────────────
+// 拿在手上的那隻**不在伺服器合成的那張圖裡**（見 plaza.js 的 held），改由這裡
+// 跟著游標畫在天氣那層疊加畫布上 —— 那層本來就有 60fps 的 rAF 迴圈，等於免費。
+// 若改成讓伺服器每幀重畫，就得把 /yard 從 4fps 拉到 60fps（15KB x 60），完全不划算。
+const LONGPRESS_MS=200;   // 低於這個時間放開 = 摸摸
+const MOVE_TOL=1.5;       // dot。按著微微晃動不該被當成想拖曳
+// 拎起／放下的上下位移。沒有它的話拿起來是「瞬間貼到游標」、放開是「瞬間出現在地上」，
+// 讀起來像瞬移而不是被拿起來。
+const LIFT_DOTS=2.5;      // 離地多高
+const LIFT_MS=140;        // 抬起來（ease-out：一開始快，到頂變慢）
+const FALL_MS=180;        // 落下（ease-in：像重力，越掉越快）
+let drag=null;            // { id, frames, ox, oy, x, y, phase, t0, liftFrom }
+let press=null, pressTimer=null;
+
+// 現在離地多少 dot（負值 = 往上）。時間走牆鐘，不跟 rAF 的時戳混用。
+function liftNow(){
+  if(!drag) return 0;
+  const e=Date.now()-drag.t0;
+  if(drag.phase==='fall'){ const p=Math.min(1,e/FALL_MS); return drag.liftFrom*(1-p*p); }
+  const p=Math.min(1,e/LIFT_MS);
+  return -LIFT_DOTS*(1-(1-p)*(1-p));
+}
+
+function cancelPress(){ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} press=null; }
+
+let grabbing=null;   // 已經送出 yardGrab、還沒回來的那隻
+async function startDrag(hit, at){
+  grabbing=hit.id;
+  const r=await sendCmd('yardGrab',{which:hit.id});
+  // ⚠️ 等待期間就放開了（長壓剛好卡在請求來回之間）。這時 mouseup 早就走完了，
+  //    再設 drag 的話那隻會在**沒按著滑鼠**的狀態下黏在游標上，滑出畫布就消失，
+  //    而且伺服器那邊一直是 held → 合成時被略過 → 看起來就是「被拎起來就不見了」。
+  const aborted = grabbing!==hit.id;
+  grabbing=null;
+  if(!r||!r.ok||!r.frames){ cancelPress(); return; }
+  if(aborted){ dropAt(hit.id, r.x, r.y); return; }   // 立刻放回原位
+  // 抓取點相對身體的偏移要留著，不然拿起來的瞬間會跳成「以身體左上角對準游標」
+  drag={ id:hit.id, frames:r.frames, ox:at.dx-r.x, oy:at.dy-r.y, x:r.x, y:r.y,
+         phase:'lift', t0:Date.now(), liftFrom:0 };
+  press=null; pressTimer=null;
+  poll();   // 立刻刷一次，把伺服器那張裡的分身換掉（否則最多要等一次輪詢）
+}
+
+// 放下。座標夾在場地內 —— 伺服器也會夾一次，這裡夾是為了放開的當下畫面就不會超出去。
+// /cmd 的白名單只收字串，座標要自己轉，不然會被整個濾掉（落點永遠變 0,0）。
+function dropAt(id, x, y){
+  const S=(lastYard&&lastYard.sprite)||16;
+  const W=(lastYard&&lastYard.cols)||52, H=((lastYard&&lastYard.rows)||20)*2;
+  const cx=Math.max(0,Math.min(W-S, Math.round(x)));
+  const cy=Math.max(0,Math.min(H-S, Math.round(y)));
+  return sendCmd('yardDrop',{which:id,x:String(cx),y:String(cy)}).then(()=>poll());
+}
+
+document.getElementById('pet').addEventListener('mousedown',ev=>{
+  if(ev.button!==0||view!=='yard'||drag) return;   // 還在落下就別又抓一隻
+  const hit=yardHit(ev); if(!hit) return;
+  ev.preventDefault();                     // 避免拖出瀏覽器原生的「拖曳選取」
+  const at=evDot(ev);
+  press={ id:hit.id, at, moved:false };
+  pressTimer=setTimeout(()=>{ if(press) startDrag(hit,at); }, LONGPRESS_MS);
+});
+
+window.addEventListener('mousemove',ev=>{
+  if(drag){
+    if(drag.phase==='fall') return;                // 已經放手了，落點固定
+    const d=evDot(ev); drag.x=d.dx-drag.ox; drag.y=d.dy-drag.oy; return;
+  }
+  if(!press) return;
+  const d=evDot(ev);
+  // 還沒到長壓時間就先移動 = 想拖但手快了；取消倒數，也不要當成摸摸
+  if(Math.abs(d.dx-press.at.dx)>MOVE_TOL||Math.abs(d.dy-press.at.dy)>MOVE_TOL) cancelPress();
+});
+
+window.addEventListener('mouseup',ev=>{
+  if(drag){
+    if(drag.phase==='fall') return;                // 已經在落下了，別重複觸發
+    // 落下期間伺服器那邊仍然是 held（合成時被略過），所以畫面上只有這一份；
+    // 落地之後才送 yardDrop 交回去 —— 中途交回去會看到牠瞬間出現在地上。
+    drag.liftFrom=liftNow(); drag.phase='fall'; drag.t0=Date.now();
+    const d=drag;
+    setTimeout(()=>{ if(drag===d){ dropAt(d.id,d.x,d.y); drag=null; } }, FALL_MS);
+    return;
+  }
+  // 長壓已經觸發、但 yardGrab 還沒回來 → 標記成取消（見 startDrag 的 aborted）。
+  // 不當成摸摸：使用者確實按滿了長壓時間，那不是「點一下」。
+  if(grabbing){ grabbing=null; cancelPress(); return; }
+  if(press&&view==='yard'){ sendCmd('yardPet',{which:press.id}); }   // 短按 = 摸摸
+  cancelPress();
 });
 setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Date.now()-lastFetch)/1000)+'s';},250);
 // 輪詢節奏依畫面而定：院子要 ${YT.POLL_MS}ms —— 摸摸的騰空只有那麼久，輪詢慢於它

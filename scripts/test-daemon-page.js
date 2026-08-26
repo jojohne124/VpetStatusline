@@ -48,6 +48,7 @@ const done = (code) => { try { child.kill(); } catch (e) {} process.exit(code); 
 function renderProbe(js) {
     const vm = require('vm');
     const calls = [];
+    const args = [];
     const ctx2d = () => new Proxy({}, {
         get(t, k) {
             if (k === 'canvas') return { width: 416, height: 320 };
@@ -55,7 +56,9 @@ function renderProbe(js) {
             if (k === 'createLinearGradient') return () => ({ addColorStop() {} });
             if (typeof k === 'string' &&
                 /^(fill|stroke|clear|begin|move|line|arc|ellipse|close|save|restore|translate|scale|rect|drawImage|fillText)/.test(k))
-                return (...a) => calls.push(k);
+                // 參數也留著：拎起／放下的上下位移只能從「畫在哪個 y」看出來，
+                // 只記方法名的話「有沒有動」完全測不到。
+                return (...a) => { calls.push(k); args.push([k, a]); };
             return undefined;
         },
         set() { return true; },
@@ -75,12 +78,18 @@ function renderProbe(js) {
         setInterval: () => 0, setTimeout: () => 0, clearTimeout() {},
         fetch: () => new Promise(() => {}),
         innerWidth: 1200, innerHeight: 800, confirm: () => false, console,
+        // 頁面會在 window 上掛 mousemove / mouseup（長壓拖曳要追到畫布外面）。
+        // 假環境少一個方法，頁面 script 就整支載不起來 —— 而那不是頁面壞了，是探針缺東西。
+        addEventListener() {}, removeEventListener() {},
     };
     g.window = g; g.globalThis = g;
     vm.createContext(g);
     // 頂層的 let/const 不會變成 context 的屬性 → 補一段尾巴把要用的東西露出來
     const epilogue = ';globalThis.__p={sky:(s,c)=>{wxState.sky=s;wxState.cold=!!c;wxParts=null;},'
-                   + 'view:(v)=>{view=v;}};';
+                   + 'view:(v)=>{view=v;},'
+                   // 拎起／放下的上下位移在 drag 這個模組層變數裡，從外面碰不到 -> 開個把手
+                   + 'hold:(d)=>{drag=d;},lift:()=>liftNow(),'
+                   + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
     ok(!!g.__p, '抓不到前端的內部狀態（探針壞了，不是頁面壞了）');
@@ -122,6 +131,52 @@ function renderProbe(js) {
     // 閃電：整片 fillRect。時間往後跳一大段，確保排到下一次閃。
     const bolt = run('thunder', false, t + 60000, 6);
     ok((bolt.n.fillRect || 0) > 0, '雷雨沒有閃電');
+
+    // ── 拎起／放下的上下位移 ────────────────────────────────────────
+    // 這段只在前端跑（伺服器合成的那張圖裡根本沒有被拿著的那隻），除了這裡沒別的地方測得到。
+    // 要驗的是「身體上浮、影子留在地上」—— 兩個一起浮只是整隻平移，看不出被拿起來。
+    console.log('— 前端實跑（拎起／放下）—');
+    g.__p.sky('clear', false);        // 天氣關掉，畫面上只剩被拿著的那隻
+    const K = g.__p.K;
+    const dot = (v) => [[v]];         // 1x1 的假精靈，身體只會有一個 fillRect
+    const mkDrag = (phase, ageMs, liftFrom) => ({
+        id: 'x', frames: [dot([255, 0, 0]), dot([0, 255, 0])],
+        ox: 0, oy: 0, x: 10, y: 10,
+        phase, t0: Date.now() - ageMs, liftFrom: liftFrom || 0,
+    });
+    const frameAt = (d) => {
+        g.__p.hold(d);
+        args.length = 0;
+        try { raf(t + 90000); } catch (e) { return { err: e.message }; }
+        const body = args.filter(a => a[0] === 'fillRect').map(a => a[1][1]);
+        const shad = args.filter(a => a[0] === 'ellipse').map(a => a[1][1]);
+        return { body: body.length ? body[body.length - 1] : null,
+                 shadow: shad.length ? shad[0] : null };
+    };
+
+    const start = frameAt(mkDrag('lift', 0));
+    ok(!start.err, '拿起來的第一幀就丟例外：' + start.err);
+    ok(start.body !== null, '拿在手上卻沒有把牠畫出來');
+    const top = frameAt(mkDrag('lift', K.LIFT_MS + 50));
+    ok(top.body !== null && top.body < start.body,
+       `抬起來之後身體應該往上（y 變小），得到 ${start.body} -> ${top.body}`);
+    // 幅度也要對，不然「有動一點點」也會過
+    ok(Math.abs((start.body - top.body) - K.LIFT_DOTS * (K.CH / 2)) < 1,
+       `抬起的高度不對：${start.body - top.body}px，應為 ${K.LIFT_DOTS * (K.CH / 2)}px`);
+    // 關鍵：影子不能跟著浮起來
+    ok(start.shadow !== null && top.shadow !== null, '沒有畫影子（離地感全靠它）');
+    ok(Math.abs(top.shadow - start.shadow) < 0.001,
+       `影子跟著身體一起浮起來了（${start.shadow} -> ${top.shadow}）—— 那只是整隻平移`);
+
+    // 放下：從離地高度掉回地面
+    const falling = frameAt(mkDrag('fall', 0, -K.LIFT_DOTS));
+    const landed  = frameAt(mkDrag('fall', K.FALL_MS + 50, -K.LIFT_DOTS));
+    ok(falling.body !== null && landed.body !== null && landed.body > falling.body,
+       `落下時身體應該往下，得到 ${falling.body} -> ${landed.body}`);
+    ok(Math.abs(landed.body - start.body) < 1,
+       `落地位置沒有回到地面：${landed.body}，應為 ${start.body}`);
+
+    g.__p.hold(null);                 // 收乾淨，別留給後面的斷言
 }
 
 // 等 daemon 真的開始聽，而不是固定睡一段時間。

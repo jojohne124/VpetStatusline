@@ -169,7 +169,7 @@ function composePlaza(core, occupants, step, opts = {}) {
     for (const o of all) {
         // key 而不是 code：NPC 沒有 code，全部共用一個快取槽會互相汙染
         const key = o.key || o.code;
-        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep }, step, caches.get(key), field);
+        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin }, step, caches.get(key), field);
         caches.set(key, p.cache);
         placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving });
     }
@@ -341,6 +341,9 @@ function yardOccupants(core, ranch, activeState, react) {
         // 摸摸的反應。**只存在記憶體裡**（daemon 的 Map），不寫進 ranch.json ——
         // 牧場是冰箱，反應是純表演，不該在快照裡留下任何痕跡。
         const r = react ? react.get(p.id) : null;
+        // 拿在手上的那隻不進合成 —— 它由前端跟著游標畫在疊加層上。
+        // 兩邊都畫的話會看到兩個分身（伺服器那張還停在被抓起的位置）。
+        if (r && r.held) continue;
         list.push({
             key:      'ranch:' + p.id,
             ranchId:  p.id,
@@ -348,8 +351,10 @@ function yardOccupants(core, ranch, activeState, react) {
             char:     id,
             seed:     W.hash2(hashStr(p.id), 0),
             // 開心的時候會原地跳，停走那幾拍要從時間軸扣掉，落地才不會瞬移
-            // （holdSteps 的來由見 daemon.js settleHold）。
-            joinStep: base + (r ? r.holdSteps || 0 : 0),
+            // （holdSteps 的來由見 yard-touch.js settleHold）。
+            // 被放下過的那隻改用落點當起點、落下那一拍當 joinStep（見 plaza-walk 的 origin）。
+            joinStep: (r && r.anchor ? r.anchor.step : base) + (r ? r.holdSteps || 0 : 0),
+            origin:   r && r.anchor ? r.anchor.origin : null,
             react:    r ? r.frame : null,
             jump:     r ? r.jump || 0 : 0,
         });
@@ -371,6 +376,33 @@ function hashStr(s) {
 }
 
 /**
+ * 某一隻現在的位置、面向與**兩張待機幀**。抓起來的那一刻要把牠交給前端自己畫，
+ * 所以得先問「牠現在在哪、朝哪邊、長什麼樣」。
+ * 回傳 null = 這隻不在牧場裡（或讀不到美術）。
+ *
+ * 為什麼給兩張而不是一張：拿在手上的那隻要繼續呼吸（IDLE_1/IDLE_2 輪替）。
+ * 兩張一起傳只多約 2 KB、而且只在抓起的那一次 —— 換成讓前端每幀回頭問伺服器，
+ * 就得把 /yard 拉到 60fps，完全不划算。
+ *
+ * 用 step 0 / 1 取兩張，而不是指定幀名字串：spriteDots 本來就用 step 的奇偶挑
+ * IDLE_1/IDLE_2，走同一條路才不會有「這裡叫 IDLE_1、那裡叫 Idle_1」的分叉。
+ *
+ * 刻意不走 composeYard —— 那會為了一隻而合成整張圖，而且被抓著的那隻本來就被略過了。
+ */
+function yardSpriteFor(core, ranch, id, step, opts = {}) {
+    const pet = (ranch.pets || []).find(p => p.id === id);
+    const cid = pet && pet.state && pet.state.characterId;
+    if (!cid) return null;
+    const p = W.posAt({ seed: W.hash2(hashStr(id), 0),
+                        joinStep: opts.joinStep != null ? opts.joinStep : W.stepAt(SESSION_START),
+                        origin: opts.origin || null },
+                      step, null, W.YARD_FIELD);
+    const a = spriteDots(core, cid, 0, p.facing, null);
+    const b = spriteDots(core, cid, 1, p.facing, null);
+    return a ? { frames: [a, b || a], x: p.x, y: p.y, facing: p.facing } : null;
+}
+
+/**
  * 畫出院子。回傳 null 代表牧場是空的 —— 呼叫端自己決定顯示什麼（不要畫一張空圖，
  * 那看起來像壞掉）。
  * NPC 一律關掉：院子是你自己的地方，不該有野生 vpet 亂入。
@@ -386,5 +418,5 @@ module.exports = {
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
-    yardOccupants, composeYard, hashStr, yardJoinStep,
+    yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
 };

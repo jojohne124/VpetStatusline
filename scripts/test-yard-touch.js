@@ -210,5 +210,150 @@ console.log('— 畫面：跳躍只改畫在哪 —');
     }
 }
 
+console.log('— 拿起來 / 放下 —');
+{
+    const y = mk();
+    ok(y.grab('a', T0) === true, '第一次拿起來應該成功');
+    ok(y.grab('a', T0) === false, '重複拿起來應該被擋（不然放開時會對不上）');
+    const r = at(y.react(null, T0), 'a');
+    ok(r.held === true, '拿在手上要標成 held（合成時才會略過牠）');
+    ok(r.frame === null && r.jump === 0, '拿在手上不該同時演反應幀');
+    // 拿著的時候時間要停，不然放開時位置會跳
+    const h1 = at(y.react(null, T0 + 3000), 'a').holdSteps;
+    ok(h1 === W.stepAt(T0 + 3000) - W.stepAt(T0), '拿著時停走的拍數不對：' + h1);
+
+    ok(y.drop('a', 5, 20, 'left', T0 + 3000) === true, '放下應該成功');
+    ok(y.drop('a', 1, 1, 'left', T0 + 3000) === false, '沒拿著卻能放下');
+    const d = at(y.react(null, T0 + 3000), 'a');
+    ok(d.held === false, '放下之後不該還是 held');
+    ok(d.anchor && d.anchor.origin.x === 5 && d.anchor.origin.y === 20, '落點沒記對');
+    ok(d.anchor.step === W.stepAt(T0 + 3000), '落下那一拍沒記對');
+    // 時間軸整個換掉了，之前累計的停走位移沒有意義
+
+    // 摸摸演到一半被拿起來 -> 反應中斷。
+    // 要驗的是**放下之後**：react() 看到 held 會先短路回傳，所以「拿著時不跳」
+    // 就算沒中斷也會通過（第一版就是這樣假綠的）。真正的後果是放開之後那隻
+    // 會把剩下的反應演完 —— 在新的落點莫名其妙跳一下。
+    const z = mk();
+    z.pet('b', T0);
+    ok(at(z.react(null, T0), 'b').jump > 0, '前置條件不成立（應該正在跳）');
+    z.grab('b', T0);
+    const zh = at(z.react(null, T0), 'b');
+    ok(zh.jump === 0 && zh.frame === null, '拿在手上不該同時演反應');
+    z.drop('b', 9, 9, 'right', T0 + 200);
+    const zd = at(z.react(null, T0 + 300), 'b');
+    ok(zd.jump === 0 && zd.frame === null,
+       '放下之後把被打斷的反應接著演完了（會在落點莫名跳一下）');
+    // 上面那條從外面看不出 until 有沒有被清掉（frame 已經是 null，輸出一模一樣），
+    // 所以直接驗狀態：待演的反應要整個作廢，不能只是「剛好畫不出來」。
+    ok(z.touches.get('b').until === 0,
+       '拿起來沒有把待演的反應作廢 —— 目前靠 frame=null 遮住，哪天 frame 改成保留就會冒出來');
+
+    // 放下要把停走的帳歸零。
+    // 這條也不能只看「放下當下 holdSteps 是 0」—— 沒摸過的話它本來就是 0。
+    // 要先讓它累積起來（摸一下、等反應結束結清），再拿起來放下。
+    const q = mk();
+    q.pet('d', T0);
+    q.react(null, T0 + 9000);                       // 反應結束 -> holdSteps 結清成正值
+    const acc = at(q.react(null, T0 + 9000), 'd').holdSteps;
+    ok(acc > 0, '前置條件不成立（holdSteps 應該已經累積）');
+    q.grab('d', T0 + 9000);
+    q.drop('d', 4, 4, 'right', T0 + 9000);
+    const qd = at(q.react(null, T0 + 9000), 'd');
+    ok(qd.holdSteps === 0,
+       '放下之後 holdSteps 沒歸零（' + qd.holdSteps + '）—— joinStep 會被往後推，' +
+       '那隻會在落點站著不動好一陣子才開始走');
+
+    // 帶著落點的那筆不能被當成「沒事了」而回收
+    const w = mk();
+    w.grab('c', T0); w.drop('c', 3, 3, 'right', T0);
+    w.react(new Set(['c']), T0 + 60000);
+    ok(w.touches.has('c'), '還在牧場卻把落點回收了（那隻會彈回原本的起點）');
+    w.react(new Set(), T0 + 60000);
+    ok(!w.touches.has('c'), '已離開牧場的落點沒有被回收');
+}
+
+console.log('— 拿太久要自動放回去 —');
+{
+    // 回報過「有的被拎起來就消失了」。其中一條路是拖到一半把分頁關掉／重新整理／斷線 ——
+    // 前端根本沒機會送 yardDrop，伺服器會一直以為牠在你手上，而被拿著的那隻不進合成，
+    // 於是牠從畫面上整個消失，重開 daemon 才回得來。前端怎麼寫都救不了這條，
+    // 只能由伺服器設一個租約。
+    const y = mk();
+    y.grab('a', T0);
+    ok(at(y.react(null, T0 + YT.HELD_MAX_MS - 1000), 'a').held === true,
+       '還在租約內就被放掉了（正常拖曳會被打斷）');
+    const back = at(y.react(null, T0 + YT.HELD_MAX_MS + 1000), 'a');
+    ok(back.held !== true, '拿超過租約還是 held —— 那隻永遠回不到畫面上');
+    // 放回去之後要能繼續走：停走的拍數要結清，而不是無限累加
+    const h1 = at(y.react(null, T0 + YT.HELD_MAX_MS + 1000), 'a').holdSteps;
+    const h2 = at(y.react(null, T0 + YT.HELD_MAX_MS + 9000), 'a').holdSteps;
+    ok(h1 > 0, '自動放回後 holdSteps 應該已結清成正值，得到 ' + h1);
+    ok(h1 === h2, '自動放回後 holdSteps 還在長 —— 那隻會站著不動');
+    // 沒有落點就不該憑空指定一個
+    ok(!back.anchor, '自動放回不該亂給落點');
+    // 租約到期後再放下 = 沒拿著，要拒絕（前端這時清掉 drag 就好，不會有幽靈）
+    ok(y.drop('a', 1, 1, 'right', T0 + YT.HELD_MAX_MS + 1000) === false,
+       '租約到期後 drop 應該回 false');
+}
+
+console.log('— 放下要蓋過走路快取 —');
+{
+    // 這條是實際踩過的：落點明明記對了，畫面上那隻卻回到被抓起來前的位置。
+    // 快取是「舊時間軸上的位置備忘」，而放下等於換掉時間軸；剛放下時 target 是 0，
+    // 而快取的 at 也可能是 0（還在第一段路裡），cache.at <= target 就成立 ——
+    // 舊位置被當成有效答案。所以快取要記住自己屬於哪一條時間軸。
+    const os = require('os'), path = require('path');
+    let core = null;
+    try { core = require(path.join(os.homedir(), '.claude', 'agumon-statusline', 'agumon-core.js')); }
+    catch (e) { try { core = require('../src/runtime/agumon-core.js'); } catch (e2) {} }
+    const hasArt = !!(core && (() => { try { return P.loadArt(core, 'agumon'); } catch (e) { return null; } })());
+    if (!hasArt) { console.log('  – 讀不到角色美術，跳過'); }
+    else {
+        const y = mk();
+        const ranch = { pets: [{ id: 'p1', keptAt: 0, state: { characterId: 'agumon' } }] };
+        const caches = new Map();                 // daemon 用的是長駐快取，這裡要一樣
+        const base = P.yardJoinStep();
+        const now = T0;
+        // 先養熱：快取裡會留下「舊時間軸」的位置
+        for (let k = 0; k < 8; k++) P.composeYard(core, ranch, null, base + k, { caches, react: y.react(null, now) });
+        const before = P.composeYard(core, ranch, null, base + 8, { caches, react: y.react(null, now) }).placed[0];
+
+        y.grab('p1', now);
+        y.drop('p1', 5, 20, 'left', now);
+        const m = y.react(null, now), step = W.stepAt(now);
+        const after = P.composeYard(core, ranch, null, step, { caches, react: m }).placed[0];
+        ok(after.x === 5 && after.y === 20,
+           `放下之後應該在 5,20，卻在 ${after.x},${after.y}` +
+           (after.x === before.x && after.y === before.y ? '（＝抓起來前的位置，舊快取沒作廢）' : ''));
+
+        // 而且要從落點繼續走，不是釘在那裡
+        let prev = null, moves = 0;
+        for (let t = 1; t <= 40; t++) {
+            const o = P.composeYard(core, ranch, null, step + t, { caches, react: m }).placed[0];
+            if (prev && (o.x !== prev.x || o.y !== prev.y)) moves++;
+            prev = o;
+        }
+        ok(moves > 25, `放下之後應該繼續走，40 拍只動了 ${moves} 拍`);
+
+        // 拿在手上的那隻不進合成（否則畫面上會有兩個分身）
+        const y2 = mk();
+        y2.grab('p1', now);
+        const heldOut = P.composeYard(core, ranch, null, step, { caches: new Map(), react: y2.react(null, now) });
+        ok(heldOut === null, '牧場只有一隻且被拿著時，合成應該回 null（沒有人留在場上）');
+
+        // 交給前端的是**兩張**待機幀：拿在手上也要繼續呼吸，不是定格。
+        const sp = P.yardSpriteFor(core, ranch, 'p1', step, {});
+        ok(sp && Array.isArray(sp.frames) && sp.frames.length === 2,
+           '抓起來時應該給兩張待機幀（前端靠它輪替）');
+        ok(sp && JSON.stringify(sp.frames[0]) !== JSON.stringify(sp.frames[1]),
+           '兩張待機幀一模一樣 —— 拿在手上會看起來像定格');
+        ok(sp && sp.frames[0].length === 16 && sp.frames[0][0].length === 16,
+           '待機幀的尺寸不對');
+        ok(P.yardSpriteFor(core, { pets: [] }, 'nobody', step, {}) === null,
+           '不在牧場裡的 id 應該回 null，不是丟例外');
+    }
+}
+
 console.log('\n結果：' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

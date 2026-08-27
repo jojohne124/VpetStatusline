@@ -1,24 +1,73 @@
-# Agent Memory（Claude Code 記憶快照）
+# Agent Memory — 跨機器共享設定
 
-這裡是 Claude Code 對本專案累積的設計記憶 / 決策紀錄，**複製進 repo 方便跨電腦開發時參考與版本控管**。
+## 現在的做法（2026-08-27 起）
 
-## 來源（single source of truth）
+**活記憶就在這個 repo 裡** —— `.claude/memory/`。不再是手動快照。
 
-實際的「活記憶」在使用者家目錄、不在本 repo：
+家目錄那個 Claude Code 會讀的記憶目錄，做成**目錄連結**指過來：
 
 ```
-~/.claude/projects/C--Users-jojoh/memory/
+~/.claude/projects/<slug>/memory   ──junction──▶   <repo>/.claude/memory
 ```
 
-Claude 啟動時會自動載入那裡的檔案；本資料夾只是**手動快照備份**，不會自動雙向同步。
+所以 Claude 存新記憶＝直接寫進 repo，`git commit` 就同步了，不會再漂掉。
 
-## 檔案
+> 之前是「複製快照到 docs/ 再 commit」，結果只同步了 3 個檔案就沒人記得再跑，
+> README 還一直指著上一台機器的使用者名。手動同步撐不住，所以改成連結。
 
-- `project_vpet_statusline.md` — 專案總進度 / 系統設計 / cheat 指令 / 多視窗機制 / 設計取捨
-- `evo-winrate-default.md` — 新增角色時的**預設進化門檻算法**（win_rate pct 由進化目標 power 決定、minBattles 同 stage 統一）
+## 換一台機器要做什麼
 
-## 更新方式
+### 1. clone
 
-memory 內容變動後，重新從上述來源路徑複製過來再 commit 即可。請 Claude「把最新 memory 同步進 docs/agent-memory」也行。
+```
+git clone https://github.com/jojohne124/VpetStatusline.git agumon-cli
+```
 
-> ⚠ 另一台電腦若要讓這些檔案變回「Claude 自動記憶」，需放到那台對應的 `~/.claude/projects/<key>/memory/`（`<key>` 取決於該機使用者名稱與啟動目錄）。純放在 repo 裡只是文件，不會自動載入成記憶。
+### 2. 接上記憶（一次就好）
+
+`<slug>` ＝ repo 的絕對路徑，把所有非英數字元換成 `-`。
+例如 `C:/Users/王小明/agumon-cli` → `C--Users-王小明-agumon-cli`。
+
+**Windows**（不需要系統管理員權限）：
+
+```
+mkdir "%USERPROFILE%\.claude\projects\<slug>"
+mklink /J "%USERPROFILE%\.claude\projects\<slug>\memory" "<repo 絕對路徑>\.claude\memory"
+```
+
+**mac / Linux**：
+
+```
+mkdir -p ~/.claude/projects/<slug>
+ln -s <repo 絕對路徑>/.claude/memory ~/.claude/projects/<slug>/memory
+```
+
+### 3. 從 repo 目錄啟動 claude
+
+```
+cd <repo>
+claude
+```
+
+**這步不能省。** slug 取自 claude 的**啟動目錄**，不是 cwd —— 從家目錄啟動再 cd 進來，
+記憶還是會落在家目錄那個 slug，等於沒接上。
+
+## 什麼放哪裡
+
+| | 位置 | 跟著 git？ |
+|---|---|---|
+| 本專案記憶 | `.claude/memory/` | ✅ |
+| 本專案 skill | `.claude/skills/` | ✅ |
+| 本專案指示 | `CLAUDE.md`（repo 根） | ✅ |
+| 設計依據文件 | `docs/agent-memory/*.md` | ✅ |
+| **通用偏好**（回話精簡、只用 log、commit 規則） | `~/.claude/CLAUDE.md` | ❌ 每台機器各自一份 |
+
+通用偏好刻意不放 repo —— 它們是使用者偏好、跨所有專案，放家目錄才會在工作專案也生效。
+新機器要自己補一份。
+
+## 這個資料夾剩下什麼
+
+- `evo-winrate-default.md` — 新角色的**預設進化門檻算法**（win% 由目標 power 決定）。
+  這是設計依據，`src/shared/evo-rules.js` 的註解直接引用它，不是記憶。
+- `project_vpet_statusline.md` — 2026-05-29 的舊快照，來自上一台機器（`C:\Users\jojoh\`）。
+  內容大半已被 `.claude/memory/project_cc_statusline.md` 取代，留著當歷史。**可以刪。**

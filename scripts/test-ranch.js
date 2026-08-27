@@ -24,6 +24,9 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + msg); } };
 
 const TMP   = path.join(os.tmpdir(), `vpet-ranch-test-${process.pid}`);
+// 前一次跑到一半掛掉會留下這個目錄，pid 又會重複 —— 不先清就會 EEXIST，
+// 而且是「單獨跑好好的、整套跑才紅」那種查半天的假故障。
+fs.rmSync(TMP, { recursive: true, force: true });
 fs.mkdirSync(TMP, { recursive: true });
 const RANCH = path.join(TMP, 'ranch.json');
 const FORCE = path.join(TMP, 'force.json');

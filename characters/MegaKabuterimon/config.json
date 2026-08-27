@@ -76,7 +76,7 @@
       ]
     },
     {
-      "character": "ancientbeatmon",
+      "character": "megalon",
       "conditions": [
         {
           "type": "cost_threshold",
@@ -84,8 +84,13 @@
         },
         {
           "type": "win_rate",
-          "pct": 70,
+          "pct": 65,
           "minBattles": 12
+        },
+        {
+          "type": "tag_battles",
+          "tag": "G-cell",
+          "count": 2
         }
       ]
     }

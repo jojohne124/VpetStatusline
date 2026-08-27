@@ -76,20 +76,6 @@
       ]
     },
     {
-      "character": "greymon_2010",
-      "conditions": [
-        {
-          "type": "cost_threshold",
-          "usd": 10
-        },
-        {
-          "type": "win_rate",
-          "pct": 45,
-          "minBattles": 5
-        }
-      ]
-    },
-    {
       "character": "greymon",
       "conditions": [
         {
@@ -100,6 +86,25 @@
           "type": "win_rate",
           "pct": 50,
           "minBattles": 5
+        }
+      ]
+    },
+    {
+      "character": "g-greymon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 5
+        },
+        {
+          "type": "tag_battles",
+          "tag": "G-cell",
+          "count": 2
         }
       ]
     },

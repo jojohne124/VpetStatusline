@@ -72,7 +72,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 65,
+          "pct": 60,
           "minBattles": 12
         }
       ]
@@ -88,6 +88,25 @@
           "type": "win_rate",
           "pct": 70,
           "minBattles": 12
+        }
+      ]
+    },
+    {
+      "character": "g-metalgarurumon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 12
+        },
+        {
+          "type": "tag_battles",
+          "tag": "G-cell",
+          "count": 2
         }
       ]
     }

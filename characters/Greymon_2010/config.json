@@ -74,6 +74,20 @@
           "minBattles": 8
         }
       ]
+    },
+    {
+      "character": "metalgreymon_virus",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 8
+        }
+      ]
     }
   ]
 }

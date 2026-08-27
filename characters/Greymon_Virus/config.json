@@ -62,6 +62,20 @@
   ],
   "evolvesTo": [
     {
+      "character": "metalgreymon_2010",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 8
+        }
+      ]
+    },
+    {
       "character": "metalgreymon_virus",
       "conditions": [
         {

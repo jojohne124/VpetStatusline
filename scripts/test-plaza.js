@@ -375,6 +375,33 @@ console.log('— 摸摸反應幀 —');
        'react 為空時不該影響原本的待機動畫');
 }
 
+console.log('— 顯示名稱 —');
+{
+    // 底線是資料夾名的產物（Agumon_Black / GodZilla_1954），不是名字的一部分。
+    // 卡片、tree、牧場右鍵、statusline 清單全都走 getDisplayName，所以只改那一個地方。
+    //
+    // 斷言只驗「輸出沒有底線」而不是驗某個確切字串 —— 因為 config.name 讀不讀得到
+    // 取決於載入的是安裝版還是 repo 版（repo 版的 ASSETS_DIR 指向不存在的路徑，
+    // 會走 fallback）。兩種情況下「不該有底線」都必須成立。
+    const g = core && core.getDisplayName;
+    if (!g) { skip++; console.log('  – core 沒有 getDisplayName，跳過'); }
+    else {
+        for (const id of ['agumon_black', 'godzilla_1954', 'zephagamon_ace', 'mothra_leo']) {
+            const out = core.getDisplayName(id);
+            ok(!out.includes('_'), `${id} 的顯示名還有底線：${JSON.stringify(out)}`);
+            // 長度必須一樣 —— 卡片那欄是「補滿或截斷到 TEXT_W」，
+            // 換成多字元的東西會把整列撐寬、右邊的 CutIn 看起來像歪掉
+            ok(out.length === id.length,
+               `${id} 的顯示名長度變了（${id.length} -> ${out.length}），卡片排版會跑掉`);
+        }
+        // 沒有底線的照舊
+        ok(core.getDisplayName('agumon') === 'Agumon', '沒有底線的名字被動到了');
+        // 空值不能爆
+        ok(core.getDisplayName('') === '' && core.getDisplayName(null) === '',
+           '空值應該回空字串');
+    }
+}
+
 console.log('— 名牌遮擋 —');
 if (!hasArt) { skip++; console.log('  – 讀不到角色美術，跳過'); }
 else {

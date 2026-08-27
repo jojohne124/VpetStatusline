@@ -87,6 +87,54 @@ function findDeadPaths(graph) {
     return dead;
 }
 
+// ── 可達性：從 starter 走得到嗎 ────────────────────────────────────────────
+// graph: { nodes: [{id, stage}], edges: [{from, to}] }
+// starters: id 陣列
+// specialRules: characters/special-evolutions.json 的 rules（可省略）
+//
+// 走不到 = 純敵人。這是**算出來的**而不是一份人工名單 —— 名單會過期，
+// 而新增敵役、換掉某條鏈之後，可達性自己會跟上。
+//
+// ⚠️ 特殊進化不在 evolvesTo 裡（大便獸走 special-evolutions.json），
+//    純看 evolvesTo 會把牠判成敵人而從圖鑑上消失 —— 而牠明明是玩家養出來的。
+//    所以規則的 to 也要算進來：只要有任何一隻可達的角色符合 fromStage，那個 to 就拿得到。
+//
+// starters 是空的就回 null（＝不知道，別過濾）。跟 roster 讀不到時 fail-open 同樣的理由：
+// 資料缺一角不該讓整本圖鑑變空的。
+function reachableFrom(graph, starters, specialRules) {
+    if (!Array.isArray(starters) || !starters.length) return null;
+    const nodeById = {};
+    for (const n of graph.nodes) nodeById[n.id] = n;
+    const next = {};
+    for (const e of graph.edges) (next[e.from] = next[e.from] || []).push(e.to);
+
+    const seen = new Set();
+    const stack = starters.filter(id => nodeById[id]);
+    const rules = Array.isArray(specialRules) ? specialRules.slice() : [];
+    let grew = true;
+    while (grew) {
+        grew = false;
+        while (stack.length) {
+            const id = stack.pop();
+            if (!id || seen.has(id) || !nodeById[id]) continue;
+            seen.add(id);
+            grew = true;
+            for (const nx of (next[id] || [])) stack.push(nx);
+        }
+        // 每輪結束後看看有沒有特殊進化的條件被滿足了（可能又帶出新的一段鏈）
+        for (let i = rules.length - 1; i >= 0; i--) {
+            const r = rules[i];
+            if (!r || !r.to || !nodeById[r.to]) { rules.splice(i, 1); continue; }
+            const okFrom = !r.fromStage
+                || [...seen].some(id => (nodeById[id] || {}).stage === r.fromStage);
+            if (!okFrom) continue;
+            rules.splice(i, 1);
+            if (!seen.has(r.to)) { stack.push(r.to); grew = true; }
+        }
+    }
+    return seen;
+}
+
 // power → stage band（給新角色推 stage 用）
 function stageForPower(p) {
     if (p == null) return 'Child';
@@ -100,5 +148,5 @@ function stageForPower(p) {
 module.exports = {
     STAGE_COST, STAGE_MINB, BAND, FC,
     suggestPct, costFor, minBattlesFor,
-    resolvePcts, findDeadPaths, stageForPower,
+    resolvePcts, findDeadPaths, reachableFrom, stageForPower,
 };

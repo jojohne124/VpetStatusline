@@ -96,7 +96,7 @@
   </div>
   <div id="main">
     <div id="canvasWrap">
-      <svg id="svg"><g id="edgeLayer"></g><g id="nodeLayer"></g><g id="tempLayer"></g></svg>
+      <svg id="svg"><g id="bgLayer"></g><g id="edgeLayer"></g><g id="nodeLayer"></g><g id="tempLayer"></g></svg>
       <div class="legend">
         <div><span class="sw" style="background:#3d6fb4"></span>Child　<span class="sw" style="background:#3d9b6f"></span>Adult</div>
         <div><span class="sw" style="background:#b88a2d"></span>Perfect　<span class="sw" style="background:#a24bb0"></span>Ultimate</div>
@@ -126,6 +126,15 @@
 const STAGE_ORDER = ['Child','Adult','Perfect','Ultimate','Super-Ultimate','UnStage'];
 const STAGE_COLOR = { Child:'#3d6fb4', Adult:'#3d9b6f', Perfect:'#b88a2d', Ultimate:'#a24bb0', 'Super-Ultimate':'#d1442f', UnStage:'#666' };
 const COL_W = 260, NODE_W = 150, NODE_H = 40, ROW_H = 56;
+// 每一階級欄分成上下兩區：未實裝在上、實裝在下，中間一條分隔線。
+// 放「上面」而不是「旁邊」的理由：畫布寬度完全不變，而且拉線時
+// 「實裝父 → 未實裝新怪 → 實裝子」兩條線都只經過欄與欄之間的空白，
+// 不會穿過某一欄裡密密麻麻的節點（左右並排的話一定會穿其中一條）。
+const HEAD_H = 34;          // 欄標題佔的高度
+const BAND_GAP = 18;        // 未實裝區與分隔線之間的留白
+// 未實裝區至少保留幾列。全部實裝完之後高度不會塌成 0 ——
+// 塌下去會讓整張圖往上位移，剛建立的空間記憶就沒了。
+const MIN_UN_ROWS = 3;
 
 let G = { nodes: [], edges: [] };
 let byId = {};
@@ -139,6 +148,7 @@ let view = { x: 0, y: 0, scale: 1 };
 let dirty = false;
 
 const svg = document.getElementById('svg');
+const bgLayer   = document.getElementById('bgLayer');
 const edgeLayer = document.getElementById('edgeLayer');
 const nodeLayer = document.getElementById('nodeLayer');
 const tempLayer = document.getElementById('tempLayer');
@@ -192,15 +202,87 @@ function payload() {
   };
 }
 
-function autoLayout(silent) {
+// ⚠️ 算版面與**移動節點**是兩件事，必須分開。
+// reload() 只在「有節點缺座標」時才重排（不然會沖掉使用者手動拖過的位置），
+// 所以存過一次檔之後就不會再排 —— 欄標題與分隔線若綁在排版裡，那時就整組消失。
+// computeLayout 是純計算、每次 render 都跑（187 個節點，成本可忽略），
+// applyLayout 才會動到 n.x / n.y。
+function computeLayout() {
   const cols = {};
   STAGE_ORDER.forEach(s => cols[s] = []);
   for (const n of G.nodes) (cols[n.stage] || (cols[n.stage]=[])).push(n);
+  const byPower = (a,b) => a.power - b.power || a.id.localeCompare(b.id);
+
+  // 未實裝區的高度取各階最多的那一欄。
+  // ⚠️ UnStage 不算進來：那一欄**整欄都是未實裝**（它就是暫存區），
+  //    把它算進去的話未實裝區會被撐到 50 列高、實裝的全部被推到兩千多 px 以下。
+  let maxUn = MIN_UN_ROWS;
+  for (const s of STAGE_ORDER) {
+    if (s === 'UnStage') continue;
+    maxUn = Math.max(maxUn, (cols[s] || []).filter(n => !n.implanted).length);
+  }
+  const unTop = 40 + HEAD_H;
+  const dividerY = unTop + maxUn * ROW_H + BAND_GAP;
+  const out = { cols: [], unTop, dividerY, width: STAGE_ORDER.length * COL_W };
   STAGE_ORDER.forEach((s, ci) => {
-    (cols[s] || []).sort((a,b) => a.power - b.power || a.id.localeCompare(b.id))
-      .forEach((n, ri) => { n.x = 40 + ci * COL_W; n.y = 40 + ri * ROW_H; });
+    const all = (cols[s] || []).sort(byPower);
+    const single = (s === 'UnStage');   // 暫存區不分上下：整欄都是未實裝
+    out.cols.push({
+      stage: s, x: 40 + ci * COL_W, single,
+      un: single ? all : all.filter(n => !n.implanted),
+      im: single ? []  : all.filter(n => n.implanted),
+    });
   });
+  return out;
+}
+
+let layout = { cols: [], unTop: 0, dividerY: 0, width: 0 };
+
+function autoLayout(silent) {
+  layout = computeLayout();
+  for (const c of layout.cols) {
+    c.un.forEach((n, ri) => { n.x = c.x; n.y = layout.unTop + ri * ROW_H; });
+    c.im.forEach((n, ri) => { n.x = c.x; n.y = layout.dividerY + BAND_GAP + ri * ROW_H; });
+  }
   if (!silent) { dirty = true; fitView(); render(); }
+}
+
+// 欄標題 + 未實裝／實裝的分隔線。畫在最底層，不擋節點也不吃點擊。
+function renderChrome() {
+  // 每次重算：改了 stage 或實裝勾選之後，標題的數字要立刻對。
+  // 節點位置不會跟著動（那要按「自動排版」），所以分隔線可能暫時跟實際位置對不齊 ——
+  // 那反而是個提示：版面過期了，排一次。
+  layout = computeLayout();
+  bgLayer.innerHTML = '';
+  if (!layout.cols.length) return;
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS(NS, tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  };
+  // 分隔線橫跨所有分上下兩區的欄（UnStage 那欄不畫，它沒有下半部）
+  const split = layout.cols.filter(c => !c.single);
+  if (split.length) {
+    const x1 = split[0].x - 14, x2 = split[split.length-1].x + NODE_W + 14;
+    const ln = mk('line', { x1, y1: layout.dividerY, x2, y2: layout.dividerY,
+                            stroke: '#4a515a', 'stroke-width': 1, 'stroke-dasharray': '6,5' });
+    bgLayer.appendChild(ln);
+    const tag = mk('text', { x: x1 + 4, y: layout.dividerY - 6, fill: '#6f767e', 'font-size': 11 });
+    tag.textContent = '↑ 未實裝　↓ 實裝';
+    bgLayer.appendChild(tag);
+  }
+  for (const c of layout.cols) {
+    const t = mk('text', { x: c.x, y: 40 + 14, fill: STAGE_COLOR[c.stage] || '#888',
+                           'font-size': 13, 'font-weight': 700 });
+    t.textContent = c.stage;
+    bgLayer.appendChild(t);
+    // 數量寫在標題下面一行 —— 沒有它就看不出「這一階還有幾隻沒實裝」
+    const sub = mk('text', { x: c.x, y: 40 + 28, fill: '#7f868e', 'font-size': 11 });
+    sub.textContent = c.single ? `${c.un.length} 待設定`
+                              : `實裝 ${c.im.length}　未實裝 ${c.un.length}`;
+    bgLayer.appendChild(sub);
+  }
 }
 
 // ── starter 鏈篩選 ──────────────────────────────────────────────────────
@@ -273,6 +355,7 @@ function render() {
   applyView();
   refreshReach();   // 邊可能在編輯中改變，保持可達集最新
   const q = document.getElementById('search').value.trim().toLowerCase();
+  renderChrome();
   edgeLayer.innerHTML = ''; nodeLayer.innerHTML = '';
 
   for (const e of G.edges) {

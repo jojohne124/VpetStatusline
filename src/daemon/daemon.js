@@ -365,9 +365,15 @@ function doTick() {
         // 當家模式：render 成功才寫 heartbeat → statusLine 據此退唯讀。tick 若拋錯就不更新，
         // heartbeat 4 秒過期 → statusLine 自動接管（daemon 壞掉的 failsafe）。
         if (AUTHORITATIVE) { try { fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ ts: now, pid: process.pid })); } catch (e) {} }
+        // 牧場人數也帶出去：「收進牧場」這顆鈕在兩個分頁都有，但只有院子分頁會打 /yard。
+        // 沒有這一份的話，家裡分頁沒辦法在按下去之前就知道滿了。
+        let ranchInfo = null;
+        try { ranchInfo = { kept: (core.loadRanch().pets || []).length, cap: core.ranchCap() }; }
+        catch (e) {}
         latest = {
             tick: ++tick,
             at: now,
+            ranch: ranchInfo,
             kind: out.kind,
             cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
@@ -1194,6 +1200,17 @@ async function pollYard(){
   syncWx();
 }
 
+let lastState=null;   // 最後一次 /state（家裡分頁靠它知道牧場滿了沒）
+
+// 牧場滿了沒。院子分頁的 /yard 比較新，優先用它；家裡分頁退回 /state。
+// 回 null = 還不知道（剛開頁面），那就別擋，讓指令照送、由 CLI 那道去擋。
+function ranchFull(){
+  const src = (lastYard && lastYard.cap) ? lastYard
+            : (lastState && lastState.ranch) ? lastState.ranch : null;
+  if(!src || !src.cap) return null;
+  return { full: src.kept >= src.cap, kept: src.kept, cap: src.cap };
+}
+
 // 命中判定用「這一拍畫出來的位置」，所以要記住最後一次 /yard 的結果。
 // 位置每拍都在動，若改成點下去再問伺服器，回來時已經是下一拍的位置，會抓錯人。
 let lastYard=null;
@@ -1256,6 +1273,7 @@ async function poll(){
   }
   try{
     const s=await (await fetch('/state',{cache:'no-store'})).json();
+    lastState=s;
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
@@ -1294,6 +1312,20 @@ function showOutput(text){
   if(!text){ el.style.display='none'; return; }
   el.textContent=stripAnsi(text); el.style.display='block';
 }
+// 指令失敗時訊息列要顯示什麼。**把 CLI 講的理由直接放上去**，不要只說「失敗：keep」。
+// 舊版就是只說動作名：走 CLI 的指令 r.error 是 undefined，於是永遠顯示「失敗：<動作>」，
+// 而真正有用的那句（例如「牧場已滿（5/5）。先 vpet release…」）被塞進畫布下方的輸出區
+// —— 按了鈕只看到一句沒資訊的紅字，不會知道為什麼，也不會想到要往下看。
+// 取第一行非空白：CLI 的第一行就是給人看的結論，後面常是細節或清單。
+function failMsg(r,action){
+  // ⚠️ 這一段活在前端的 template literal 裡，**反斜線會被吃掉一次**，
+  //    所以這裡不能出現任何反斜線跳脫（連註解裡都不行 —— 那會變成真的換行，
+  //    把 // 註解截斷、後半段變成語法錯誤，整頁的 JS 全死）。改用碼點取換行。
+  const NL = String.fromCharCode(10);
+  const why = r.error || String(r.output||'').split(NL).map(x=>x.trim()).find(Boolean);
+  return why || ('失敗：'+action);
+}
+
 async function sendCmd(action,args){
   try{
     const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -1303,7 +1335,7 @@ async function sendCmd(action,args){
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
     const quiet=(action==='yardGrab'||action==='yardDrop');
     if(!(quiet&&r.ok))
-      flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : ('失敗：'+(r.error||action)),
+      flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
     // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
@@ -1319,9 +1351,20 @@ async function sendCmd(action,args){
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
   // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
   if(b.dataset.cmd==='yard'){ setView(view==='yard'?'home':'yard'); return; }
+  const cmd=b.dataset.cmd;
+      // 滿了就直接說，不要先問「確定嗎？」再告訴使用者做不到。
+      // 人數前端本來就有（/yard 的 kept/cap、或 /state 的 ranch），只是以前沒拿來用。
+      // 這只是省一次無謂的確認 —— 真正的把關仍然在 CLI 那一道（見 --keep）。
+      if(cmd==='keep'){
+        const r=ranchFull();
+        if(r && r.full){
+          flashCmdMsg('牧場已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出牧場」。','#d29922');
+          return;
+        }
+      }
   const c=b.dataset.confirm;
   if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
-  sendCmd(b.dataset.cmd);
+  sendCmd(cmd);
 }));
 // 進階區：把該列的輸入框收成 {欄位:值} 一起送出。
 // 一列可以有多顆鈕（開/關成對的開關）→ 動作優先取按鈕自己的 data-cmd，沒有才用整列的。
@@ -1333,9 +1376,20 @@ document.querySelectorAll('#adv .form').forEach(row=>{
   };
   row.querySelectorAll('button').forEach(b=>
     b.addEventListener('click',()=>{
+      const cmd=b.dataset.cmd||row.dataset.cmd;
+      // 滿了就直接說，不要先問「確定嗎？」再告訴使用者做不到。
+      // 人數前端本來就有（/yard 的 kept/cap、或 /state 的 ranch），只是以前沒拿來用。
+      // 這只是省一次無謂的確認 —— 真正的把關仍然在 CLI 那一道（見 --keep）。
+      if(cmd==='keep'){
+        const r=ranchFull();
+        if(r && r.full){
+          flashCmdMsg('牧場已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出牧場」。','#d29922');
+          return;
+        }
+      }
       const c=b.dataset.confirm;
       if(c && !confirm(c)) return;    // 破壞性操作（重抽）先問一次
-      sendCmd(b.dataset.cmd||row.dataset.cmd,collect());
+      sendCmd(cmd,collect());
     }));
   row.querySelectorAll('input').forEach(i=>
     i.addEventListener('keydown',e=>{ if(e.key==='Enter')sendCmd(row.dataset.cmd,collect()); }));

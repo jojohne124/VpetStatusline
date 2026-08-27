@@ -58,30 +58,75 @@ function sweepStaleTmps(file) {
         }
     } catch(_) {}
 }
-// atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write
-// ⚠️ rename 只保證「別的行程不會讀到寫到一半的檔」，**不保證斷電後檔案還在**。
-// 少了 fsync 的話，NTFS 可能先把 rename 這個 metadata 落盤、資料區塊還留在 page cache，
-// 非正常關機後就生出「大小正確、內容全 NUL」的檔案 —— 實際發生過 4 次
-// （2026-05-21 / 06-02 / 08-04×2，見 state/color-state.json.corrupt.log），
-// 每次都害角色被當成新玩家重發。所以 rename 前一定要 fsync。
-function atomicWrite(file, data) {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+// Windows 上「檔案暫時動不了」的錯誤碼。防毒即時掃描、搜尋索引、或另一個 vpet 行程
+// 剛好握著 handle，rename 就會丟這些 —— 隔幾毫秒再試通常就過了。
+const TRANSIENT_WRITE_ERRS = new Set(['EPERM', 'EBUSY', 'EACCES', 'EEXIST']);
+const WRITE_RETRIES = 4;
+
+// 同步等一下下。這裡不能用 setTimeout —— atomicWrite 的呼叫端（tick、CLI）都是同步的，
+// 而且重試只在罕見的失敗路徑上發生，總共最多等 30ms。
+function sleepSync(ms) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+    catch (e) { const end = Date.now() + ms; while (Date.now() < end) {} }
+}
+
+// 寫入真的失敗時留下痕跡。**用 append**：主檔寫不進去多半是那個檔被卡住，
+// 換一個檔名 append 通常還寫得進去；而且這種事極罕見，不必擔心檔案長大。
+// 靜靜吞掉是最糟的選擇 —— 一次吞掉的寫入就是一次「收進牧場沒生效」而使用者毫不知情。
+// attempts 也要寫進去：「試了 5 次還是不行」和「第一次就放棄」是完全不同的故事，
+// 前者是有人一直握著那個檔，後者是路徑/磁碟本身有問題。
+function logWriteFailure(file, e, attempts) {
     try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        sweepStaleTmps(file);
-        const fd = fs.openSync(tmp, 'w');
+        fs.appendFileSync(`${file}.write-fail.log`,
+            `${new Date().toISOString()}\ttries=${attempts}\t${e && e.code || '?'}\t${e && e.message || e}\n`);
+    } catch (_) {}
+}
+
+/**
+ * atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write。
+ * 回傳是否真的寫成功 —— 呼叫端至少有機會知道。
+ *
+ * ⚠️ rename 只保證「別的行程不會讀到寫到一半的檔」，**不保證斷電後檔案還在**。
+ * 少了 fsync 的話，NTFS 可能先把 rename 這個 metadata 落盤、資料區塊還留在 page cache，
+ * 非正常關機後就生出「大小正確、內容全 NUL」的檔案 —— 實際發生過 4 次
+ * （2026-05-21 / 06-02 / 08-04×2，見 state/color-state.json.corrupt.log），
+ * 每次都害角色被當成新玩家重發。所以 rename 前一定要 fsync。
+ *
+ * ⚠️ 舊版把所有失敗**完全吞掉**（catch 之後只刪 tmp，不回報也不留痕跡）。
+ * 那不只是少一行 log —— Windows 上 rename 蓋既有檔會偶發 EPERM/EBUSY（防毒、索引、
+ * 另一個行程握著 handle），一次吞掉就是一次收進牧場／放生／進化默默沒生效。
+ * 實際咬過：完整測試套件同時寫一堆檔時，test-ranch 偶爾紅在「寫了卻沒生效」，
+ * 單獨跑永遠重現不了。現在改成重試 + 留痕跡 + 回報成敗。
+ */
+function atomicWrite(file, data) {
+    let lastErr = null, tries = 0;
+    for (let attempt = 0; attempt <= WRITE_RETRIES; attempt++) {
+        tries++;
+        const tmp = `${file}.${process.pid}.${Date.now()}.${attempt}.tmp`;
         try {
-            fs.writeFileSync(fd, data);
-            // fsync 在少數檔案系統會丟 EINVAL；失敗也要繼續 rename，
-            // 否則反而連「有寫到」都做不到，比原本更糟。
-            try { fs.fsyncSync(fd); } catch(_) {}
-        } finally {
-            fs.closeSync(fd);
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            if (attempt === 0) sweepStaleTmps(file);
+            const fd = fs.openSync(tmp, 'w');
+            try {
+                fs.writeFileSync(fd, data);
+                // fsync 在少數檔案系統會丟 EINVAL；失敗也要繼續 rename，
+                // 否則反而連「有寫到」都做不到，比原本更糟。
+                try { fs.fsyncSync(fd); } catch(_) {}
+            } finally {
+                fs.closeSync(fd);
+            }
+            fs.renameSync(tmp, file);
+            return true;
+        } catch(e) {
+            lastErr = e;
+            try { fs.unlinkSync(tmp); } catch(_) {}
+            // 不是暫時性的（路徑不合法、磁碟滿了…）再試幾次也一樣，直接放棄
+            if (!TRANSIENT_WRITE_ERRS.has(e && e.code)) break;
+            if (attempt < WRITE_RETRIES) sleepSync(2 * (attempt + 1));   // 2/4/6/8ms
         }
-        fs.renameSync(tmp, file);
-    } catch(e) {
-        try { fs.unlinkSync(tmp); } catch(_) {}
     }
+    logWriteFailure(file, lastErr, tries);
+    return false;
 }
 // last-known-good 備援：主檔壞掉時的退路。節流寫入（不是每秒都寫），理由有兩個 ——
 // 一是省 I/O，二更重要：備份必須是「早就穩穩躺在磁碟上」的舊資料才有意義，
@@ -232,71 +277,99 @@ function applySpecialEvo(snap, to, now) {
     return prev;
 }
 
-function applyRanchOp(st, force, ranchFile) {
+// 回傳值的語意（呼叫端靠它決定要不要套用配對的 force.character，見 applyForceFlags）：
+//   null                         這一拍沒有新指令（沒有 op、或時戳已經處理過）
+//   { op, ok:true, ... }         成功
+//   { op, ok:false, retry:true } 這一拍不能做，但**指令保留**，下一拍再試
+//   { op, ok:false }             永久失敗，指令已消耗
+function applyRanchOp(st, force, ranchFile, forceFile) {
     const op = force.ranchOp;
     if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
-    st.lastRanchTriggerTs = force.ranchTriggerTs;   // 不論成敗都記，避免 stale 重放
+
+    // 表演中不動牧場：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀。
+    // ⚠️ 這一段要在「消耗時戳」**之前**，而且回 retry —— 舊版在這裡直接丟掉指令，
+    //    於是「戰鬥動畫播放中按收進牧場」會變成：牧場沒收到，但配對的抽新角色照做，
+    //    現役被蓋掉且沒存進去＝永久遺失。戰鬥有 19 拍，那個窗口一點都不窄。
+    //    改成保留指令，動畫播完的下一拍自然就成功了。
+    if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) {
+        return { op: op.op, ok: false, retry: true, reason: 'busy' };
+    }
+
+    st.lastRanchTriggerTs = force.ranchTriggerTs;   // 從這裡開始，這道指令算用掉了
 
     // 過期的指令不補做。下界給 5 秒的餘裕而不是 0 —— CLI 與當家端可能是不同 process，
     // 系統時鐘微調（NTP、休眠喚醒）就足以讓時戳看起來「來自未來」，
     // 嚴格要求 age >= 0 會讓指令無聲消失，而使用者只會看到「打了沒反應」。
     const age = Date.now() - force.ranchTriggerTs;
-    if (!(age >= -5000 && age < 300000)) return null;
-
-    // 表演中不動牧場：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀
-    if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) return null;
+    if (!(age >= -5000 && age < 300000)) {
+        if (op.op === 'keep' && forceFile) clearForceCharacter(forceFile);   // 同上
+        return { op: op.op, ok: false, reason: 'expired' };
+    }
 
     const ranch = loadRanch(ranchFile);
 
     if (op.op === 'release') {
         const i = ranch.pets.findIndex(p => p.id === op.id);
-        if (i < 0) return null;
+        if (i < 0) return { op: 'release', ok: false, reason: 'notfound' };
         ranch.pets.splice(i, 1);
         saveRanch(ranch, ranchFile);
-        return { op: 'release' };
+        return { op: 'release', ok: true };
     }
 
     if (op.op === 'keep') {
-        if (ranch.pets.length >= ranchCap()) return null;   // 滿了就不收（CLI 已擋，這是第二道）
+        // 滿了就不收（CLI 已擋，這是第二道 —— 兩次檢查之間可能又被別的視窗收了一隻）
+        if (ranch.pets.length >= ranchCap()) {
+            // 永久失敗 → 把配對的「抽新的」也一起作廢，否則下一拍時戳已過期、
+            // keepFailed 不再成立，那隻新角色就會補上來把現役蓋掉。
+            if (forceFile) clearForceCharacter(forceFile);
+            return { op: 'keep', ok: false, reason: 'full' };
+        }
         ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
         saveRanch(ranch, ranchFile);
         // 抽新的那一步交給 force.character（CLI 一併寫入），走既有的換角色路徑
-        return { op: 'keep' };
+        return { op: 'keep', ok: true };
     }
 
     if (op.op === 'swap') {
         const i = ranch.pets.findIndex(p => p.id === op.id);
-        if (i < 0) return null;
+        if (i < 0) return { op: 'swap', ok: false, reason: 'notfound' };
         const incoming = ranch.pets[i];
         ranch.pets.splice(i, 1);
         ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
         saveRanch(ranch, ranchFile);
         restorePet(st, incoming.state);
-        return { op: 'swap', to: st.characterId };
+        return { op: 'swap', ok: true, to: st.characterId };
     }
-    return null;
+    return { op: op.op, ok: false, reason: 'unknown' };
 }
 
 // ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────
 // 讀 force-char.json 把 cheat/指令轉成 st 上的 _force* 旗標與持續開關；每拍都要跑
 // （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
 const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
-function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
+// ranchFile 只有測試會傳 —— 沒有它就只能拿真的 ranch.json 來驗「收進去失敗時
+// 不可以換角色」，那條路徑一跑就會動到使用者的牧場。
+function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
     // 牧場的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
     // ⚠️ 放在下面的話，force-char.json 不存在時 parse 會 throw、整個函式提早 return，
     //    牧場就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
     //    任何 vpet 指令）。實測就是這樣抓到的：測試全綠但真機上放了一隻 Child 進牧場，
     //    規則永遠不會觸發。
-    applyRanchAging(st);
+    applyRanchAging(st, ranchFile);
 
     let force;
     try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
 
     // 牧場操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
     // 順序反過來的話收進牧場的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
-    applyRanchOp(st, force);
+    const ranchRes = applyRanchOp(st, force, ranchFile, forceFile);
 
-    if (force.character) {
+    // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
+    // ⚠️ 收起來失敗時**絕對不能**換角色 —— 換了就等於現役被新角色蓋掉、
+    //    而且沒有存進牧場，永久遺失。舊版沒有這道判斷（回傳值直接丟掉）。
+    const keepFailed = ranchRes && ranchRes.op === 'keep' && ranchRes.ok === false;
+
+    if (force.character && !keepFailed) {
         const changed = st.characterId !== force.character;
         st.characterId = force.character;
         if (changed) {
@@ -534,7 +607,7 @@ const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 // 心智模型是冰箱：同時只有一隻現役，現役會成長，牧場裡的全部凍結。
 // 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），牧場收「個體」（這一隻本人）。
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
-const RANCH_CAP  = 5;
+const RANCH_CAP  = 3;
 
 // 收進牧場時**丟掉**的欄位。其餘一律保存。
 //
@@ -608,7 +681,7 @@ function loadRanch(file) {
 /** 目前的收納上限。一律以常數為準，不看存檔。 */
 function ranchCap() { return RANCH_CAP; }
 function saveRanch(r, file) {
-    atomicWrite(file || RANCH_FILE, JSON.stringify(r));
+    return atomicWrite(file || RANCH_FILE, JSON.stringify(r));
 }
 
 // 短亂數 id。**不能用 characterId 當識別** —— 一直 reset 會有好幾隻 agumon，
@@ -946,15 +1019,21 @@ function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 // 顯示用角色名：runtime 的 id 一律小寫（assets/<lc>/），大小寫真相在 config.name
 // （＝原始資料夾名，如 BurningGodzilla / BabyGodZilla / Godzilla_Jr）。
 // 舊資料 name 是小寫或缺漏時，退回「首字大寫」的舊行為，不會壞。
+// 底線是**資料夾名的產物**（Agumon_Black / GodZilla_1954），不是角色名字的一部分，
+// 所以顯示前一律換成空白。兩條 return 路徑都要換 —— config.name 通常就等於資料夾名，
+// 只改其中一條的話 23 隻裡沒有一隻會生效。
+// 長度不變（一個字元換一個字元），所以卡片那邊「補滿或截斷到 TEXT_W」的排版不受影響。
+const prettyName = (s) => String(s).replace(/_/g, ' ');
+
 function getDisplayName(name) {
     if (!name) return '';
     try {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
         if (typeof config.name === 'string' && config.name && config.name.toLowerCase() === String(name).toLowerCase()) {
-            return config.name;   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
+            return prettyName(config.name);   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
         }
     } catch(e) {}
-    return name.charAt(0).toUpperCase() + name.slice(1);
+    return prettyName(name.charAt(0).toUpperCase() + name.slice(1));
 }
 
 // 角色的內部分類標籤（config.tags）。給 tag_battles 進化條件判斷對手屬性用；不對玩家顯示。
@@ -2267,7 +2346,7 @@ module.exports = {
     decideEvoFrame,
     composeEvoScene,
     composeDropScene,
-    loadState, saveState, atomicWrite,
+    loadState, saveState, atomicWrite, TRANSIENT_WRITE_ERRS, WRITE_RETRIES,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
     decideAgumon,
     checkEvolution,

@@ -89,6 +89,9 @@ function renderProbe(js) {
                    + 'view:(v)=>{view=v;},'
                    // 拎起／放下的上下位移在 drag 這個模組層變數裡，從外面碰不到 -> 開個把手
                    + 'hold:(d)=>{drag=d;},lift:()=>liftNow(),'
+                   + 'failMsg:(r,a)=>failMsg(r,a),'
+                   + 'ranchFull:()=>ranchFull(),'
+                   + 'setYard:(y)=>{lastYard=y;},setState:(x)=>{lastState=x;},'
                    + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
@@ -177,6 +180,58 @@ function renderProbe(js) {
        `落地位置沒有回到地面：${landed.body}，應為 ${start.body}`);
 
     g.__p.hold(null);                 // 收乾淨，別留給後面的斷言
+
+    // ── 牧場滿了要在按下去之前就知道 ────────────────────────────────
+    // 回報過「按收進牧場先被問『確定嗎？』，按了確定才說牧場已滿」。
+    // 人數前端本來就有（院子分頁的 /yard、家裡分頁的 /state），只是以前沒拿來用。
+    console.log('— 牧場滿了先擋 —');
+    const RF = g.__p.ranchFull;
+    ok(typeof RF === 'function', 'ranchFull 沒有露出來，這節等於沒測到');
+    if (typeof RF === 'function') {
+        g.__p.setYard(null); g.__p.setState(null);
+        ok(RF() === null, '什麼資料都還沒有時應該回 null（別擋，讓 CLI 那道去判）');
+
+        // 家裡分頁：只有 /state
+        g.__p.setState({ ranch: { kept: 5, cap: 5 } });
+        ok(RF() && RF().full === true, '家裡分頁沒認出牧場已滿');
+        g.__p.setState({ ranch: { kept: 4, cap: 5 } });
+        ok(RF() && RF().full === false, '沒滿卻被當成滿的（正常的收進牧場會被擋掉）');
+
+        // 院子分頁：/yard 比較新，要優先
+        g.__p.setYard({ kept: 5, cap: 5 });
+        g.__p.setState({ ranch: { kept: 1, cap: 5 } });
+        ok(RF().kept === 5, '/yard 比 /state 新，應該優先採用它');
+
+        // 舊版的 /state 沒有 ranch 欄位 → 當成不知道，不要擋
+        g.__p.setYard(null); g.__p.setState({ tick: 1 });
+        ok(RF() === null, '舊版 /state 沒有 ranch 欄位時應該回 null，不是當成 0/0 亂擋');
+        g.__p.setYard(null); g.__p.setState(null);
+    }
+
+    // ── 指令失敗時訊息列要說出理由 ──────────────────────────────────
+    // 回報過「daemon 執行收進牧場的提示沒變」。後端其實是對的（回 ok:false 加
+    // 「牧場已滿（5/5）…」），但前端只把動作名放進訊息列、真正的理由塞到畫布下方的
+    // 輸出區 —— 按了鈕只看到一句沒資訊的紅字。
+    console.log('— 失敗訊息 —');
+    const F = g.__p.failMsg;
+    ok(typeof F === 'function', 'failMsg 沒有露出來，這節等於沒測到');
+    if (typeof F === 'function') {
+        ok(F({ ok: false, output: '牧場已滿（5/5）。先 vpet release <編號> 騰出位置。' }, 'keep')
+             .includes('牧場已滿'),
+           '失敗訊息沒有把 CLI 的理由帶上來（使用者只會看到「失敗：keep」）');
+        // CLI 第一行是結論，後面常是清單或細節 —— 訊息列只要第一行
+        const multi = F({ ok: false, output: '第一行結論\n第二行細節\n第三行' }, 'x');
+        ok(multi === '第一行結論', '多行輸出應該只取第一行，得到 ' + JSON.stringify(multi));
+        // 前面的空行不能讓它變成空訊息
+        ok(F({ ok: false, output: '\n   \n實際內容' }, 'x') === '實際內容',
+           '開頭的空白行讓訊息變空了');
+        // error 優先（不是走 CLI 的那些指令用這個）
+        ok(F({ ok: false, error: '要指定是哪一隻', output: '別的' }, 'x') === '要指定是哪一隻',
+           'r.error 應該優先於 output');
+        // 兩個都沒有才退回動作名 —— 這是舊版**唯一**會走到的分支
+        ok(F({ ok: false }, 'keep') === '失敗：keep', '什麼都沒有時應該退回動作名');
+        ok(F({ ok: false, output: '   ' }, 'keep') === '失敗：keep', '全空白的輸出應該視同沒有');
+    }
 }
 
 // 等 daemon 真的開始聽，而不是固定睡一段時間。

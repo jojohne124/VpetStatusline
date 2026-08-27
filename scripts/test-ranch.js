@@ -144,6 +144,157 @@ console.log('— swap —');
 }
 
 // ── 5. 上限與 release ──────────────────────────────────────────────────
+console.log('— 寫檔失敗不可以靜默 —');
+{
+    // 舊版的 atomicWrite 把所有失敗完全吞掉（catch 之後只刪 tmp）。那不是少一行 log ——
+    // Windows 上 rename 蓋既有檔會偶發 EPERM/EBUSY（防毒即時掃描、搜尋索引、
+    // 另一個 vpet 行程握著 handle），一次吞掉就是一次收進牧場／放生／進化默默沒生效。
+    //
+    // 這是真的咬過才加的：完整測試套件同時在寫一堆檔時，test-ranch 偶爾紅在
+    // 「寫了卻沒生效」，單獨跑永遠重現不了 —— 兩次的症狀都是「ranch.json 的寫入不見了」。
+    const dir = path.join(TMP, 'aw');
+    fs.mkdirSync(dir, { recursive: true });
+
+    // atomicWrite 在 tick 路徑上，丟例外就是整個 tick 掛掉 —— 所以這裡一律包起來，
+    // 讓「它丟例外了」變成一條紅字，而不是整支測試死掉、連結果都印不出來。
+    const w = (f, d) => { try { return core.atomicWrite(f, d); } catch (e) { return 'THREW: ' + e.message; } };
+
+    const good = path.join(dir, 'good.json');
+    ok(w(good, '{"x":1}') === true, '正常寫入應該回 true');
+    ok(fs.readFileSync(good, 'utf8') === '{"x":1}', '正常寫入的內容不對');
+
+    // 寫不進去：拿資料夾當目標，rename 一定失敗
+    const blocked = path.join(dir, 'blocked.json');
+    fs.mkdirSync(blocked);
+    ok(w(blocked, '{}') === false,
+       '寫失敗卻回報成功 —— 呼叫端會以為存好了');
+    ok(fs.existsSync(blocked + '.write-fail.log'),
+       '寫失敗沒有留下任何痕跡（下次再遇到一樣查不出來）');
+    ok(/EPERM|EACCES|EBUSY|EISDIR|ENOTDIR/.test(fs.readFileSync(blocked + '.write-fail.log', 'utf8')),
+       '痕跡裡沒有錯誤碼，等於沒寫');
+
+    // 失敗時不能留下垃圾 tmp
+    const junk = fs.readdirSync(dir).filter(f => f.endsWith('.tmp'));
+    ok(junk.length === 0, `失敗後殘留了 ${junk.length} 個 .tmp`);
+
+    // saveRanch 要把成敗傳出去（applyRanchOp 之後才有機會知道自己白做了）
+    ok(core.saveRanch({ v: 1, pets: [] }, path.join(dir, 'r.json')) === true,
+       'saveRanch 正常時應該回 true');
+    ok(core.saveRanch({ v: 1, pets: [] }, blocked) === false,
+       'saveRanch 失敗時應該回 false');
+
+    // 暫時性錯誤要重試、永久性錯誤要立刻放棄 ——
+    // 不分的話，磁碟滿了或路徑不合法時每次寫都要白等好幾十毫秒。
+    //
+    // ⚠️ 這條走了兩次冤枉路，寫下來免得再來一次：
+    //    1. 第一版用「花了多久」比較 —— 抓不到「永久錯誤也重試」，因為不合法路徑
+    //       就算重試 5 次也只有 20ms，還是短於被擋住那個的 69ms。
+    //    2. 第二版改成從 .write-fail.log 讀次數，但**路徑本身太長時，那個 log 也寫不進去**
+    //       （log 的路徑更長）。用路徑類的錯誤來測分類，天生測不到。
+    //    所以分成兩條各測各的：暫時性看實際重試次數，分類本身直接驗表。
+    const tries = (f) => {
+        const L = fs.readFileSync(f + '.write-fail.log', 'utf8').trim().split('\n');
+        return +(/tries=(\d+)/.exec(L[L.length - 1]) || [])[1];
+    };
+    w(blocked, '{}');
+    ok(tries(blocked) > 1, `暫時性錯誤沒有重試（tries=${tries(blocked)}）`);
+    ok(tries(blocked) === core.WRITE_RETRIES + 1,
+       `重試次數與 WRITE_RETRIES 對不上（tries=${tries(blocked)}, 上限=${core.WRITE_RETRIES}）`);
+
+    // 分類表：這幾個是 Windows 上「等一下就好」的（防毒/索引/別的行程握著 handle）
+    for (const c of ['EPERM', 'EBUSY', 'EACCES'])
+        ok(core.TRANSIENT_WRITE_ERRS.has(c), c + ' 應該算暫時性（Windows 上很常見，重試就過）');
+    // 這幾個重試再多次也一樣，白等而已
+    for (const c of ['ENOSPC', 'EROFS', 'ENAMETOOLONG', 'EISDIR'])
+        ok(!core.TRANSIENT_WRITE_ERRS.has(c), c + ' 不該重試（再試幾次都一樣）');
+
+    // 不管路徑多離譜都不可以丟例外 —— 這是寫檔路徑，丟出去就是整個 tick 掛掉
+    ok(w(path.join(dir, 'x'.repeat(400) + '.json'), '{}') === false, '路徑不合法時應該回 false（或它直接丟了例外）');
+}
+
+console.log('— 收進牧場失敗時不可以換角色 —');
+{
+    // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
+    // 舊版把 applyRanchOp 的回傳值丟掉、force.character 照套 —— 收起來失敗時
+    // 現役就被新角色蓋掉、而且沒進牧場，**永久遺失**。
+    // 這一節把三種失敗情況都跑過一遍。
+    const FORCE = path.join(TMP, 'force-keep.json');
+    const writeForce = (o) => fs.writeFileSync(FORCE, JSON.stringify(o));
+    const fill = (n) => fs.writeFileSync(RANCH, JSON.stringify({ v: 1, pets:
+        Array.from({ length: n }, (_, i) => ({ id: 'q' + i, keptAt: i + 1,
+            state: { characterId: 'agumon' } })) }));
+    const CAP = core.ranchCap();
+
+    // (1) 牧場已滿 —— 永久失敗
+    fill(CAP);
+    const st1 = { characterId: 'greymon' };
+    writeForce({ ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' }, character: 'gabumon' });
+    core.applyForceFlags(st1, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === CAP, '滿了還是收進去了');
+    ok(st1.characterId === 'greymon',
+       `滿了卻把現役換成 ${st1.characterId} —— 那隻沒進牧場，永久遺失`);
+    // 配對的「抽新的」要一起作廢，否則下一拍時戳過期、gate 失效，新角色會補上來蓋掉現役
+    const f1 = JSON.parse(fs.readFileSync(FORCE, 'utf8'));
+    ok(!f1.character, '永久失敗後 force.character 沒被清掉（下一拍還是會把現役蓋掉）');
+
+    // (2) 表演播放中 —— 暫時失敗，指令要保留、下一拍再試
+    fill(1);
+    const st2 = { characterId: 'greymon', battleStartStep: 5 };
+    const ts = Date.now();
+    writeForce({ ranchTriggerTs: ts, ranchOp: { op: 'keep' }, character: 'gabumon' });
+    core.applyForceFlags(st2, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === 1, '表演中不該動牧場');
+    ok(st2.characterId === 'greymon',
+       `表演中卻換了角色（${st2.characterId}）—— 現役被蓋掉且沒進牧場`);
+    ok(st2.lastRanchTriggerTs !== ts,
+       '表演中就把指令用掉了 —— 動畫播完之後不會再試，等於整個吞掉');
+    // 動畫播完 → 同一份 force 應該自然成功
+    delete st2.battleStartStep;
+    core.applyForceFlags(st2, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === 2, '動畫播完之後沒有補做收進牧場');
+    ok(st2.characterId === 'gabumon', '收進去成功了卻沒換成新角色');
+    ok(core.loadRanch(RANCH).pets.some(p => p.state.characterId === 'greymon'),
+       '收進牧場的不是原本那隻現役');
+
+    // (3) 指令過期 —— 永久失敗
+    fill(1);
+    const st3 = { characterId: 'greymon' };
+    writeForce({ ranchTriggerTs: Date.now() - 10 * 60 * 1000,
+                 ranchOp: { op: 'keep' }, character: 'gabumon' });
+    core.applyForceFlags(st3, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === 1, '過期的指令被補做了');
+    ok(st3.characterId === 'greymon', '過期卻換了角色 —— 現役遺失');
+
+    // (4) 正常情況不能被擋到
+    fill(1);
+    const st4 = { characterId: 'greymon' };
+    writeForce({ ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' }, character: 'gabumon' });
+    core.applyForceFlags(st4, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === 2, '正常的收進牧場被擋掉了');
+    ok(st4.characterId === 'gabumon', '正常情況沒有換成新角色');
+
+    // (5) 沒有 ranchOp 的單純換角色不該被波及
+    fill(1);
+    const st5 = { characterId: 'greymon' };
+    writeForce({ character: 'gabumon' });
+    core.applyForceFlags(st5, FORCE, RANCH);
+    ok(st5.characterId === 'gabumon', '單純換角色被牧場的 gate 擋掉了');
+
+    // (6) gate 只該擋 keep。
+    // ⚠️ 上面那條擋不住「把 gate 寫成『任何 ranch 操作失敗就不換角色』」——
+    //    它根本沒有 ranchOp，壓根進不到 gate。要用**別的 op 失敗**才驗得到範圍。
+    //    keep 之所以特殊，是因為只有它的「換角色」跟「收進牧場」是配對的一件事。
+    fill(1);
+    const st6 = { characterId: 'greymon' };
+    writeForce({ ranchTriggerTs: Date.now(),
+                 ranchOp: { op: 'release', id: 'nope' },   // 找不到 → 失敗
+                 character: 'gabumon' });
+    core.applyForceFlags(st6, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets.length === 1, 'release 找不到卻刪掉了東西');
+    ok(st6.characterId === 'gabumon',
+       'release 失敗連帶把換角色也擋掉了 —— gate 應該只針對 keep');
+}
+
 console.log('— 上限 / release —');
 {
     const CAP = core.ranchCap();

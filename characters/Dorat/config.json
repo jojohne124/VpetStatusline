@@ -1,7 +1,7 @@
 {
   "name": "Dorat",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Child",
+  "power": 25,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "king_ghidorah_1991",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 5
+        }
+      ]
+    }
+  ]
 }

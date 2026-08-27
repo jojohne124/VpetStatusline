@@ -1,7 +1,7 @@
 {
   "name": "Keramon",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Child",
+  "power": 30,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "chrysalimon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 55,
+          "minBattles": 5
+        }
+      ]
+    }
+  ]
 }

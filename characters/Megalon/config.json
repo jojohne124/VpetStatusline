@@ -1,7 +1,7 @@
 {
   "name": "Megalon",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Ultimate",
+  "power": 170,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

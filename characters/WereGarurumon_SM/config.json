@@ -1,7 +1,7 @@
 {
   "name": "WereGarurumon_SM",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Perfect",
+  "power": 123,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "metalgarurumonx",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
 }

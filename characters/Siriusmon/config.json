@@ -1,7 +1,7 @@
 {
   "name": "Siriusmon",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Ultimate",
+  "power": 175,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

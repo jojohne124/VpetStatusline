@@ -153,7 +153,13 @@
     "angoramon",
     "jellymon",
     "fujamon",
-    "betamon"
+    "betamon",
+    "agumon_black",
+    "dorat",
+    "gammamon",
+    "kakamon",
+    "keramon",
+    "mothra_larva"
   ],
   "starterWeights": {
     "agumon": 5,
@@ -174,7 +180,10 @@
     "angoramon",
     "babygodzilla",
     "commandramon",
+    "dorat",
+    "gammamon",
     "jellymon",
+    "keramon",
     "loogamon",
     "pteromon"
   ]

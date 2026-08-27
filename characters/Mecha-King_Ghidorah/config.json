@@ -1,7 +1,7 @@
 {
   "name": "Mecha-King_Ghidorah",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Perfect",
+  "power": 128,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "king_ghidorah_2001",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 70,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
 }

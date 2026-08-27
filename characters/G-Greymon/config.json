@@ -1,7 +1,7 @@
 {
   "name": "G-Greymon",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Adult",
+  "power": 80,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

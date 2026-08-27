@@ -1,7 +1,7 @@
 {
   "name": "King_Ghidorah_1991",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Adult",
+  "power": 80,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,34 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "mecha-king_ghidorah",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 8
+        }
+      ]
+    },
+    {
+      "character": "monster_x",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 8
+        }
+      ]
+    }
+  ]
 }

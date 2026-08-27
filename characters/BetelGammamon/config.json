@@ -1,7 +1,7 @@
 {
   "name": "BetelGammamon",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Adult",
+  "power": 75,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "canoweissmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 15
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 8
+        }
+      ]
+    }
+  ]
 }

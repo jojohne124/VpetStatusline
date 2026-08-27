@@ -1,7 +1,7 @@
 {
   "name": "King_Ghidorah_2001",
-  "stage": "UnStage",
-  "power": 0,
+  "stage": "Ultimate",
+  "power": 180,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

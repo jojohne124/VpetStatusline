@@ -229,6 +229,100 @@ console.log('— 面向 —');
     ok(spin === 0, `沒有水平移動卻翻面 ${spin} 次`);
 }
 
+// ── 4.5 客製右向幀 ───────────────────────────────────────────────────
+// Mastemon 左半天使（白／銀／金髮／水藍）、右半惡魔（紫黑／黃綠／粉），這個
+// 左右分色是設計本身、不是視角 —— 純鏡射會把黑白兩半互換，看起來像換了一隻。
+// 所以她自帶 _r 幀（config.rightOffset），輪廓照鏡射、顏色留在原本的螢幕半邊。
+// 產生方式見 scripts/gen-mastemon-right.js。
+console.log('— 客製右向幀 —');
+{
+    const fs = require('fs');
+    const CHARS = path.join(__dirname, '..', 'characters');
+    const TWO_TONE = ['Mastemon'];     // 左右分色、不能靠純鏡射的角色
+
+    // 4.5-a 全體：有 rightOffset 就必須真的有那麼多幀，否則 runtime 會抓到 undefined
+    const bad = [];
+    for (const name of fs.readdirSync(CHARS)) {
+        const cfgP = path.join(CHARS, name, 'config.json');
+        const artP = path.join(CHARS, name, 'art.json');
+        if (!fs.existsSync(cfgP) || !fs.existsSync(artP)) continue;
+        const cfg = JSON.parse(fs.readFileSync(cfgP, 'utf8'));
+        if (cfg.rightOffset == null) continue;
+        const art = JSON.parse(fs.readFileSync(artP, 'utf8'));
+        if (art.frames.length !== cfg.rightOffset + cfg.frameCount)
+            bad.push(`${name}: art ${art.frames.length} 幀 ≠ rightOffset ${cfg.rightOffset} + frameCount ${cfg.frameCount}`);
+    }
+    ok(bad.length === 0, '幀數與 rightOffset 不符：' + bad.join('；'));
+
+    for (const name of TWO_TONE) {
+        const cfg = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'config.json'), 'utf8'));
+        ok(cfg.rightOffset != null, `${name} 缺 rightOffset，右向會被鏡射（黑白兩半互換）`);
+        if (cfg.rightOffset == null) continue;   // 後面每一條都要用它，沒有就別再往下炸
+
+        // 4.5-b 這才是真正要守住的性質：專屬色階不能換邊。
+        // 用左向幀統計每個顏色的左右偏向，bias ≥ .7 算天使專屬、≤ -.7 算惡魔專屬，
+        // 然後看右向幀裡這兩群色的平均 x —— 天使必須還在左半、惡魔還在右半。
+        const px = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'pixels.json'), 'utf8'));
+        const N  = px.width;
+        const st = new Map();
+        for (const f of px.frames.slice(0, cfg.frameCount))
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+                const c = f[y * N + x]; if (!c) continue;
+                const k = c.join(','), e = st.get(k) || { L: 0, R: 0 };
+                if (x < N / 2) e.L++; else e.R++; st.set(k, e);
+            }
+        const side = c => {
+            if (!c) return null;
+            const e = st.get(c.join(',')); if (!e) return null;
+            const b = (e.L - e.R) / (e.L + e.R);
+            return b >= 0.7 ? 'A' : b <= -0.7 ? 'D' : null;
+        };
+        const meanX = (from, to) => {
+            let ax = 0, an = 0, dx = 0, dn = 0;
+            for (let i = from; i < to; i++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+                const t = side(px.frames[i][y * N + x]);
+                if (t === 'A') { ax += x; an++; } else if (t === 'D') { dx += x; dn++; }
+            }
+            return { a: ax / an, d: dx / dn };
+        };
+        const L = meanX(0, cfg.frameCount);
+        const R = meanX(cfg.rightOffset, cfg.rightOffset + cfg.frameCount);
+        ok(R.a < N / 2, `${name} 右向幀的天使專屬色跑到右半了（平均 x=${R.a.toFixed(2)}）`);
+        ok(R.d > N / 2, `${name} 右向幀的惡魔專屬色跑到左半了（平均 x=${R.d.toFixed(2)}）`);
+        // 容差放到 2.5：換色表是多對一（天使 10 階併進惡魔 4 階），兩群的
+        // 像素數會失衡，重心因此會位移一格多，那是正常的、不是換錯邊。
+        ok(Math.abs(R.a - L.a) < 2.5 && Math.abs(R.d - L.d) < 2.5,
+           `${name} 右向幀的分色位置與左向差太多（天使 ${L.a.toFixed(2)}→${R.a.toFixed(2)}，惡魔 ${L.d.toFixed(2)}→${R.d.toFixed(2)}）`);
+
+        // 4.5-c 輪廓要真的鏡射過，而且不能只是純鏡射（那就是現在要修的 bug）
+        if (!core || !core.getFacingRows) { skip++; console.log('  – 讀不到 agumon-core，跳過輪廓檢查'); }
+        else {
+            let shapeDiff = 0, plainFlip = 0, identical = 0;
+            for (let i = 0; i < cfg.frameCount; i++) {
+                const l = px.frames[i], r = px.frames[cfg.rightOffset + i];
+                for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
+                    if (!!l[y * N + (N - 1 - x)] !== !!r[y * N + x]) shapeDiff++;
+                const art = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'art.json'), 'utf8'));
+                const a = JSON.stringify(core.getFacingRows(art, i, 'left',  cfg.rightOffset));
+                const b = JSON.stringify(core.getFacingRows(art, i, 'right', cfg.rightOffset));
+                if (b === JSON.stringify(core.flipRows(JSON.parse(a)))) plainFlip++;
+                if (b === a) identical++;
+            }
+            ok(shapeDiff === 0, `${name} 右向幀的輪廓沒有照鏡射（差 ${shapeDiff} 格）`);
+            ok(plainFlip === 0, `${name} 有 ${plainFlip} 幀的右向就是純鏡射，等於沒修`);
+            ok(identical === 0, `${name} 有 ${identical} 幀的右向直接等於左向原圖（沒鏡射）`);
+        }
+
+        // 4.5-d cut-in 同理：runtime 沒有 frames[1] 就會翻轉 frames[0]
+        const cut = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'cutin-art.json'), 'utf8'));
+        ok(cut.frames.length === 2, `${name} 的 cutin-art.json 只有 ${cut.frames.length} 幀，我方 cut-in 會被翻轉`);
+        if (cut.frames.length === 2 && core && core.flipRows)
+            ok(JSON.stringify(cut.frames[1]) !== JSON.stringify(core.flipRows(cut.frames[0])),
+               `${name} 的 cut-in 右向幀就是純鏡射`);
+    }
+}
+
+
 // ── 5. 合成：尺寸、y 排序、跨 client 一致 ─────────────────────────────
 console.log('— 合成 —');
 if (!hasArt) { skip++; console.log('  – 讀不到角色美術，跳過'); }

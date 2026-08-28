@@ -4,6 +4,7 @@
 
 - [agumon installed 為權威版本](feedback_agumon_authoritative.md) — `.claude/agumon-statusline/` 為真理；改完要反向同步到 `agumon-cli/src/runtime/` 否則 install 會吃掉
 - [.bat 要 ASCII-only](feedback_bat_ascii_only.md) — Windows .bat 放中文會被 cmd 依 Big5 誤解析→雙擊閃退；註解/echo 全用英文(route-editor.bat已修;editor.bat有同潛在問題)
+- [左右不對稱配色角色的 _r 幀](feedback_asymmetric_right_frames.md) — 慣例看 G-Greymon；三步：建換色表(bias分類+同色系明暗排序)→鏡射→套表；反向要取該階最大宗色否則冒棕塊
 - [加角色一律先跑 add-character.js --check](feedback_char_source_16x16.md) — 別再自己重寫網格偵測；實體尺寸無關，邏輯網格必須=targetSize(16)
 - [install.js 跨機 hook 寫入](feedback_install_hook_crossmachine.md) — updateSettings() 對 hook 要「沒有就新增」+「有就更新」雙路徑，否則新機 hook 不作用
 - [多視窗 race 與動畫純函數 + per-window cost](feedback_multi_window_race.md) — 共享 state、讀 per-window input 都要小心：幀類 toggle 用純函數；`_evoCostBase` 用 sticky max bump

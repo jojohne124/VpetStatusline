@@ -294,6 +294,26 @@ console.log('— 客製右向幀 —');
         ok(Math.abs(R.a - L.a) < 2.5 && Math.abs(R.d - L.d) < 2.5,
            `${name} 右向幀的分色位置與左向差太多（天使 ${L.a.toFixed(2)}→${R.a.toFixed(2)}，惡魔 ${L.d.toFixed(2)}→${R.d.toFixed(2)}）`);
 
+        // 4.5-b2 _r 面對玩家的是天使側，所以它的天使側要比原圖天使側更亮
+        // （惡魔半身本來就暗，直接鏡射過來會太多黑點）。
+        const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        const bright = (from, to) => {
+            let n = 0, sum = 0, white = 0;
+            for (let i = from; i < to; i++) for (let y = 0; y < N; y++) for (let x = 0; x < N / 2; x++) {
+                const c = px.frames[i][y * N + x]; if (!c) continue;
+                const L = lum(c); n++; sum += L; if (L >= 150) white++;
+            }
+            return { mean: sum / n, whitePct: 100 * white / n };
+        };
+        const bL = bright(0, cfg.frameCount);
+        const bR = bright(cfg.rightOffset, cfg.rightOffset + cfg.frameCount);
+        // 門檻要拉開：光寫 > 會被「只亮 1%」的版本混過去（實測過會假綠）。
+        // 現況是 lum 109.7 → 129.6（+18%）、亮點 35% → 44%（+9pt）。
+        ok(bR.mean >= bL.mean * 1.10,
+           `${name} 的 _r 天使側不夠亮，平均 lum ${bL.mean.toFixed(1)} → ${bR.mean.toFixed(1)}（要 >= ${(bL.mean*1.10).toFixed(1)}）`);
+        ok(bR.whitePct >= bL.whitePct + 5,
+           `${name} 的 _r 天使側亮點不夠多，${bL.whitePct.toFixed(0)}% → ${bR.whitePct.toFixed(0)}%（要 >= ${(bL.whitePct+5).toFixed(0)}%）`);
+
         // 4.5-c 輪廓要真的鏡射過，而且不能只是純鏡射（那就是現在要修的 bug）
         if (!core || !core.getFacingRows) { skip++; console.log('  – 讀不到 agumon-core，跳過輪廓檢查'); }
         else {

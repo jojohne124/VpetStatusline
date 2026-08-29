@@ -9,6 +9,11 @@
 # 切到本檔所在的 repo 目錄（雙擊時工作目錄不一定正確）
 cd "$(dirname "$0")"
 
+# 雙擊 .command 是非登入 shell，不會載入 ~/.bashrc / ~/.zprofile，
+# node（~/.local/bin）不在 PATH 會直接 command not found → 視窗閃退。
+# 補上與 .bashrc 相同的 PATH，確保雙擊也找得到 node。
+export PATH="$HOME/.local/bin:$PATH"
+
 # 關掉占用 3000 port 的舊 server
 OLD_PID=$(lsof -ti tcp:3000 2>/dev/null)
 if [ -n "$OLD_PID" ]; then

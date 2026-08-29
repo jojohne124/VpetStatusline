@@ -11,6 +11,10 @@
 # 切到本 sh 所在的 repo 目錄
 cd "$(dirname "$0")"
 
+# 非登入 shell 不會載入 ~/.bashrc / ~/.zprofile，node（~/.local/bin）可能不在 PATH。
+# 補上與 .bashrc 相同的 PATH，確保任何啟動方式都找得到 node。
+export PATH="$HOME/.local/bin:$PATH"
+
 # 關掉占用 3000 port 的舊 server
 OLD_PID=$(lsof -ti tcp:3000 2>/dev/null)
 if [ -n "$OLD_PID" ]; then

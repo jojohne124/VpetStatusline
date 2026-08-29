@@ -1,7 +1,7 @@
 {
   "name": "Dorat",
   "stage": "Child",
-  "power": 25,
+  "power": 28,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

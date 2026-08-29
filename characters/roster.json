@@ -143,7 +143,13 @@
     "tyrannomon",
     "g-metalgarurumon",
     "metalgarurumonx",
-    "weregarurumon_sm"
+    "weregarurumon_sm",
+    "dorat",
+    "keizer_ghidorah",
+    "king_ghidorah_1991",
+    "king_ghidorah_2001",
+    "mecha-king_ghidorah",
+    "monster_x"
   ],
   "starters": [
     "agumon",
@@ -174,6 +180,7 @@
   ],
   "starterWeights": {
     "agumon": 5,
+    "agumon_black": 5,
     "betamon": 7,
     "biyomon": 5,
     "demidevimon": 5,

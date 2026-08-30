@@ -76,7 +76,7 @@
       ]
     },
     {
-      "character": "metalgarurumonx",
+      "character": "cresgarurumon",
       "conditions": [
         {
           "type": "cost_threshold",
@@ -90,7 +90,7 @@
       ]
     },
     {
-      "character": "cresgarurumon",
+      "character": "metalgarurumonx",
       "conditions": [
         {
           "type": "cost_threshold",
@@ -98,7 +98,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 65,
+          "pct": 70,
           "minBattles": 12
         }
       ]

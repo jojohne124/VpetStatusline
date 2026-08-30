@@ -10,6 +10,7 @@
     "install-runtime": "node scripts/install.js",
     "install-runtime:daemon-only": "node scripts/install.js --daemon-only",
     "build-release": "node scripts/build-release.js",
+    "build-mac-app": "node scripts/build-mac-app.js",
     "publish-release": "node scripts/publish-release.js",
     "uninstall-runtime": "node scripts/uninstall.js",
     "uninstall-runtime:purge": "node scripts/uninstall.js --purge",

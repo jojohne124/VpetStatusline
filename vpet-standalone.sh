@@ -7,6 +7,10 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PORT="${AGUMON_DAEMON_PORT:-3010}"
 
+# Non-login shells do not source ~/.bash_profile / ~/.bashrc, so node
+# (installed under ~/.local/bin) may be missing from PATH. Match .bashrc.
+export PATH="$HOME/.local/bin:$PATH"
+
 command -v node >/dev/null 2>&1 || { echo "[ERROR] Node.js not found. Install Node 18+ from https://nodejs.org/"; exit 1; }
 
 # Warn if the installed statusLine is not yet the daemon-aware (gated) version,

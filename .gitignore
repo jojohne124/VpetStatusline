@@ -35,3 +35,6 @@ server/**/.dev.vars
 
 # release 打包產物
 dist/
+
+# macOS 免小黑窗啟動器（由 tools/vpet-standalone.applescript 編譯產生）
+vpet-standalone.app/

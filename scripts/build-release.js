@@ -81,6 +81,7 @@ for (const f of ['install.js', 'uninstall.js'])
 //   .command/.sh 由 isShell() 強制 LF
 for (const f of ['install.bat', 'install.command',
                  'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
+                 'vpet-standalone.command',
                  'album.bat', 'album.sh', 'album.command',
                  // 底圖編輯器：玩家功能（改的是使用者自己的 bg.png），要出貨
                  'bg-editor.bat', 'bg-editor.sh', 'bg-editor.command',
@@ -90,6 +91,10 @@ for (const f of ['install.bat', 'install.command',
                  'install-daemon-only.bat', 'install-daemon-only.sh', 'install-daemon-only.command',
                  'uninstall.bat', 'uninstall.sh', 'uninstall.command'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
+
+// macOS 免小黑窗啟動器的來源：install.js 會在 mac 上用 osacompile 編成 .app
+// （不出貨編譯後的 .app —— 它是二進位 bundle，且 release 可能在 Windows 打包）
+copyRel(path.join('tools', 'vpet-standalone.applescript'));
 
 // tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）
 for (const f of ['vpet-tray.ps1', 'vpet.ico'])

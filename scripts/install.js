@@ -363,6 +363,24 @@ function updateSettings() {
     }
 }
 
+// macOS 免小黑窗啟動器：由 tools/vpet-standalone.applescript 編譯出 vpet-standalone.app。
+// 雙擊 .command / .sh 一定會開 Terminal 視窗，.app 不會 —— 等同 Windows 的 .vbs。
+// 只在 macOS 做，失敗不影響安裝主流程（.command/.sh 仍可用）。
+function buildMacApp() {
+    if (process.platform !== 'darwin') return;
+    const src = path.join(REPO_ROOT, 'tools', 'vpet-standalone.applescript');
+    if (!fs.existsSync(src)) return;
+    console.log('\n[mac] 建立免小黑窗啟動器 vpet-standalone.app');
+    const out = path.join(REPO_ROOT, 'vpet-standalone.app');
+    try { fs.rmSync(out, { recursive: true, force: true }); } catch (e) {}
+    const r = spawnSync('osacompile', ['-o', out, src], { stdio: 'pipe' });
+    if (!r.error && r.status === 0) {
+        console.log('  -> 已產生 vpet-standalone.app（雙擊啟動，不會有小黑窗）');
+    } else {
+        console.warn('  [warn] osacompile 失敗，改用 vpet-standalone.command / .sh（會開 Terminal 視窗）');
+    }
+}
+
 function installLauncher() {
     console.log('\n[8/8] 註冊 vpet 全域指令');
     // 首選：npm link —— npm 會把 vpet shim 放進它在 PATH 上的 global bin
@@ -437,6 +455,7 @@ function main() {
     migrateLegacyState();
     updateSettings();
     installLauncher();
+    buildMacApp();
     reportStateFiles();
 
     console.log('\n安裝完成。重新整理 Claude CLI（送一個訊息或重開）即可生效。');

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>營地走動範圍編輯器</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0d1117; color:#c9d1d9;
+         font:14px/1.6 "Noto Sans TC", ui-sans-serif, system-ui, sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid #21262d; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  .k { color:#8b949e; font-size:12px; }
+  main { display:flex; gap:18px; padding:16px; align-items:flex-start; flex-wrap:wrap; }
+  #stage { position:relative; background:#161b22; border:1px solid #30363d; border-radius:6px; }
+  canvas { display:block; border-radius:5px; cursor:default; }
+  aside { min-width:290px; max-width:340px; }
+  .box { background:#161b22; border:1px solid #30363d; border-radius:6px; padding:12px; margin-bottom:12px; }
+  .box h2 { font-size:13px; margin:0 0 8px; color:#8b949e; font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:3px 0; }
+  td.v { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+  .good { color:#3fb950; } .warn { color:#d29922; } .bad { color:#f85149; }
+  button, select, input[type=text] {
+    background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:5px;
+    padding:5px 10px; font:inherit; font-size:13px; cursor:pointer; }
+  button:hover:not(:disabled) { background:#30363d; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:#238636; border-color:#2ea043; color:#fff; }
+  button.primary:hover:not(:disabled) { background:#2ea043; }
+  input[type=text] { cursor:text; width:130px; }
+  label.inline { display:inline-flex; align-items:center; gap:5px; font-size:13px; }
+  #msg { min-height:20px; font-size:13px; margin-top:6px; }
+  .hint { color:#6e7681; font-size:12px; line-height:1.55; }
+  .legend { display:flex; gap:12px; font-size:12px; color:#8b949e; margin-top:8px; flex-wrap:wrap; }
+  .sw { display:inline-block; width:11px; height:11px; border-radius:2px; vertical-align:-1px; margin-right:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⛺ 營地走動範圍編輯器</h1>
+  <label class="inline">隻數 <select id="n"></select></label>
+  <label class="inline">切法 <select id="layout"></select></label>
+  <button id="dup">另存新切法</button>
+  <button id="del">刪除</button>
+  <span class="k" id="who">–</span>
+</header>
+
+<main>
+  <div>
+    <div id="stage"><canvas id="cv" width="624" height="480"></canvas></div>
+    <div class="legend">
+      <span><span class="sw" style="background:#58a6ff"></span>#1</span>
+      <span><span class="sw" style="background:#3fb950"></span>#2</span>
+      <span><span class="sw" style="background:#d29922"></span>#3</span>
+      <span>拖框內部＝移動、拖邊角＝改大小</span>
+      <span>框 = 身體實際會蓋到的範圍</span>
+    </div>
+    <p class="hint" style="max-width:620px">
+      灰底是整個營地（<span id="fieldsize">–</span> dot）。框畫的是<b>身體</b>會蓋到的範圍，
+      存進檔案的是角色左上角能站的範圍（差一個角色的 16 dot，自動換算）。<br>
+      <b>你拖到哪就是哪</b> —— 框等於實際可走範圍，移動不會改變大小。<br>
+      相鄰的框重疊得越多越自然，但兩隻疊在一起的時間也越長；右邊的數字就是在量這件事。
+    </p>
+  </div>
+
+  <aside>
+    <div class="box">
+      <h2>模擬（12 組 seed × 1500 拍）</h2>
+      <table>
+        <tr><td>嚴重重疊<span class="k">（蓋掉 ≥25% 身體）</span></td><td class="v" id="s-ov">–</td></tr>
+        <tr><td>平均重疊</td><td class="v" id="s-avg">–</td></tr>
+        <tr><td>場地利用<span class="k">（有沒有死區）</span></td><td class="v" id="s-cov">–</td></tr>
+        <tr><td>貼場地邊<span class="k">（門檻 8%）</span></td><td class="v" id="s-edge">–</td></tr>
+        <tr><td>最熱格<span class="k">（門檻 3.5x）</span></td><td class="v" id="s-hot">–</td></tr>
+        <tr><td>最短移動段<span class="k">（門檻 ≥5）</span></td><td class="v" id="s-leg">–</td></tr>
+      </table>
+      <div id="msg"></div>
+    </div>
+
+    <div class="box">
+      <h2>存檔</h2>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+        <input type="text" id="name" placeholder="切法名稱">
+        <label class="inline"><input type="checkbox" id="asdef" checked> 設為預設</label>
+      </div>
+      <div style="margin-top:8px"><button class="primary" id="save">存檔</button></div>
+      <p class="hint" style="margin:8px 0 0">
+        內建切法唯讀（留著當對照組），要改就另存一個名字。<br>
+        存檔會寫 <code>characters/yard-layouts.json</code> 與已安裝的 <code>assets/</code>，
+        <b>不用重跑 install</b>；營地下一次刷新就生效。
+      </p>
+    </div>
+
+    <div class="box">
+      <h2>目前區域（dot）</h2>
+      <div id="zones" class="hint" style="font-variant-numeric:tabular-nums"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const COLORS = ['#58a6ff', '#3fb950', '#d29922'];
+let ST = null;        // /state
+let n = 3;            // 目前編幾隻
+let rects = [];       // [[minX,maxX,minY,maxY] ...]（dot 絕對座標，角色左上角的可走範圍）
+let curName = '';
+let SCALE = 12;       // dot -> px
+let drag = null;
+let measureTimer = null;
+
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+// ── 座標換算 ─────────────────────────────────────────────────────────
+// rects 是 dot 絕對座標 [minX,maxX,minY,maxY]（角色**左上角**能站的範圍），
+// 畫面上編的是**身體會蓋到的範圍**（+ 一個角色的寬高）。兩者只差那 16 dot，
+// 所以換算是純粹的加減、沒有分支 —— **可逆**。
+//
+// ⚠️ 這裡刻意不用內建表那套「比例 + 接縫讓開」。那個換算在場地邊界有分支
+//    （貼邊的邊不讓、內側的邊要讓 gap），把一塊區域平移到貼邊時其中一條邊會
+//    跨過分支，尺寸就跟著變（回報：「移動區到邊緣會變動區塊大小」）。
+//    直接操作的工具不能有這種行為，所以編輯器全程用絕對座標，存下去也是。
+function rectToBody(r) {
+  const S = ST.sprite;
+  return { x: r[0], y: r[2], w: r[1] - r[0] + S, h: r[3] - r[2] + S };
+}
+function bodyToRect(b) {
+  const S = ST.sprite;
+  return [b.x, b.x + Math.max(0, b.w - S), b.y, b.y + Math.max(0, b.h - S)];
+}
+
+// ── 畫 ───────────────────────────────────────────────────────────────
+let lastZones = null;
+function draw() {
+  if (!ST) return;
+  const F = ST.field, S = ST.sprite;
+  const W = (F.maxX - F.minX + S), H = (F.maxY - F.minY + S);
+  cv.width = W * SCALE; cv.height = H * SCALE;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  // 場地
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+  ctx.strokeRect(.5, .5, cv.width - 1, cv.height - 1);
+  // 格線（每 8 dot）
+  ctx.strokeStyle = '#1f242c';
+  for (let x = 8; x < W; x += 8) { ctx.beginPath(); ctx.moveTo(x * SCALE + .5, 0); ctx.lineTo(x * SCALE + .5, cv.height); ctx.stroke(); }
+  for (let y = 8; y < H; y += 8) { ctx.beginPath(); ctx.moveTo(0, y * SCALE + .5); ctx.lineTo(cv.width, y * SCALE + .5); ctx.stroke(); }
+
+  rects.forEach((r, i) => {
+    const b = rectToBody(r), col = COLORS[i % COLORS.length];
+    ctx.fillStyle = col + '22'; ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.fillRect(b.x * SCALE, b.y * SCALE, b.w * SCALE, b.h * SCALE);
+    ctx.strokeRect(b.x * SCALE + 1, b.y * SCALE + 1, b.w * SCALE - 2, b.h * SCALE - 2);
+    // 一個角色的大小（拖到比這個小就等於那一隻站不動）
+    ctx.strokeStyle = col + '88'; ctx.lineWidth = 1;
+    ctx.strokeRect(b.x * SCALE + .5, b.y * SCALE + .5, S * SCALE, S * SCALE);
+    // 定位點（伺服器算的實際 zone 中心；放下超出範圍時走回這裡）
+    if (lastZones && lastZones[i]) {
+      const z = lastZones[i];
+      const ax = ((z.minX + z.maxX) / 2 + S / 2) * SCALE, ay = ((z.minY + z.maxY) / 2 + S / 2) * SCALE;
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(ax, ay, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay);
+      ctx.moveTo(ax, ay - 8); ctx.lineTo(ax, ay + 8); ctx.stroke();
+    }
+    ctx.fillStyle = col; ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillText('#' + (i + 1), b.x * SCALE + 6, b.y * SCALE + 16);
+  });
+  $('fieldsize').textContent = W + '×' + H;
+}
+
+// ── 滑鼠 ─────────────────────────────────────────────────────────────
+const HANDLE = 10;   // 邊角判定（px）
+function hit(mx, my) {
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const b = rectToBody(rects[i]);
+    const x = b.x * SCALE, y = b.y * SCALE, w = b.w * SCALE, h = b.h * SCALE;
+    if (mx < x - 4 || mx > x + w + 4 || my < y - 4 || my > y + h + 4) continue;
+    const e = { l: Math.abs(mx - x) < HANDLE, r: Math.abs(mx - (x + w)) < HANDLE,
+                t: Math.abs(my - y) < HANDLE, b: Math.abs(my - (y + h)) < HANDLE };
+    return { i, edge: (e.l || e.r || e.t || e.b) ? e : null };
+  }
+  return null;
+}
+cv.addEventListener('mousemove', ev => {
+  const r = cv.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  if (!drag) {
+    const h = hit(mx, my);
+    cv.style.cursor = !h ? 'default'
+      : !h.edge ? 'move'
+      : (h.edge.l && h.edge.t) || (h.edge.r && h.edge.b) ? 'nwse-resize'
+      : (h.edge.r && h.edge.t) || (h.edge.l && h.edge.b) ? 'nesw-resize'
+      : (h.edge.l || h.edge.r) ? 'ew-resize' : 'ns-resize';
+    return;
+  }
+  const F = ST.field, S = ST.sprite;
+  const maxW = F.maxX - F.minX + S, maxH = F.maxY - F.minY + S;
+  const dx = Math.round((mx - drag.mx) / SCALE), dy = Math.round((my - drag.my) / SCALE);
+  // 移動時**先夾位置、不動尺寸**；縮放時才改尺寸。兩件事混在一起就會出現
+  // 「拖到邊緣結果變小」—— 位置被夾住、寬高卻繼續被減。
+  const b = { ...drag.start };
+  if (!drag.edge) { b.x += dx; b.y += dy; }
+  else {
+    if (drag.edge.l) { b.x += dx; b.w -= dx; }
+    if (drag.edge.r) { b.w += dx; }
+    if (drag.edge.t) { b.y += dy; b.h -= dy; }
+    if (drag.edge.b) { b.h += dy; }
+  }
+  b.w = Math.max(S, Math.min(maxW, b.w)); b.h = Math.max(S, Math.min(maxH, b.h));
+  b.x = Math.max(0, Math.min(maxW - b.w, b.x));
+  b.y = Math.max(0, Math.min(maxH - b.h, b.y));
+  rects[drag.i] = bodyToRect(b);
+  draw(); scheduleMeasure();
+});
+cv.addEventListener('mousedown', ev => {
+  const r = cv.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const h = hit(mx, my);
+  if (!h) return;
+  drag = { i: h.i, edge: h.edge, mx, my, start: rectToBody(rects[h.i]) };
+  ev.preventDefault();
+});
+window.addEventListener('mouseup', () => { drag = null; });
+
+// ── 模擬 ─────────────────────────────────────────────────────────────
+function scheduleMeasure() {
+  clearTimeout(measureTimer);
+  measureTimer = setTimeout(runMeasure, 180);   // 拖的時候不要每一格都跑
+}
+async function runMeasure() {
+  const r = await (await fetch('/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify({ rects, exact: true }) })).json();
+  if (!r.ok) { $('msg').innerHTML = '<span class="bad">' + r.error + '</span>'; return; }
+  lastZones = r.zones;
+  const s = r.stats;
+  const set = (id, txt, cls) => { const e = $(id); e.textContent = txt; e.className = 'v ' + (cls || ''); };
+  set('s-ov',  s.overlapPct.toFixed(1) + '%', s.overlapPct < 10 ? 'good' : s.overlapPct < 25 ? 'warn' : 'bad');
+  set('s-avg', s.avgOverlap.toFixed(1) + ' dot²');
+  set('s-cov', s.coverPct.toFixed(0) + '%',   s.coverPct > 99 ? 'good' : s.coverPct > 90 ? 'warn' : 'bad');
+  set('s-edge', s.edgePct.toFixed(1) + '%',   s.edgePct < 8 ? 'good' : 'bad');
+  set('s-hot', s.hottest.toFixed(1) + 'x',    s.hottest < 3.5 ? 'good' : 'bad');
+  set('s-leg', String(s.shortestLeg),         s.shortestLeg >= 5 ? 'good' : 'bad');
+  $('msg').innerHTML = r.warn.length
+    ? '<span class="warn">⚠ ' + r.warn.join('；') + '</span>'
+    : (s.stayOnEdge ? '<span class="warn">⚠ 有 ' + s.stayOnEdge + ' 拍站在場地邊發呆</span>' : '');
+  $('zones').innerHTML = r.zones.map((z, i) => {
+    const b = rectToBody(rects[i]);
+    // 畫面上的框就是伺服器算出來的 zone —— 對不上代表換算又漂了，直接標紅講出來，
+    // 不要讓它變成「畫的跟跑的不一樣」那種只能靠肉眼發現的錯。
+    const same = b.x === z.minX && b.y === z.minY
+              && b.w === z.maxX - z.minX + ST.sprite && b.h === z.maxY - z.minY + ST.sprite;
+    return '<div><span class="sw" style="background:' + COLORS[i % COLORS.length] + '"></span>#' + (i + 1) + '　'
+      + (z.maxX - z.minX + 1) + '×' + (z.maxY - z.minY + 1) + ' @ (' + z.minX + ',' + z.minY + ')'
+      + (same ? '' : ' <span class="bad">框與實際不符</span>') + '</div>';
+  }).join('');
+  draw();
+}
+
+// ── 載入 / 切換 ──────────────────────────────────────────────────────
+function fillLayouts() {
+  const c = ST.counts[n];
+  const sel = $('layout');
+  sel.innerHTML = c.layouts.map(l =>
+    '<option value="' + l.name + '">' + l.name + (l.builtin ? '（內建）' : '') + (l.name === c.def ? ' ★預設' : '') + '</option>').join('');
+  sel.value = c.def && c.layouts.some(l => l.name === c.def) ? c.def : (c.layouts[0] || {}).name;
+  loadLayout(sel.value);
+}
+function loadLayout(name) {
+  const l = ST.counts[n].layouts.find(x => x.name === name);
+  if (!l) return;
+  curName = name;
+  rects = l.rects.map(r => r.slice());
+  $('name').value = l.builtin ? name + '2' : name;
+  $('del').disabled = l.builtin;
+  $('who').textContent = l.builtin ? '內建切法（唯讀，改完請另存）' : '自訂切法';
+  draw(); runMeasure();
+}
+async function reload(keepN) {
+  ST = await (await fetch('/state')).json();
+  const ns = Object.keys(ST.counts).map(Number).sort((a, b) => a - b);
+  $('n').innerHTML = ns.map(v => '<option value="' + v + '">' + v + ' 隻</option>').join('');
+  if (keepN && ns.includes(keepN)) n = keepN; else n = ns.includes(3) ? 3 : ns[0];
+  $('n').value = String(n);
+  fillLayouts();
+}
+$('n').addEventListener('change', () => { n = Number($('n').value); fillLayouts(); });
+$('layout').addEventListener('change', () => loadLayout($('layout').value));
+$('dup').addEventListener('click', () => { $('name').focus(); $('name').select(); });
+
+$('save').addEventListener('click', async () => {
+  const body = { n, name: $('name').value.trim(), rects, setDefault: $('asdef').checked };
+  let r = await (await fetch('/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(body) })).json();
+  if (!r.ok && r.warn && r.warn.length && confirm('這個切法有問題：\n' + r.warn.join('\n') + '\n\n還是要存嗎？')) {
+    body.force = true;
+    r = await (await fetch('/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify(body) })).json();
+  }
+  if (!r.ok) { $('msg').innerHTML = '<span class="bad">✗ ' + (r.error || (r.errors || []).join('；')) + '</span>'; return; }
+  $('msg').innerHTML = '<span class="good">✓ 已存檔（' + r.written.length + ' 個檔）</span>';
+  await reload(n);
+  $('layout').value = body.name; loadLayout(body.name);
+});
+
+$('del').addEventListener('click', async () => {
+  if (!confirm('刪除自訂切法「' + curName + '」？')) return;
+  const r = await (await fetch('/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ n, name: curName }) })).json();
+  if (!r.ok) { $('msg').innerHTML = '<span class="bad">✗ ' + (r.error || '') + '</span>'; return; }
+  await reload(n);
+});
+
+reload();
+</script>
+</body>
+</html>

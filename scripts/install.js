@@ -59,6 +59,13 @@ const DAEMON_ONLY_FLAG = path.join(INSTALL_DIR, 'DAEMON_ONLY');
 // 刻意不放 src/editor/ —— 那整個資料夾會被 build-release 排除，放錯地方 release 就沒有。
 const PLAYER_PAGES = ['album', 'bgedit'];
 
+// 玩家頁面 require 得到的共用模組。它們住在 src/shared/，而部署樹只複製
+// PLAYER_PAGES 那幾個資料夾 —— 少了這一份，album_server.js 的
+// require('../shared/evo-rules.js') 在部署樹會 MODULE_NOT_FOUND，
+// 症狀是「vpet album 按了沒反應」（server 起不來，CLI 只負責開瀏覽器）。
+// 踩過一次：evo-rules 是後來才加進圖鑑的，install 沒跟著改。
+const SHARED_MODULES = ['evo-rules.js', 'plaza-walk.js', 'weather.js'];
+
 // statusline 顯示層專屬 —— daemon-only 不需要（daemon 自己 compose 畫面）。
 // 注意 statusline-cheat.js 不在此列：它其實是 vpet 指令通道，只是名字誤導，兩種模式都要。
 const STATUSLINE_ONLY_FILES = ['statusline-agumon-color.js', 'statusline-agumon.js'];
@@ -153,6 +160,16 @@ function installRuntime() {
         fs.mkdirSync(dst, { recursive: true });
         for (const f of fs.readdirSync(src2)) copyFile(path.join(src2, f), path.join(dst, f), sub);
     }
+    // 頁面的 require('../shared/xxx') 解析到 INSTALL_DIR/shared/ —— 跟 assets/shared/
+    // （共用 sprite 美術）是兩回事，別混淆。
+    {
+        const dst = path.join(INSTALL_DIR, 'shared');
+        fs.mkdirSync(dst, { recursive: true });
+        for (const f of SHARED_MODULES) {
+            const s2 = path.join(REPO_ROOT, 'src', 'shared', f);
+            if (fs.existsSync(s2)) copyFile(s2, path.join(dst, f), 'shared');
+        }
+    }
     // release 版標記：repo 根有 RELEASE 就部署到 INSTALL_DIR，讓 statusline-cheat 停用開發指令。
     // main（開發）沒有此檔 → 不部署（開發指令全開）。
     if (fs.existsSync(path.join(REPO_ROOT, 'RELEASE'))) {
@@ -206,6 +223,12 @@ function installRoster() {
     const specialEvo = path.join(REPO_ROOT, 'characters', 'special-evolutions.json');
     if (fs.existsSync(specialEvo)) {
         copyFile(specialEvo, path.join(ASSETS_DIR, 'special-evolutions.json'));
+    }
+    // 營地走動範圍的自訂切法（走動範圍編輯器存的）。同樣是資料不是角色附屬檔案。
+    // 沒有這個檔不是錯誤 —— 那代表全部用內建切法。
+    const yardLayouts = path.join(REPO_ROOT, 'characters', 'yard-layouts.json');
+    if (fs.existsSync(yardLayouts)) {
+        copyFile(yardLayouts, path.join(ASSETS_DIR, 'yard-layouts.json'));
     }
 }
 

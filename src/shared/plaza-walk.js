@@ -107,6 +107,137 @@ const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
 // 省下來的 2 dot 直接還給可走範圍。
 const YARD_FIELD  = makeField(52, 40, 0);
 
+// ── 營地分區 ─────────────────────────────────────────────────────────
+// 3 隻共用 37x25 的可站範圍時，有 73.7% 的拍數會有一對蓋掉對方 25% 以上的身體
+// （量測見 docs/ranch-spec.md）。sprite 面積其實只佔場地 37%，擠在一起純粹是
+// 走路各走各的、沒人管彼此。所以按隻數把可走範圍切開，每隻一個 field ——
+// posAt / legAt / startPos 本來就吃 field 參數，演算法一行都不用改。
+//
+// ⚠️ 只切直欄沒有用：37 寬切三欄每欄 12 格，比角色本身的 16 還窄，鄰欄註定重疊
+//    （實測只從 73.7% 降到 53.5%）。要二維切，縱向也拉開，才降得到個位數。
+//
+// ZONE_MARGIN = 相鄰區域允許重疊幾格。0 = 完全不重疊但區域只剩 11x5，角色一直
+// 撞牆（貼場地邊 11.8%，超過測試門檻 8%）。4 是掃出來的甜蜜點：
+//   margin  區域    嚴重重疊  貼真實邊
+//     0     11x5      0.0%     11.8%   ← 撞牆太頻繁
+//     2     13x7      0.1%      9.3%
+//     3     14x8      1.8%      8.3%
+//     4     15x9      7.4%      7.3%   ← 三條既有門檻全過，且「些許重疊比較自然」
+const ZONE_MARGIN = 4;
+
+/**
+ * 切法表。**要調整分區就改這裡**，其他地方不用動。
+ *
+ * 每塊區域寫成 [x0, y0, x1, y1]，0~1 的比例，指的是**角色左上角**能站的範圍。
+ * 貼齊 0 或 1 的邊 = 場地邊界，原樣採用；**中間的接縫會自動讓開** 半個角色寬
+ * （SPRITE/2 = 8 dot）再依 ZONE_MARGIN 放寬 —— 讓滿 8 才真的不會重疊，
+ * ZONE_MARGIN 是「刻意還回去多少」，回去越多越自然、也越容易疊到。
+ *
+ * 量測（30 組 seed x 3000 拍；「嚴重重疊」= 一對蓋掉對方 25% 以上身體）：
+ *
+ *   n=2  切法        嚴重重疊  場地利用  貼場地邊  區域
+ *        leftRight      1.1%     100%      6.1%   15x25 15x25   ← 預設
+ *        topBottom      2.5%     100%      6.7%   37x9  37x9
+ *        （不分區）     34.4%     100%      5.2%
+ *
+ *   n=3  切法        嚴重重疊  場地利用  貼場地邊  區域
+ *        quadFull       6.6%     100%      6.9%   15x9 15x9 37x9   ← 預設
+ *        quad           7.2%      83%      7.3%   15x9 15x9 15x9   右下是死區
+ *        triangle       3.6%      80%      6.4%   15x9 15x9 11x9   重疊最少，但下方兩側空著
+ *        rows          46.0%     100%      8.3%   37x5 37x1 37x5   橫帶只差 8 < 角色 16，等於沒分
+ *        cols          14.2%     100%      6.2%   9x25 5x25 9x25   中間那欄只剩 5 格
+ *        （不分區）     73.7%     100%      5.2%
+ *
+ * 三隻要同時「重疊少」與「用滿場地」，就得讓其中一塊吃掉整條邊 —— 場地只有
+ * 37x25 而角色 16x16，切成四等分的話第四塊沒人站，那塊就是死區（quad 的 83%）。
+ * rows / cols 留在表裡是為了能在 dev 下拉裡看出「為什麼不能那樣切」。
+ */
+const YARD_LAYOUTS = {
+    1: { solo:      [[0, 0, 1, 1]] },
+    2: { leftRight: [[0, 0, .5, 1], [.5, 0, 1, 1]],
+         topBottom: [[0, 0, 1, .5], [0, .5, 1, 1]] },
+    3: { quadFull:  [[0, 0, .5, .5], [.5, 0, 1, .5], [0, .5, 1, 1]],
+         quad:      [[0, 0, .5, .5], [.5, 0, 1, .5], [0, .5, .5, 1]],
+         triangle:  [[0, 0, .5, .5], [.5, 0, 1, .5], [.25, .5, .75, 1]],
+         rows:      [[0, 0, 1, 1 / 3], [0, 1 / 3, 1, 2 / 3], [0, 2 / 3, 1, 1]],
+         cols:      [[0, 0, 1 / 3, 1], [1 / 3, 0, 2 / 3, 1], [2 / 3, 0, 1, 1]] },
+};
+const YARD_LAYOUT_DEFAULT = { 1: 'solo', 2: 'leftRight', 3: 'quadFull' };
+
+/**
+ * 把場地切成 n 個子場地（每隻一個）。順序固定，呼叫端用「第幾隻」索引。
+ * n 沒有對應的切法就整場共用（退回分區之前，不會壞掉）。
+ *
+ * layout 可以是：
+ *   - 切法名稱（dev 下拉用來現場比較）
+ *   - 一組比例矩形 [[x0,y0,x1,y1], ...]（同上，會套接縫讓開）
+ *   - { exact: [[minX,maxX,minY,maxY], ...] } —— **dot 絕對座標，原樣採用**
+ *   - null → 該隻數的預設切法
+ *
+ * ⚠️ 編輯器存的是 exact。理由是「比例 + 接縫讓開」在場地邊界有分支
+ * （貼邊的邊不讓、內側的邊要讓 gap），那個換算**不可逆** —— 把一塊區域平移到
+ * 貼邊時，其中一條邊會跨過分支，尺寸就跟著變（回報：「移動區到邊緣會變動區塊大小」）。
+ * 直接操作的工具不能有這種行為，所以它存絕對座標；比例那套留給內建表當簡寫。
+ */
+function yardZones(n, field = YARD_FIELD, margin = ZONE_MARGIN, layout = null) {
+    const F = field;
+    // 絕對座標：原樣採用，只夾進場地。不套接縫讓開 —— 那是比例簡寫才需要的。
+    if (layout && !Array.isArray(layout) && Array.isArray(layout.exact) && layout.exact.length === n) {
+        return layout.exact.map(([minX, maxX, minY, maxY]) => {
+            const z = { ...F,
+                minX: clamp(Math.round(minX), F.minX, F.maxX), maxX: clamp(Math.round(maxX), F.minX, F.maxX),
+                minY: clamp(Math.round(minY), F.minY, F.maxY), maxY: clamp(Math.round(maxY), F.minY, F.maxY) };
+            if (z.maxX < z.minX) z.maxX = z.minX;
+            if (z.maxY < z.minY) z.maxY = z.minY;
+            return z;
+        });
+    }
+    const table = YARD_LAYOUTS[n];
+    const rects = Array.isArray(layout) && layout.length === n
+        ? layout
+        : (table && (table[layout] || table[YARD_LAYOUT_DEFAULT[n]]));
+    if (!rects) return new Array(Math.max(1, n || 1)).fill(F);
+    const gap = SPRITE / 2 - margin;            // 接縫往兩邊各讓開多少
+    const spanX = F.maxX - F.minX, spanY = F.maxY - F.minY;
+    return rects.map(([x0, y0, x1, y1]) => {
+        const z = {
+            ...F,
+            minX: x0 <= 0 ? F.minX : Math.min(F.maxX, F.minX + Math.round(spanX * x0) + gap),
+            maxX: x1 >= 1 ? F.maxX : Math.max(F.minX, F.minX + Math.round(spanX * x1) - gap),
+            minY: y0 <= 0 ? F.minY : Math.min(F.maxY, F.minY + Math.round(spanY * y0) + gap),
+            maxY: y1 >= 1 ? F.maxY : Math.max(F.minY, F.minY + Math.round(spanY * y1) - gap),
+        };
+        // 自訂切法可能存出反向或退化的矩形（畫太小、拖過頭）。這裡收斂成合法值 ——
+        // 反向的 min/max 會讓 legAt 永遠找不到路可走，症狀是那一隻整個定住不動。
+        if (z.maxX < z.minX) z.maxX = z.minX;
+        if (z.maxY < z.minY) z.maxY = z.minY;
+        return z;
+    });
+}
+
+// 這個 n 有哪些切法可選（dev 下拉用）
+const yardLayoutNames = (n) => Object.keys(YARD_LAYOUTS[n] || {});
+
+// 區域中心。放下時若落在區域外，這是「走回去」的目標。
+const zoneAnchor = (z) => ({ x: Math.round((z.minX + z.maxX) / 2),
+                             y: Math.round((z.minY + z.maxY) / 2) });
+const inZone = (p, z) => p.x >= z.minX && p.x <= z.maxX && p.y >= z.minY && p.y <= z.maxY;
+
+/**
+ * 回程：從落點到定位點的一條直線。
+ *
+ * 關鍵性質是**它也是算出來的**：長度 = max(|dx|,|dy|)（主軸每拍 1 dot，跟平常走路
+ * 同速），路徑交給既有的 offsetAt 走 Bresenham。整段只由 (origin, anchor) 決定，
+ * 所以 posAt 仍然是純函數 —— 不必存任何位置，快取的 epoch 已經含 origin 與 field。
+ *
+ * 走 t = len 拍剛好落在 anchor 上（offsetAt 在主軸走滿時副軸也剛好到位），
+ * 不會差一格，也不會需要在終點做修正。
+ */
+function returnLeg(origin, anchor) {
+    const vx = anchor.x - origin.x, vy = anchor.y - origin.y;
+    return { vx, vy, len: Math.max(Math.abs(vx), Math.abs(vy)) };
+}
+
 // 向後相容：既有呼叫端仍在用這幾個常數（＝廣場的場地）
 const MIN_X = PLAZA_FIELD.minX, MAX_X = PLAZA_FIELD.maxX;
 const MIN_Y = PLAZA_FIELD.minY, MAX_Y = PLAZA_FIELD.maxY;
@@ -262,22 +393,49 @@ const MAX_REPLAY = 200000;
 
 function posAt(occ, step, cache, field = PLAZA_FIELD) {
     const { seed, joinStep } = occ;
-    // 被放下過的那隻從落點起算；沒有就用 seed 決定的進場位置
-    const from0 = occ.origin
-        ? { x: clamp(occ.origin.x, field.minX, field.maxX),
-            y: clamp(occ.origin.y, field.minY, field.maxY),
-            facing: occ.origin.facing || 'right' }
+    let target = Math.max(0, step - joinStep);
+    const org = occ.origin;
+
+    // 落點在自己的可走範圍外（營地分區後，放到別人的地盤或走道上就會這樣）：
+    // 先走一條直線回定位點，再從那裡接回正常的鏈。
+    //
+    // ⚠️ 不要改成「把落點夾進範圍」—— 那等於還沒走就先瞬移，使用者放下的位置
+    //    直接被抹掉。夾住是 occ.anchor 不存在時（廣場）的舊行為，保留。
+    if (org && occ.anchor && !inZone(org, field)) {
+        const leg = returnLeg(org, occ.anchor);
+        if (target < leg.len) {
+            const [ox, oy] = offsetAt(leg.vx, leg.vy, target);
+            return { x: org.x + ox, y: org.y + oy,
+                     facing: leg.vx < 0 ? 'left' : leg.vx > 0 ? 'right' : (org.facing || 'right'),
+                     // 回程不建快取：它是短暫的、而且逐拍直接算得出來，
+                     // 建了反而要處理「快取屬於回程還是正常鏈」的分支。
+                     k: -1, moving: true, returning: true, cache: null };
+        }
+        target -= leg.len;                       // 走到了，時間扣掉回程
+    }
+
+    // 被放下過的那隻從落點起算；沒有就用 seed 決定的進場位置。
+    // 走過回程的那隻改從定位點起算（它現在就站在那裡）。
+    const from0 = org
+        ? (occ.anchor && !inZone(org, field)
+            ? { x: occ.anchor.x, y: occ.anchor.y, facing: org.facing || 'right' }
+            : { x: clamp(org.x, field.minX, field.maxX),
+                y: clamp(org.y, field.minY, field.maxY),
+                facing: org.facing || 'right' })
         : startPos(seed, field);
-    const target = Math.max(0, step - joinStep);
 
     // 快取屬於「哪一條時間軸」。joinStep 或落點一變（＝被拿起來放到別的地方），
     // 之前那份備忘就是另一條軸上的位置，必須整份作廢。
     // ⚠️ 少了這個判斷會出現：放下之後那隻回到被抓起來前的位置，而 anchor 明明記對了。
     //    因為剛放下時 target 是 0，而快取的 at 也可能是 0（還在第一段路裡），
     //    `cache.at <= target` 就成立了 —— 舊位置被當成有效答案。
+    // ⚠️ field 一定要進 epoch：營地按隻數分區之後，keep / release 會讓每隻的可走
+    //    範圍整組換掉，而快取裡的 x,y 是用**舊的牆**算出來的。少了這一段，舊快取
+    //    會被當成有效，角色就在新區域外面繼續走既有的鏈。
     const epoch = joinStep + '|' + (occ.origin
         ? occ.origin.x + ',' + occ.origin.y + ',' + (occ.origin.facing || '')
-        : '');
+        : '')
+        + '|' + field.minX + ',' + field.maxX + ',' + field.minY + ',' + field.maxY;
 
     // 快取只在「沒有倒退」時可用（倒退＝時鐘校正把 step 拉回來了）。
     // 有快取就完全不受 MAX_REPLAY 影響 —— 每次輪詢只往前推幾拍，
@@ -329,6 +487,8 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
     makeField, PLAZA_FIELD, YARD_FIELD,
+    ZONE_MARGIN, YARD_LAYOUTS, YARD_LAYOUT_DEFAULT, yardZones, yardLayoutNames,
+    zoneAnchor, inZone, returnLeg,
     DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
     hash2, rand01, clamp, startPos, offsetAt, legAt, posAt, stepAt,
 };

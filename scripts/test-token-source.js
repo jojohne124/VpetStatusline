@@ -127,6 +127,12 @@ console.log('— 檔案被截斷／原地改寫 —');
     ok(Buffer.byteLength(other) === Buffer.byteLength(line('t1', { out: 100 })),
        '測試資料長度不同，這條測不到東西');
     fs.writeFileSync(file('d.jsonl'), other);
+    // ⚠️ 一定要把 mtime 明確推開。兩次 writeFileSync 常常落在同一個 mtime tick
+    //    （Windows 的解析度比較粗），mtime 沒變 → 增量讀不會重讀 → 這條隨機紅。
+    //    實測連跑三次會紅兩次，而它紅的時候看起來像產品壞了，其實是測試自己不穩。
+    //    產品的契約是「大小一樣但 mtime 變了就重讀」（token-source.js 的 isStale），
+    //    所以把 mtime 推開才是真的在測那一條，不是繞過它。
+    { const t = new Date(Date.now() + 2000); fs.utimesSync(file('d.jsonl'), t, t); }
     const r2 = sameAsFresh(T0, '同大小改寫');
     ok(r2.uniqueMessages === 1, '同大小改寫後筆數不對：' + r2.uniqueMessages);
     ok(r2.totals.output === 200, '同大小改寫沒被偵測到（還是舊內容）：' + r2.totals.output);

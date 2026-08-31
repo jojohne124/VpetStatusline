@@ -55,7 +55,7 @@ function renderProbe(js) {
             if (k === 'measureText') return () => ({ width: 8 });
             if (k === 'createLinearGradient') return () => ({ addColorStop() {} });
             if (typeof k === 'string' &&
-                /^(fill|stroke|clear|begin|move|line|arc|ellipse|close|save|restore|translate|scale|rect|drawImage|fillText)/.test(k))
+                /^(fill|stroke|clear|begin|move|line|arc|ellipse|close|save|restore|translate|scale|rect|drawImage|fillText|setLineDash)/.test(k))
                 // 參數也留著：拎起／放下的上下位移只能從「畫在哪個 y」看出來，
                 // 只記方法名的話「有沒有動」完全測不到。
                 return (...a) => { calls.push(k); args.push([k, a]); };
@@ -92,6 +92,9 @@ function renderProbe(js) {
                    + 'failMsg:(r,a)=>failMsg(r,a),'
                    + 'ranchFull:()=>ranchFull(),'
                    + 'setYard:(y)=>{lastYard=y;},setState:(x)=>{lastState=x;},'
+                   // dev 走動範圍：把框真的畫一次，才驗得到幾何（框畫在哪、多大）
+                   + 'drawZones:(z,ctx)=>{zoneBoxes=z;showZones=true;drawZones(ctx);},'
+                   + 'yardSprite:(s)=>{yardSprite=s;},'
                    + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
@@ -170,6 +173,36 @@ function renderProbe(js) {
     ok(start.shadow !== null && top.shadow !== null, '沒有畫影子（離地感全靠它）');
     ok(Math.abs(top.shadow - start.shadow) < 0.001,
        `影子跟著身體一起浮起來了（${start.shadow} -> ${top.shadow}）—— 那只是整隻平移`);
+
+    // ── dev 走動範圍：框要框住**身體**，不是只框左上角 ──────────────
+    // 可走範圍講的是左上角能站到哪，框只畫那個範圍的話會縮在該區左上角，
+    // 跟角色實際走的地方對不起來（回報過「實線都在左上，應是 bug」）。
+    {
+        const SPR = 16;
+        g.__p.yardSprite(SPR);
+        const zone = { minX: 0, maxX: 14, minY: 0, maxY: 8, anchor: { x: 7, y: 4 } };
+        args.length = 0;
+        g.__p.drawZones([zone], ctx2d());
+        const rects = args.filter(a => a[0] === 'strokeRect').map(a => a[1]);
+        ok(rects.length === 1, `一塊區域畫了 ${rects.length} 個框（應只有一個：身體範圍）`);
+        if (rects.length) {
+            const [x, y, w, h] = rects[0];
+            ok(Math.abs(w - (zone.maxX - zone.minX + SPR) * K.CW) < 1,
+               `框的寬度是 ${w}px，應為 (可走範圍 + 一個角色) = ${(zone.maxX - zone.minX + SPR) * K.CW}px`);
+            ok(Math.abs(h - (zone.maxY - zone.minY + SPR) * (K.CH / 2)) < 1,
+               `框的高度是 ${h}px，應為 ${(zone.maxY - zone.minY + SPR) * (K.CH / 2)}px`);
+            ok(x < 1 && y < 1, `框的左上角應貼齊區域原點，得到 (${x},${y})`);
+        }
+        // 定位點的十字要落在框的正中央
+        const arcs = args.filter(a => a[0] === 'arc').map(a => a[1]);
+        ok(arcs.length === 1, '定位點沒有畫出來');
+        if (arcs.length && rects.length) {
+            const [ax, ay] = arcs[0];
+            const [x, y, w, h] = rects[0];
+            ok(Math.abs(ax - (x + w / 2)) < 1.5 && Math.abs(ay - (y + h / 2)) < 1.5,
+               `定位點 (${ax},${ay}) 不在框的中心 (${x + w / 2},${y + h / 2})`);
+        }
+    }
 
     // 放下：從離地高度掉回地面
     const falling = frameAt(mkDrag('fall', 0, -K.LIFT_DOTS));
@@ -297,6 +330,61 @@ setTimeout(async () => {
         ok(y.ok === true, '/yard 回應失敗');
         ok(typeof y.cols === 'number' && typeof y.rows === 'number',
            '/yard 沒有回傳場地尺寸（空營地時畫布會塌成家裡的大小）');
+
+        console.log('— 營地分區 —');
+        {
+            const y = JSON.parse(await get('/yard'));
+            ok(Array.isArray(y.zones), '/yard 沒有回傳 zones（dev 的走動範圍框畫不出來）');
+            if (Array.isArray(y.zones)) {
+                ok(y.zones.length === y.kept || y.kept === 0,
+                   `zones 有 ${y.zones.length} 塊，但營地裡有 ${y.kept} 隻`);
+                const shape = y.zones.filter(z => ['minX', 'maxX', 'minY', 'maxY'].every(k => Number.isFinite(z[k]))
+                                                  && z.anchor && Number.isFinite(z.anchor.x));
+                ok(shape.length === y.zones.length, 'zones 的欄位不完整（要 minX/maxX/minY/maxY/anchor）');
+                // 每隻都待在自己那塊裡 —— 這是分區有沒有真的接上去的端對端檢查
+                const stray = (y.pets || []).filter(p => {
+                    const z = y.zones[p.zoneIdx];
+                    return !z || p.x < z.minX || p.x > z.maxX || p.y < z.minY || p.y > z.maxY;
+                });
+                ok(stray.length === 0,
+                   `有 ${stray.length} 隻不在自己的區域裡：${stray.map(p => p.name).join(',')}`);
+                ok((y.pets || []).every(p => Number.isFinite(p.zoneIdx)),
+                   'pets 沒有帶 zoneIdx（前端對不出哪個框是誰的）');
+            }
+            // 切法可以現場換（dev 下拉）
+            ok(Array.isArray(y.layouts) && y.layouts.length > 0,
+               '/yard 沒有回傳可選的切法清單');
+            ok(typeof y.layout === 'string', '/yard 沒有回傳目前用的切法');
+            if (Array.isArray(y.layouts) && y.layouts.length > 1) {
+                const other = y.layouts.find(n => n !== y.layout);
+                const y2 = JSON.parse(await get('/yard?zl=' + encodeURIComponent(other)));
+                ok(y2.layout === other, `?zl=${other} 沒有換成那個切法（得到 ${y2.layout}）`);
+                ok(JSON.stringify(y2.zones) !== JSON.stringify(y.zones),
+                   `?zl=${other} 的區域跟預設一模一樣，等於沒換`);
+                const y3 = JSON.parse(await get('/yard?zl=__nope__'));
+                ok(JSON.stringify(y3.zones) === JSON.stringify(y.zones),
+                   '指定不存在的切法時沒有退回預設');
+            }
+            ok(html.includes('id="zonelayout"'), '缺少 dev 的切法下拉');
+
+            // 走動範圍編輯器的 dev 鈕。
+            // ⚠️ 這裡**不真的按下去** —— 那會 spawn 一個 detached 的編輯器 server，
+            //    npm test 跑完會留一個佔著 3005 的孤兒（doctor 那支正是在管這種東西）。
+            //    spawn 本身只有幾行且手動驗過；這裡守的是「按鈕在、release 擋得住、
+            //    回傳的網址會被開起來」，那三件才是漏了會靜靜壞掉的。
+            ok(html.includes('zoneedit'), '缺少 dev 的走動範圍編輯器按鈕');
+            ok(/zoneedit[\s\S]{0,220}devtag/.test(html), '走動範圍編輯器沒有標成 dev');
+            ok(daemonSrc.includes("'zoneedit'") && /DEV_ONLY[^\n]*zoneedit/.test(daemonSrc),
+               'zoneedit 沒進 DEV_ONLY —— release 版的網頁 POST 擋不住');
+            ok(/r\.ok\s*&&\s*r\.url/.test(js), '前端沒有把回傳的網址開起來（按了會沒反應）');
+            ok(daemonSrc.includes('fs.existsSync(ZONE_EDITOR_JS)'),
+               '沒有檢查編輯器檔案在不在（release 樹沒有 src/editor，要給明確訊息而不是靜靜失敗）');
+
+            // dev 開關本身
+            ok(html.includes('id="zonebox"'), '缺少 dev 的「走動範圍」開關');
+            ok(/zonebox[\s\S]{0,120}devtag/.test(html), '「走動範圍」沒有標成 dev');
+            ok(js.includes('drawZones'), '前端沒有畫框的函式');
+        }
 
         console.log('— 天氣 —');
         ok(y.weather && typeof y.weather.sky === 'string', '/yard 沒有回傳天氣');

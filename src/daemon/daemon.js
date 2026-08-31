@@ -18,7 +18,7 @@ const os   = require('os');
 const path = require('path');
 const http = require('http');
 const { Worker } = require('worker_threads');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');   // spawn：起走動範圍編輯器（dev）
 
 // 優先用「已安裝」的 core（跟 statusLine 同一份權威），抓不到再退回 repo 內。
 let core;
@@ -64,7 +64,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server']);
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit']);
 
 // UI 上要露出的快捷鈕（一鍵、不用填參數）。**只影響版面，不影響功能** ——
 // 沒列在這裡的指令照樣能用（CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
@@ -103,6 +103,7 @@ const UI_FORMS = [
     { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']], scope: 'both',
       confirm: '放生會**永久刪除**那一隻，救不回來。確定嗎？' },
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
+    { label: '⛺ 走動範圍', action: 'zoneedit',  fields: [], scope: 'both', dev: true },
     { label: '🩺 doctor',   action: 'doctor',    fields: [], scope: 'both' },
     { label: '👻 幽靈對戰', action: 'pvp',       fields: [['name', '對手名牌（留空＝隨機）']] },
     { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
@@ -561,6 +562,34 @@ const CLI_ACTIONS = {
     release:     (a) => a.which ? ['release', a.which, 'yes'] : null,
 };
 
+// ── 走動範圍編輯器（dev）─────────────────────────────────────────────
+// 不走 CHEAT_CLI：那條路是給部署樹的頁面（圖鑑／底圖）用的，而編輯器住在
+// src/editor/，install 不部署它 —— 跟 daemon 自己一樣是從 repo 樹跑的，
+// 所以直接從隔壁目錄起就好，路徑也不會有第二種可能。
+const ZONE_EDITOR_PORT = 3005;
+const ZONE_EDITOR_JS   = path.join(__dirname, '..', 'editor', 'zone_editor_server.js');
+let zoneEditorProc = null;
+function openZoneEditor() {
+    if (!fs.existsSync(ZONE_EDITOR_JS)) {
+        return { ok: false, error: '找不到 src/editor/zone_editor_server.js（release 樹沒有編輯器）' };
+    }
+    const url = 'http://localhost:' + ZONE_EDITOR_PORT;
+    // 已經起過而且還活著就不要再起一個 —— 第二個會 EADDRINUSE 然後靜靜地死掉。
+    // 若是使用者自己用 zone-editor.bat 起的（我們沒有 handle），這裡會多 spawn 一次，
+    // 那一次同樣會 EADDRINUSE 收場，第一個照常服務，網址仍然開得起來。
+    if (zoneEditorProc && zoneEditorProc.exitCode === null && !zoneEditorProc.killed) {
+        return { ok: true, action: 'zoneedit', url, output: '編輯器已在執行 → ' + url };
+    }
+    try {
+        zoneEditorProc = spawn(process.execPath, [ZONE_EDITOR_JS],
+                               { detached: true, stdio: 'ignore', windowsHide: true });
+        zoneEditorProc.unref();
+    } catch (e) {
+        return { ok: false, error: '啟動編輯器失敗：' + e.message };
+    }
+    return { ok: true, action: 'zoneedit', url, output: '編輯器已啟動 → ' + url };
+}
+
 function runCli(args) {
     const r = spawnSync(process.execPath, [CHEAT_CLI, ...args],
                         { encoding: 'utf8', timeout: CLI_TIMEOUT_MS, windowsHide: true });
@@ -617,6 +646,8 @@ function applyCommand(action, args = {}) {
 
     // 快路徑：純粹寫一個旗標的指令直接寫 force，省掉 140ms 的行程開銷。
     // 這些在 CLI 那邊也只是寫同樣的欄位，沒有額外邏輯，不會分叉。
+    if (action === 'zoneedit') return openZoneEditor();
+
     const fn = COMMANDS[action];
     if (fn) return { ok: writeForce(fn()), action };
 
@@ -815,7 +846,9 @@ ${IS_RELEASE ? '' : `
         <option value="storm">大雨</option>
         <option value="thunder">雷雨</option>
       </select></label>
-      <label class="k"><input type="checkbox" id="wxcold"> 寒流</label>`}
+      <label class="k"><input type="checkbox" id="wxcold"> 寒流</label>
+      <label class="k"><input type="checkbox" id="zonebox"> 走動範圍 <span class="devtag">dev</span></label>
+      <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label>`}
     </div>
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
@@ -929,7 +962,38 @@ function draw(petLines){
       ctx.restore();
     }
   }
+  // dev：走動範圍。畫在最後 → 蓋在角色上面，被框住的是誰一眼看得出來。
+  if(view==='yard'&&showZones) drawZones(ctx);
 }
+// dev「走動範圍」：把每隻的可走範圍與定位點畫出來。純顯示，不影響任何計算。
+// 存在的理由是分區看不見 —— 角色為什麼不往那邊走，不畫出來只能用猜的。
+let zoneBoxes=null, showZones=false;
+const ZONE_COLORS=['#58a6ff','#3fb950','#d29922'];
+function drawZones(ctx){
+  if(!zoneBoxes||!zoneBoxes.length)return;
+  // 1 dot = CW 寬、CH/2 高（半格）。框畫在 dot 的外緣，+SPRITE 是因為
+  // 可走範圍講的是**左上角**能站到哪，角色本身還要再佔 16 dot。
+  const DW=CW, DH=CH/2, S=yardSprite||16;
+  ctx.save();
+  ctx.lineWidth=1; ctx.setLineDash([]);
+  zoneBoxes.forEach((z,i)=>{
+    const col=ZONE_COLORS[i%ZONE_COLORS.length];
+    ctx.strokeStyle=col; ctx.fillStyle=col;
+    // 框 = 身體實際會蓋到的範圍。可走範圍講的是**左上角**能站到哪，所以寬高要各
+    // 加一個角色（16 dot）。只畫左上角範圍的話，框會縮在該區的左上角，
+    // 跟角色實際走的地方對不起來 —— 看起來就像框畫錯位置。
+    ctx.globalAlpha=.85;
+    ctx.strokeRect(z.minX*DW+.5, z.minY*DH+.5, (z.maxX-z.minX+S)*DW, (z.maxY-z.minY+S)*DH);
+    // 定位點 = 框的中心（放下超出範圍時要走回去的目標）
+    if(z.anchor){ ctx.globalAlpha=1;
+      const ax=(z.anchor.x+S/2)*DW, ay=(z.anchor.y+S/2)*DH;
+      ctx.beginPath(); ctx.arc(ax,ay,2.5,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(ax-6,ay); ctx.lineTo(ax+6,ay);
+      ctx.moveTo(ax,ay-6); ctx.lineTo(ax,ay+6); ctx.stroke(); }
+  });
+  ctx.restore();
+}
+let yardSprite=16;
 let lastFetch=Date.now();
 // 視圖：家（statusline 那個舞台）／院子（營地成員在 96x24 的場地散步）。
 // 只是「這個瀏覽器分頁在看哪裡」，不是 daemon 的狀態 —— 開兩個分頁可以一個看家、
@@ -1184,10 +1248,27 @@ async function pollYard(){
   const ec = document.getElementById('wxcold');
   const parts=[]; if(es&&es.value) parts.push(es.value); if(ec&&ec.checked) parts.push('cold');
   const q = parts.join('+');
-  const y = await (await fetch('/yard'+(q?'?w='+encodeURIComponent(q):''),
+  const zl = document.getElementById('zonelayout');
+  const qs = [];
+  if(q) qs.push('w='+encodeURIComponent(q));
+  if(zl&&zl.value) qs.push('zl='+encodeURIComponent(zl.value));
+  const y = await (await fetch('/yard'+(qs.length?'?'+qs.join('&'):''),
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   lastYard=y;
+  zoneBoxes = y.zones || null;
+  if(y.sprite) yardSprite = y.sprite;
+  // 下拉的選項跟著隻數換（2 隻與 3 隻能選的切法不同）。只在清單真的變了時重建，
+  // 不然每 250ms 重建一次會把使用者正在展開的選單關掉。
+  if(zl && y.layouts){
+    const want='|'+y.layouts.join('|');
+    if(zl.dataset.opts!==want){
+      zl.dataset.opts=want; const keep=zl.value;
+      zl.innerHTML='<option value="">預設（'+(y.layout||'-')+'）</option>'
+        + y.layouts.map(n=>'<option value="'+n+'">'+n+'</option>').join('');
+      zl.value = y.layouts.includes(keep) ? keep : '';
+    }
+  }
   document.getElementById('yardinfo').textContent = y.kept
     ? '營地 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
     : '營地是空的 —— 進階區的「📥 收進營地」可以把現役收進來（隨時換得回去）';
@@ -1251,6 +1332,16 @@ function yardHit(ev){
     if(dx>=p.x&&dx<p.x+S&&dy>=p.y&&dy<p.y+S) return p;
   }
   return null;
+}
+
+// dev「走動範圍」開關。切換後直接用上一次的畫面重畫 —— 等輪詢的話最多要 250ms
+// 才看得到反應，會讓人以為勾了沒用。
+{
+  const zb=document.getElementById('zonebox');
+  if(zb) zb.addEventListener('change',()=>{
+    showZones=zb.checked;
+    if(view==='yard'&&lastYard&&lastYard.lines) draw(lastYard.lines);
+  });
 }
 
 document.getElementById('pet').addEventListener('contextmenu',ev=>{
@@ -1350,6 +1441,9 @@ async function sendCmd(action,args){
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
+    // 回傳帶網址的指令（走動範圍編輯器）：server 才剛 spawn，等一下再開分頁，
+    // 不然會開到「連線被拒」的錯誤頁，使用者只好自己重整。
+    if(r.ok && r.url) setTimeout(()=>window.open(r.url,'_blank'), 900);
     // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
     if(!quiet) showOutput(r.output || r.error || '');
@@ -1547,9 +1641,14 @@ const server = http.createServer((req, res) => {
             // ?w=rain / ?w=storm+cold → 預覽指定天氣（見 weatherFor）
             const wq    = new URL(req.url, 'http://x').searchParams.get('w');
             const wx    = weatherFor(wq);
+            // ?zl=quadFull / ?zl=triangle → 預覽別的走動分區切法（dev 下拉用）。
+            // 跟 ?w= 一樣是**這次請求**的覆寫，不寫進任何狀態。切法一換，每隻的
+            // field 就換 → posAt 的 epoch 跟著變 → 舊快取自動作廢，不用另外清。
+            const zoneLayout = new URL(req.url, 'http://x').searchParams.get('zl') || null;
             const alive = new Set((ranch.pets || []).map(p => p.id));
             const out   = plaza.composeYard(core, ranch, st, step,
-                                            { caches: yardCaches, react: yardReactMap(alive) });
+                                            { caches: yardCaches, react: yardReactMap(alive),
+                                              layout: zoneLayout });
             // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -1573,15 +1672,28 @@ const server = http.createServer((req, res) => {
                          // 在營地裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
                          wasName: p.evolvedFrom ? core.getDisplayName(p.evolvedFrom) : null };
             };
-            body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE,
+            // 分區資訊：dev 的「走動範圍」開關要把框與定位點畫出來。
+            // 一律回傳（不看 release）—— 它只是幾個數字，藏起來反而讓前端要多一條分支。
+            // ⚠️ 一定要用 yardZonesFor（含編輯器存的覆寫檔），不是 plaza.yardZones（只有內建表）。
+            //    合成走的是前者、payload 走後者的話，角色照新切法走、框卻畫舊的，
+            //    看起來就像「存了沒生效」。踩過一次 —— 兩個來源就是會漂移。
+            const zoneInfo = plaza.yardLayoutsFor(core, (ranch.pets || []).length);
+            const zones = plaza.yardZonesFor(core, (ranch.pets || []).length, zoneLayout).map(z => ({
+                minX: z.minX, maxX: z.maxX, minY: z.minY, maxY: z.maxY,
+                anchor: plaza.zoneAnchor(z),
+            }));
+            body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE, zones,
                      weather: { ...wx, ...WX.describe(wx) },
                      cap: core.ranchCap(),
+                     // dev 下拉要知道這個隻數有哪些切法可挑、現在是哪一個
+                     layout: zoneLayout || zoneInfo.def,
+                     layouts: zoneInfo.names,
                      kept: (ranch.pets || []).length,
                      lines: out ? out.lines : null,
                      // y 回傳**畫出來**的位置（含跳躍位移），不是地面的 y ——
                      // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
                      pets: out ? out.placed.map(p => ({
-                         id: p.ranchId, name: p.name, char: p.char,
+                         id: p.ranchId, name: p.name, char: p.char, zoneIdx: p.zoneIdx,
                          x: p.x, y: p.y - (p.jumpDy || 0), ...info(p.ranchId),
                      })) : [] };
         } catch (e) {

@@ -9,7 +9,8 @@
  * 走路演算法不在這裡 —— 在 src/shared/plaza-walk.js，因為那份要與（未來的）
  * 伺服器共用同一份程式碼才能保證每個 client 算出同一個畫面。
  */
-const fs = require('fs');
+const fs   = require('fs');
+const path = require('path');       // 讀 assets/yard-layouts.json（編輯器存的自訂切法）
 const W  = require('../shared/plaza-walk.js');
 
 // ── dot ↔ cell 轉換 ──────────────────────────────────────────────────
@@ -169,7 +170,10 @@ function composePlaza(core, occupants, step, opts = {}) {
     for (const o of all) {
         // key 而不是 code：NPC 沒有 code，全部共用一個快取槽會互相汙染
         const key = o.key || o.code;
-        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin }, step, caches.get(key), field);
+        // o.field = 這一隻自己的可走範圍（營地分區）。沒帶就用整場（廣場一直是這樣）。
+        // 畫布尺寸與名牌仍然吃外層的 field —— 分區只縮走路範圍，不縮畫面。
+        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin, anchor: o.anchor },
+                          step, caches.get(key), o.field || field);
         caches.set(key, p.cache);
         placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving });
     }
@@ -328,11 +332,19 @@ const SESSION_START = Date.now();
  */
 function yardJoinStep() { return W.stepAt(SESSION_START); }
 
-function yardOccupants(core, ranch, activeState, react) {
+function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts) {
     const base = W.stepAt(SESSION_START);
     void activeState;   // 現役不進院子（見下），保留參數是為了呼叫端不用改
     const list = [];
+    // 每隻分到一塊自己的可走範圍，否則三隻擠在 37x25 裡有七成的時間互相蓋住。
+    // ⚠️ 索引取自**完整名單**而不是過濾後的 list：拿在手上的那一隻會被 continue
+    //    跳過，用 list.length 當索引的話，牠一被抓起來其他隻的區域就整組位移。
+    const n = (ranch.pets || []).length;
+    const zones = coreForLayouts ? yardZonesFor(coreForLayouts, n, layout)
+                                 : W.yardZones(n, undefined, undefined, layout);
+    let idx = -1;
     for (const p of (ranch.pets || [])) {
+        idx++;
         const id = p.state && p.state.characterId;
         if (!id) continue;
         // 刻意不給 code —— buildLabels 看到沒有 code 就不畫名牌（與 NPC 同一條路）。
@@ -357,6 +369,10 @@ function yardOccupants(core, ranch, activeState, react) {
             origin:   r && r.anchor ? r.anchor.origin : null,
             react:    r ? r.frame : null,
             jump:     r ? r.jump || 0 : 0,
+            zoneIdx:  idx,
+            field:    zones[idx] || W.YARD_FIELD,
+            // 放下的落點在區域外時，先走回這裡再接回正常的鏈（見 plaza-walk 的 returnLeg）
+            anchor:   W.zoneAnchor(zones[idx] || W.YARD_FIELD),
         });
     }
     // 現役**不**放進院子。草案原本要放（想說「不然院子會像少了一隻」），但那是搞混了
@@ -390,16 +406,71 @@ function hashStr(s) {
  * 刻意不走 composeYard —— 那會為了一隻而合成整張圖，而且被抓著的那隻本來就被略過了。
  */
 function yardSpriteFor(core, ranch, id, step, opts = {}) {
-    const pet = (ranch.pets || []).find(p => p.id === id);
+    // layout 要跟 composeYard 用同一個，否則抓起來那一下的位置會對不上畫面
+    const pets = ranch.pets || [];
+    const idx = pets.findIndex(p => p.id === id);
+    const pet = pets[idx];
     const cid = pet && pet.state && pet.state.characterId;
     if (!cid) return null;
+    // 一定要用**這一隻自己的區域**算 —— 用整場算的話，抓起來那一下回報的位置
+    // 會跟畫面上的不一樣，游標一接手就跳一格。
+    const zone = yardZonesFor(core, pets.length, opts.layout)[idx] || W.YARD_FIELD;
     const p = W.posAt({ seed: W.hash2(hashStr(id), 0),
                         joinStep: opts.joinStep != null ? opts.joinStep : W.stepAt(SESSION_START),
-                        origin: opts.origin || null },
-                      step, null, W.YARD_FIELD);
+                        origin: opts.origin || null,
+                        anchor: W.zoneAnchor(zone) },
+                      step, null, zone);
     const a = spriteDots(core, cid, 0, p.facing, null);
     const b = spriteDots(core, cid, 1, p.facing, null);
     return a ? { frames: [a, b || a], x: p.x, y: p.y, facing: p.facing } : null;
+}
+
+// ── 編輯器存的自訂切法 ───────────────────────────────────────────────
+// 內建表（plaza-walk 的 YARD_LAYOUTS）是出廠值；編輯器把改動存成資料檔，
+// 這裡合併：同名覆蓋、新名字新增、default 可改指定哪一個。
+// 放在 assets/ 而不是編進程式 —— 編輯器存完就生效，不用重跑 install
+// （跟路線編輯器同一套作法）。檔案壞掉就當作沒有，不能讓院子開不起來。
+const YARD_LAYOUTS_FILE = 'yard-layouts.json';
+let _layoutCache = { mtime: 0, data: null };
+
+function loadYardLayouts(core) {
+    try {
+        const p = path.join(core.ASSETS_DIR, YARD_LAYOUTS_FILE);
+        const st = fs.statSync(p);
+        if (_layoutCache.data && _layoutCache.mtime === st.mtimeMs) return _layoutCache.data;
+        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const data = { layouts: j.layouts || {}, default: j.default || {} };
+        _layoutCache = { mtime: st.mtimeMs, data };
+        return data;
+    } catch (e) {
+        _layoutCache = { mtime: 0, data: null };
+        return { layouts: {}, default: {} };
+    }
+}
+
+// 這個隻數有哪些切法可挑（內建 + 自訂），以及目前預設是哪一個
+function yardLayoutsFor(core, n) {
+    const over = loadYardLayouts(core);
+    const names = [...new Set([...(W.yardLayoutNames(n) || []),
+                               ...Object.keys((over.layouts || {})[n] || {})])];
+    const def = (over.default || {})[n] || W.YARD_LAYOUT_DEFAULT[n] || null;
+    return { names, def };
+}
+
+// 依名稱取出實際的區域。名稱查得到自訂就用自訂的矩形，否則交給內建表。
+//
+// ⚠️ 指名的切法查不到（網址參數打錯、或那個切法剛被刪）要退回**目前生效的**預設，
+//    不是內建的預設 —— 後者的症狀是「刪掉自訂切法之後畫面靜靜跳回出廠值」，
+//    而且 dev 下拉顯示的名字跟實際走的切法對不起來。
+function yardZonesFor(core, n, layout) {
+    const over = loadYardLayouts(core);
+    const custom = (over.layouts || {})[n] || {};
+    const builtin = W.YARD_LAYOUTS[n] || {};
+    const known = (nm) => !!nm && !!(custom[nm] || builtin[nm]);
+    const name = (known(layout) && layout)
+              || (over.default || {})[n]
+              || W.YARD_LAYOUT_DEFAULT[n] || null;
+    return W.yardZones(n, W.YARD_FIELD, W.ZONE_MARGIN, custom[name] || name);
 }
 
 /**
@@ -408,7 +479,7 @@ function yardSpriteFor(core, ranch, id, step, opts = {}) {
  * NPC 一律關掉：院子是你自己的地方，不該有野生 vpet 亂入。
  */
 function composeYard(core, ranch, activeState, step, opts = {}) {
-    const occ = yardOccupants(core, ranch, activeState, opts.react);
+    const occ = yardOccupants(core, ranch, activeState, opts.react, opts.layout, core);
     if (!occ.length) return null;
     return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD });
 }
@@ -419,4 +490,7 @@ module.exports = {
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
+    yardZones: W.yardZones, zoneAnchor: W.zoneAnchor, ZONE_MARGIN: W.ZONE_MARGIN,
+    yardLayoutNames: W.yardLayoutNames, YARD_LAYOUT_DEFAULT: W.YARD_LAYOUT_DEFAULT,
+    YARD_LAYOUTS_FILE, loadYardLayouts, yardLayoutsFor, yardZonesFor,
 };

@@ -57,6 +57,43 @@ console.log('— install 必須部署 doctor.js —');
        "install.js 的部署清單沒有 doctor.js（或被註解掉了）—— daemon 的孤兒收屍會無聲失效");
 }
 
+console.log('— 玩家頁面的 shared 依賴要一起部署 —');
+{
+    // 圖鑑／底圖編輯器是從**部署樹**（~/.claude/agumon-statusline/）跑的，而 install
+    // 只複製 PLAYER_PAGES 那幾個資料夾。頁面 require('../shared/xxx') 的模組沒跟著
+    // 部署的話 server 起不來 —— CLI 只負責開瀏覽器，症狀是「vpet album 按了沒反應」。
+    // 踩過一次：evo-rules 後來才加進圖鑑，install 沒跟著改，圖鑑就整個打不開。
+    //
+    // 用字串切而不是正則：這個檔被多層工具處理過，正則裡的跳脫字元很容易被吃掉一層，
+    // 而壞掉的正則是**靜靜地全過**（掃不到東西 = 沒有缺的），所以下面補一條下限檢查。
+    const inst = read('scripts/install.js');
+    const MARK = "require('../shared/";
+    const need = new Set();
+    for (const dir of ['src/album', 'src/bgedit', 'src/editor']) {
+        const full = path.join(REPO, dir);
+        if (!fs.existsSync(full)) continue;
+        for (const f of fs.readdirSync(full)) {
+            if (!f.endsWith('.js')) continue;
+            const src = fs.readFileSync(path.join(full, f), 'utf8');
+            let i = src.indexOf(MARK);
+            while (i >= 0) {
+                const rest = src.slice(i + MARK.length);
+                let name = rest.slice(0, rest.indexOf("'"));
+                if (name && !name.includes('/')) {
+                    if (!name.endsWith('.js')) name += '.js';
+                    // 只有部署樹會跑的頁面才需要 —— 編輯器是從 repo 樹跑的，掃進來當參考
+                    if (dir !== 'src/editor') need.add(name);
+                }
+                i = src.indexOf(MARK, i + 1);
+            }
+        }
+    }
+    const missing = [...need].filter(n => !inst.includes("'" + n + "'"));
+    ok(missing.length === 0,
+       '玩家頁面 require 了這些 shared 模組，但 install.js 的部署清單沒有：' + missing.join(', '));
+    ok(need.size > 0, '掃不到任何 ../shared/ 依賴（掃描壞了就會靜靜地全過）');
+}
+
 console.log('— 背景執行不可以跳視窗 —');
 {
     // 使用者回報「PowerShell 偶爾跳出小黑窗、不到一秒就關閉」。

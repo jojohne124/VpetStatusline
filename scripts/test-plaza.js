@@ -229,6 +229,188 @@ console.log('— 面向 —');
     ok(spin === 0, `沒有水平移動卻翻面 ${spin} 次`);
 }
 
+// ── 4.4 營地分區 ─────────────────────────────────────────────────────
+// 3 隻共用 37x25 的可站範圍時，七成的拍數會有一對蓋掉對方 25% 以上的身體。
+// 分區之後降到個位數。這一節守的是「分區真的有效」與「分區沒有把走路弄壞」。
+console.log('— 營地分區 —');
+{
+    const F = W.YARD_FIELD, SPR = W.SPRITE;
+    const ov = (a, b) => {
+        const dx = Math.min(a.x + SPR, b.x + SPR) - Math.max(a.x, b.x);
+        const dy = Math.min(a.y + SPR, b.y + SPR) - Math.max(a.y, b.y);
+        return (dx > 0 && dy > 0) ? dx * dy : 0;
+    };
+
+    // 4.4-a 區域本身要合法
+    for (const n of [1, 2, 3]) {
+        const Z = W.yardZones(n);
+        ok(Z.length === n, `yardZones(${n}) 給了 ${Z.length} 塊`);
+        const bad = Z.filter(z => z.minX < F.minX || z.maxX > F.maxX
+                               || z.minY < F.minY || z.maxY > F.maxY || z.maxX < z.minX || z.maxY < z.minY);
+        ok(bad.length === 0, `n=${n} 有 ${bad.length} 塊區域跑出場地或反向`);
+        // 走得動一步，否則 legAt 會退化成永遠在停
+        const tooSmall = Z.filter(z => Math.max(z.maxX - z.minX, z.maxY - z.minY) < W.MIN_LEG);
+        ok(tooSmall.length === 0, `n=${n} 有 ${tooSmall.length} 塊區域連 MIN_LEG=${W.MIN_LEG} 都走不滿`);
+    }
+    // 隻數超出支援範圍要退回整場（不能壞掉）
+    ok(W.yardZones(9).every(z => z.maxX === F.maxX && z.maxY === F.maxY),
+       'yardZones 對沒支援的隻數應退回整場共用');
+
+    // 4.4-a2 切法表：每一種都要合法，預設那種還要用滿場地
+    {
+        // 身體實際會蓋到的範圍 = 左上角可走範圍 + 一個角色。把所有區域的身體範圍
+        // 疊起來要蓋滿整個場地 —— 蓋不滿就代表有死區（回報過「三隻時分得不好」，
+        // 真因是舊的 quad 切法右下整塊沒人站，場地只用到 83%）。
+        const coverPct = (Z) => {
+            const w = F.maxX - F.minX + SPR, h = F.maxY - F.minY + SPR;
+            const grid = new Uint8Array(w * h);
+            for (const z of Z)
+                for (let x = z.minX; x < z.maxX + SPR; x++)
+                    for (let y = z.minY; y < z.maxY + SPR; y++)
+                        grid[(y - F.minY) * w + (x - F.minX)] = 1;
+            return 100 * grid.reduce((a, b) => a + b, 0) / (w * h);
+        };
+        for (const n of Object.keys(W.YARD_LAYOUTS).map(Number)) {
+            for (const name of W.yardLayoutNames(n)) {
+                const Z = W.yardZones(n, undefined, undefined, name);
+                ok(Z.length === n, `切法 ${name} 給了 ${Z.length} 塊，應為 ${n}`);
+                const bad2 = Z.filter(z => z.minX < F.minX || z.maxX > F.maxX || z.minY < F.minY
+                                        || z.maxY > F.maxY || z.maxX < z.minX || z.maxY < z.minY);
+                ok(bad2.length === 0, `切法 ${name} 有 ${bad2.length} 塊跑出場地或反向`);
+                const tiny = Z.filter(z => Math.max(z.maxX - z.minX, z.maxY - z.minY) < W.MIN_LEG);
+                ok(tiny.length === 0, `切法 ${name} 有 ${tiny.length} 塊連 MIN_LEG=${W.MIN_LEG} 都走不滿`);
+            }
+            // 預設那種不可以留死區
+            const def = W.yardZones(n);
+            const pct = coverPct(def);
+            ok(pct > 99.5, `n=${n} 的預設切法只蓋到場地的 ${pct.toFixed(0)}%，有死區`);
+        }
+        // 指名不存在的切法 → 退回預設，不能壞掉也不能變成整場
+        const bogus = W.yardZones(3, undefined, undefined, '__nope__');
+        ok(JSON.stringify(bogus) === JSON.stringify(W.yardZones(3)),
+           '指定不存在的切法時沒有退回預設');
+    }
+
+    // 4.4-b 真的有效：分區 vs 共用整場，量「嚴重重疊」（蓋掉 >= 25% 身體）的拍數比例
+    const N = 3, TRIALS = 12, STEPS = 1500;
+    const measure = (fields) => {
+        let bad = 0, tot = 0, real = 0, n2 = 0, stayReal = 0;
+        for (let t = 0; t < TRIALS; t++) {
+            const occ = [], c = new Array(N).fill(null);
+            for (let i = 0; i < N; i++) occ.push({ seed: 1000 * t + i * 37 + 11, joinStep: 0 });
+            for (let st2 = 0; st2 < STEPS; st2++) {
+                const p = [];
+                for (let i = 0; i < N; i++) {
+                    const q = W.posAt(occ[i], st2, c[i], fields[i]); c[i] = q.cache; p.push(q); n2++;
+                    const onReal = q.x <= F.minX || q.x >= F.maxX || q.y <= F.minY || q.y >= F.maxY;
+                    if (onReal) { real++; if (!q.moving) stayReal++; }
+                }
+                let w = 0;
+                for (let a = 0; a < N; a++) for (let b = a + 1; b < N; b++) w = Math.max(w, ov(p[a], p[b]));
+                if (w >= SPR * SPR * 0.25) bad++;
+                tot++;
+            }
+        }
+        return { badPct: 100 * bad / tot, realPct: 100 * real / n2, stayReal };
+    };
+    const shared = measure(new Array(N).fill(F));
+    const zoned  = measure(W.yardZones(N));
+    // 門檻取在兩者中間偏低：現況量到 73.7%、分區量到 7.4%。
+    // 15% 擋得住「分區沒生效」與「margin 開太大等於沒分」。
+    ok(zoned.badPct < 15,
+       `分區後嚴重重疊仍有 ${zoned.badPct.toFixed(1)}%（共用整場是 ${shared.badPct.toFixed(1)}%）`);
+    ok(zoned.badPct < shared.badPct / 3,
+       `分區沒有明顯改善：${shared.badPct.toFixed(1)}% -> ${zoned.badPct.toFixed(1)}%`);
+
+    // 4.4-c 沒有把走路弄壞。「貼邊」只算**使用者看得到的場地邊**——
+    // 區域邊界是隱形的，貼在那裡看不出來，混在一起算會誤紅。
+    ok(zoned.realPct < 8,
+       `分區後貼場地邊 ${zoned.realPct.toFixed(1)}%（門檻 8%，子場地太小就會撞牆變頻繁）`);
+    ok(zoned.stayReal === 0, `分區後有 ${zoned.stayReal} 拍站在場地邊發呆`);
+
+    // 4.4-d 快取的 epoch 必須含 field。營地 keep / release 會讓每隻的區域整組換掉，
+    // 舊快取是用**舊的牆**算出來的 —— 少了這條，角色會在新區域外面繼續走舊的鏈。
+    {
+        const Z2 = W.yardZones(2), Z3 = W.yardZones(3);
+        const occ = { seed: 777, joinStep: 0 };
+        let c = null;
+        for (let st2 = 0; st2 < 60; st2++) { const q = W.posAt(occ, st2, c, Z2[0]); c = q.cache; }
+        const withStale = W.posAt(occ, 60, c, Z3[0]);      // 帶著 2 隻時的快取、換成 3 隻的區域
+        const cold      = W.posAt(occ, 60, null, Z3[0]);
+        ok(withStale.x === cold.x && withStale.y === cold.y,
+           `換區域後舊快取被誤用（帶快取 (${withStale.x},${withStale.y}) vs 冷啟動 (${cold.x},${cold.y})）`);
+    }
+
+    // 4.4-d2 放下若落在區域外 → 先走回定位點，再接回正常的鏈
+    {
+        const Z = W.yardZones(3);
+        const z = Z[0], a = W.zoneAnchor(z);
+        const drop = { x: F.maxX, y: F.maxY, facing: 'left' };      // 對角最遠的落點
+        const occ = { seed: 42, joinStep: 0, origin: drop, anchor: a };
+        const leg = W.returnLeg(drop, a);
+        ok(leg.len === Math.max(Math.abs(a.x - drop.x), Math.abs(a.y - drop.y)),
+           '回程長度不是 max(|dx|,|dy|)（主軸每拍 1 dot）');
+
+        // 走滿 len 拍要**剛好**落在定位點上，不能差一格
+        const land = W.posAt(occ, leg.len, null, z);
+        ok(land.x === a.x && land.y === a.y,
+           `回程沒有剛好停在定位點：(${land.x},${land.y}) vs (${a.x},${a.y})`);
+        ok(!land.returning, '走到定位點之後還在回程狀態');
+        ok(W.posAt(occ, 0, null, z).returning === true, '剛放下時應該是回程狀態');
+
+        // 回程途中不可以跑出整個場地
+        let off = 0;
+        for (let t2 = 0; t2 <= leg.len; t2++) {
+            const p = W.posAt(occ, t2, null, z);
+            if (p.x < F.minX || p.x > F.maxX || p.y < F.minY || p.y > F.maxY) off++;
+        }
+        ok(off === 0, `回程有 ${off} 拍跑出場地`);
+
+        // 接回之後就待在自己的區域裡
+        let leak = 0, n3 = 0, c3 = null;
+        for (let t2 = leg.len; t2 < 2500; t2++) {
+            const p = W.posAt(occ, t2, c3, z); c3 = p.cache; n3++;
+            if (!W.inZone(p, z)) leak++;
+        }
+        ok(leak === 0, `接回正常鏈之後有 ${leak} / ${n3} 拍跑出區域`);
+
+        // 決定性：有快取與冷啟動一致（回程那段不建快取，交接處最容易出錯）
+        let bad3 = 0, c4 = null;
+        for (let t2 = 0; t2 <= leg.len + 200; t2++) {
+            const p1 = W.posAt(occ, t2, c4, z); c4 = p1.cache;
+            const p2 = W.posAt(occ, t2, null, z);
+            if (p1.x !== p2.x || p1.y !== p2.y) bad3++;
+        }
+        ok(bad3 === 0, `回程前後有 ${bad3} 拍的有快取／冷啟動結果不一致`);
+
+        // 落在區域內 → 不該有回程，行為與分區之前相同
+        const inside = { x: z.minX + 2, y: z.minY + 2, facing: 'right' };
+        const q = W.posAt({ seed: 42, joinStep: 0, origin: inside, anchor: a }, 0, null, z);
+        ok(!q.returning && q.x === inside.x && q.y === inside.y,
+           '落點在區域內時不該觸發回程');
+
+        // 沒給 anchor（廣場一直是這樣）→ 維持舊的「夾進場地」行為
+        const far = { x: 999, y: 999, facing: 'right' };
+        const r2 = W.posAt({ seed: 42, joinStep: 0, origin: far }, 0, null, z);
+        ok(!r2.returning && r2.x === z.maxX && r2.y === z.maxY,
+           '沒有 anchor 時應維持舊的夾住行為（廣場不能被這個功能影響）');
+    }
+
+    // 4.4-e 拿在手上的那一隻被跳過時，其他隻的區域不可以位移
+    {
+        const ranch = { pets: [{ id: 'aa', state: { characterId: 'agumon' } },
+                               { id: 'bb', state: { characterId: 'agumon' } },
+                               { id: 'cc', state: { characterId: 'agumon' } }] };
+        const zoneOf = (react) => Object.fromEntries(
+            P.yardOccupants(core, ranch, {}, react).map(o => [o.ranchId, JSON.stringify(o.field)]));
+        const before = zoneOf(null);
+        const held   = zoneOf(new Map([['bb', { held: true }]]));
+        ok(held.aa === before.aa && held.cc === before.cc,
+           '有一隻被拿起來時，其他隻的區域跟著位移了（索引要取自完整名單）');
+        ok(Object.keys(held).length === 2, '被拿起來的那隻不該進合成名單');
+    }
+}
+
 // ── 4.5 客製右向幀 ───────────────────────────────────────────────────
 // Mastemon 左半天使（白／銀／金髮／水藍）、右半惡魔（紫黑／黃綠／粉），這個
 // 左右分色是設計本身、不是視角 —— 純鏡射會把黑白兩半互換，看起來像換了一隻。

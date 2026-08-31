@@ -1,12 +1,12 @@
 'use strict';
 /**
- * yard-touch.js — 牧場裡每一隻的互動狀態（摸摸 / 抓起放下）
+ * yard-touch.js — 營地裡每一隻的互動狀態（摸摸 / 抓起放下）
  *
  * 從 daemon.js 抽出來，唯一的理由是**可測試**：daemon.js 在 require 的當下就
  * server.listen，測試沒辦法載入它，於是這段邏輯以前只能靠肉眼在瀏覽器上驗。
  * 停走的拍數會累加、會結清、還要跨反應保管，這種帳最不該只靠肉眼。
  *
- * 純表演，不動心情值、不寫 ranch.json —— 牧場是冰箱，裡面的東西不會因為你戳牠
+ * 純表演，不動心情值、不寫 ranch.json —— 營地是冰箱，裡面的東西不會因為你戳牠
  * 而成長或變壞。所以狀態全在記憶體，daemon 一關就沒了，那正好是它該有的生命週期。
  *
  * ⚠️ 抓起放下的**落點也只在記憶體**：daemon 重開後大家回到各自 seed 決定的起點。
@@ -100,13 +100,13 @@ function create({ windowMs, limit, sulkMs, stepAt,
 
     /**
      * 每隻目前的狀態：Map<id, {frame, jump, holdSteps}>。
-     * @param alive 還在牧場裡的 id（Set）。不傳就不回收 —— 只有 /yard 那條路徑知道名單。
+     * @param alive 還在營地裡的 id（Set）。不傳就不回收 —— 只有 /yard 那條路徑知道名單。
      */
     function react(alive, now = Date.now()) {
         const nowStep = stepAt(now);
         const out = new Map();
         for (const [id, t] of touches) {
-            if (alive && !alive.has(id)) { touches.delete(id); continue; }   // 已經不在牧場了
+            if (alive && !alive.has(id)) { touches.delete(id); continue; }   // 已經不在營地了
             // 拿太久 = 拿的人已經不在了（關分頁 / 重新整理 / 斷線）。放回場上，
             // 讓牠從凍結的那個位置繼續走 —— 沒有落點可以用，也不該憑空指定一個。
             if (t.held && now - t.heldAt > heldMaxMs) {

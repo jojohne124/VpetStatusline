@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * 驗證牧場（docs/ranch-spec.md）。
+ * 驗證營地（docs/ranch-spec.md）。
  *
  * 重點只有一個：**交換不能弄丟成長資料**。
  * 現有的換角色路徑會清掉 trainingBonus / 勝率 / tagStats / stats / mood /
- * evoHistory / 進化條件 latch，牧場交換若不小心走上那條路，玩家把 WarGreymon
+ * evoHistory / 進化條件 latch，營地交換若不小心走上那條路，玩家把 WarGreymon
  * 拿回來會發現訓練值 0 —— 而且不會有任何錯誤訊息，只是幾十小時無聲消失。
  * 這種 bug 沒有測試就等著發生。
  *
@@ -48,8 +48,8 @@ function veteran() {
         evoHistory: ['agumon', 'greymon', 'metalgreymon', 'wargreymon'],
         _evo_0_ready: true, _r5hPeaked: true, _r5hResetAt: 1_700_600_000,
         _evoSpendBySession: { abc: { s: 12.5 } },
-        // 以下是暫態，收進牧場時應該丟掉
-        // （battleStartStep 用 -1 = 沒在打，否則會被「表演中不動牧場」的保護擋下來）
+        // 以下是暫態，收進營地時應該丟掉
+        // （battleStartStep 用 -1 = 沒在打，否則會被「表演中不動營地」的保護擋下來）
         battleStartStep: -1, evoShownElapsed: 3, walkPhaseOffset: 29,
         lastPetTriggerTs: 999, _forceBattle: true, pvpMeLabel: '阿張',
         lastActivityAt: 1_700_700_000_000, _albumLast: 'wargreymon',
@@ -73,9 +73,9 @@ console.log('— 快照 —');
                    .filter(k => k in snap);
     ok(leaked.length === 0, `快照留下了暫態欄位：${leaked.join(', ')}`);
 
-    // 深拷貝：之後改現役不能動到牧場裡那份
+    // 深拷貝：之後改現役不能動到營地裡那份
     st.tagStats.GodZilla.b = 999;
-    ok(snap.tagStats.GodZilla.b === 10, '快照是淺拷貝 —— 改現役會連牧場裡那份一起改');
+    ok(snap.tagStats.GodZilla.b === 10, '快照是淺拷貝 —— 改現役會連營地裡那份一起改');
 }
 
 // ── 2. 還原：舊角色的欄位不可以殘留 ────────────────────────────────────
@@ -86,7 +86,7 @@ console.log('— 還原 —');
     const st = { characterId: 'agumon', trainingBonus: 2, birthAt: 1, lastEvolveAt: 1,
                  walkPhaseOffset: 7, lastActivityAt: 123 };
     core.restorePet(st, snap);
-    ok(st.characterId === 'wargreymon' && st.trainingBonus === 37, '還原後不是牧場裡那隻');
+    ok(st.characterId === 'wargreymon' && st.trainingBonus === 37, '還原後不是營地裡那隻');
     ok(st.walkPhaseOffset === 7, '還原把走路相位也蓋掉了（那是這個視窗的，不屬於任何一隻）');
 
     // 反向：新的沒有、舊的有的欄位要被清掉
@@ -98,7 +98,7 @@ console.log('— 還原 —');
     ok(st2.evoHistory === undefined, '舊角色的 evoHistory 殘留');
 }
 
-// ── 3. keep：收進牧場 + 換新角色，成長資料要留在牧場裡 ─────────────────
+// ── 3. keep：收進營地 + 換新角色，成長資料要留在營地裡 ─────────────────
 console.log('— keep —');
 {
     fs.writeFileSync(RANCH, JSON.stringify({ v: 1, cap: 8, pets: [] }));
@@ -109,10 +109,10 @@ console.log('— keep —');
     ok(r && r.op === 'keep', 'keep 沒有執行');
 
     const ranch = core.loadRanch(RANCH);
-    ok(ranch.pets.length === 1, `牧場應有 1 隻，實際 ${ranch.pets.length}`);
+    ok(ranch.pets.length === 1, `營地應有 1 隻，實際 ${ranch.pets.length}`);
     const kept = ranch.pets[0].state;
     const lost = GROWTH_KEYS.filter(k => JSON.stringify(kept[k]) !== JSON.stringify(veteran()[k]));
-    ok(lost.length === 0, `收進牧場時弄丟：${lost.join(', ')}`);
+    ok(lost.length === 0, `收進營地時弄丟：${lost.join(', ')}`);
     ok(typeof ranch.pets[0].id === 'string' && ranch.pets[0].id.length >= 4, 'id 沒有產生');
 
     // 同一筆 trigger 重放不該再收一次
@@ -139,7 +139,7 @@ console.log('— swap —');
 
     // 進去的那隻
     const ranch = core.loadRanch(RANCH);
-    ok(ranch.pets.length === 1, `交換後牧場數量應不變，實際 ${ranch.pets.length}`);
+    ok(ranch.pets.length === 1, `交換後營地數量應不變，實際 ${ranch.pets.length}`);
     const stored = ranch.pets[0].state;
     ok(stored.characterId === 'greymon' && stored.trainingBonus === 11 && stored.battleWinCount === 5,
        '收進去那隻的成長資料不完整');
@@ -151,7 +151,7 @@ console.log('— 寫檔失敗不可以靜默 —');
 {
     // 舊版的 atomicWrite 把所有失敗完全吞掉（catch 之後只刪 tmp）。那不是少一行 log ——
     // Windows 上 rename 蓋既有檔會偶發 EPERM/EBUSY（防毒即時掃描、搜尋索引、
-    // 另一個 vpet 行程握著 handle），一次吞掉就是一次收進牧場／放生／進化默默沒生效。
+    // 另一個 vpet 行程握著 handle），一次吞掉就是一次收進營地／放生／進化默默沒生效。
     //
     // 這是真的咬過才加的：完整測試套件同時在寫一堆檔時，test-ranch 偶爾紅在
     // 「寫了卻沒生效」，單獨跑永遠重現不了 —— 兩次的症狀都是「ranch.json 的寫入不見了」。
@@ -215,11 +215,11 @@ console.log('— 寫檔失敗不可以靜默 —');
     ok(w(path.join(dir, 'x'.repeat(400) + '.json'), '{}') === false, '路徑不合法時應該回 false（或它直接丟了例外）');
 }
 
-console.log('— 收進牧場失敗時不可以換角色 —');
+console.log('— 收進營地失敗時不可以換角色 —');
 {
     // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
     // 舊版把 applyRanchOp 的回傳值丟掉、force.character 照套 —— 收起來失敗時
-    // 現役就被新角色蓋掉、而且沒進牧場，**永久遺失**。
+    // 現役就被新角色蓋掉、而且沒進營地，**永久遺失**。
     // 這一節把三種失敗情況都跑過一遍。
     const FORCE = path.join(TMP, 'force-keep.json');
     const writeForce = (o) => fs.writeFileSync(FORCE, JSON.stringify(o));
@@ -228,14 +228,14 @@ console.log('— 收進牧場失敗時不可以換角色 —');
             state: { characterId: 'agumon' } })) }));
     const CAP = core.ranchCap();
 
-    // (1) 牧場已滿 —— 永久失敗
+    // (1) 營地已滿 —— 永久失敗
     fill(CAP);
     const st1 = { characterId: 'greymon' };
     writeForce({ ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' }, character: 'gabumon' });
     core.applyForceFlags(st1, FORCE, RANCH);
     ok(core.loadRanch(RANCH).pets.length === CAP, '滿了還是收進去了');
     ok(st1.characterId === 'greymon',
-       `滿了卻把現役換成 ${st1.characterId} —— 那隻沒進牧場，永久遺失`);
+       `滿了卻把現役換成 ${st1.characterId} —— 那隻沒進營地，永久遺失`);
     // 配對的「抽新的」要一起作廢，否則下一拍時戳過期、gate 失效，新角色會補上來蓋掉現役
     const f1 = JSON.parse(fs.readFileSync(FORCE, 'utf8'));
     ok(!f1.character, '永久失敗後 force.character 沒被清掉（下一拍還是會把現役蓋掉）');
@@ -246,18 +246,18 @@ console.log('— 收進牧場失敗時不可以換角色 —');
     const ts = Date.now();
     writeForce({ ranchTriggerTs: ts, ranchOp: { op: 'keep' }, character: 'gabumon' });
     core.applyForceFlags(st2, FORCE, RANCH);
-    ok(core.loadRanch(RANCH).pets.length === 1, '表演中不該動牧場');
+    ok(core.loadRanch(RANCH).pets.length === 1, '表演中不該動營地');
     ok(st2.characterId === 'greymon',
-       `表演中卻換了角色（${st2.characterId}）—— 現役被蓋掉且沒進牧場`);
+       `表演中卻換了角色（${st2.characterId}）—— 現役被蓋掉且沒進營地`);
     ok(st2.lastRanchTriggerTs !== ts,
        '表演中就把指令用掉了 —— 動畫播完之後不會再試，等於整個吞掉');
     // 動畫播完 → 同一份 force 應該自然成功
     delete st2.battleStartStep;
     core.applyForceFlags(st2, FORCE, RANCH);
-    ok(core.loadRanch(RANCH).pets.length === 2, '動畫播完之後沒有補做收進牧場');
+    ok(core.loadRanch(RANCH).pets.length === 2, '動畫播完之後沒有補做收進營地');
     ok(st2.characterId === 'gabumon', '收進去成功了卻沒換成新角色');
     ok(core.loadRanch(RANCH).pets.some(p => p.state.characterId === 'greymon'),
-       '收進牧場的不是原本那隻現役');
+       '收進營地的不是原本那隻現役');
 
     // (3) 指令過期 —— 永久失敗
     fill(1);
@@ -273,7 +273,7 @@ console.log('— 收進牧場失敗時不可以換角色 —');
     const st4 = { characterId: 'greymon' };
     writeForce({ ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' }, character: 'gabumon' });
     core.applyForceFlags(st4, FORCE, RANCH);
-    ok(core.loadRanch(RANCH).pets.length === 2, '正常的收進牧場被擋掉了');
+    ok(core.loadRanch(RANCH).pets.length === 2, '正常的收進營地被擋掉了');
     ok(st4.characterId === 'gabumon', '正常情況沒有換成新角色');
 
     // (5) 沒有 ranchOp 的單純換角色不該被波及
@@ -281,12 +281,12 @@ console.log('— 收進牧場失敗時不可以換角色 —');
     const st5 = { characterId: 'greymon' };
     writeForce({ character: 'gabumon' });
     core.applyForceFlags(st5, FORCE, RANCH);
-    ok(st5.characterId === 'gabumon', '單純換角色被牧場的 gate 擋掉了');
+    ok(st5.characterId === 'gabumon', '單純換角色被營地的 gate 擋掉了');
 
     // (6) gate 只該擋 keep。
     // ⚠️ 上面那條擋不住「把 gate 寫成『任何 ranch 操作失敗就不換角色』」——
     //    它根本沒有 ranchOp，壓根進不到 gate。要用**別的 op 失敗**才驗得到範圍。
-    //    keep 之所以特殊，是因為只有它的「換角色」跟「收進牧場」是配對的一件事。
+    //    keep 之所以特殊，是因為只有它的「換角色」跟「收進營地」是配對的一件事。
     fill(1);
     const st6 = { characterId: 'greymon' };
     writeForce({ ranchTriggerTs: Date.now(),
@@ -319,7 +319,7 @@ console.log('— 上限 / release —');
     // 滿的時候 swap 仍要可用（一進一出，數量不變）
     const st2 = { characterId: 'greymon' };
     core.applyRanchOp(st2, { ranchTriggerTs: Date.now() - 1, ranchOp: { op: 'swap', id: 'p0' } }, RANCH);
-    ok(st2.characterId === 'agumon', '牧場滿的時候 swap 失敗了（一進一出不該受上限影響）');
+    ok(st2.characterId === 'agumon', '營地滿的時候 swap 失敗了（一進一出不該受上限影響）');
     ok(core.loadRanch(RANCH).pets.length === CAP, 'swap 之後數量變了');
 
     // release
@@ -329,7 +329,7 @@ console.log('— 上限 / release —');
     ok(!core.loadRanch(RANCH).pets.some(p => p.id === 'p1'), 'release 刪錯人');
 }
 
-// ── 6. 表演中不動牧場 ──────────────────────────────────────────────────
+// ── 6. 表演中不動營地 ──────────────────────────────────────────────────
 console.log('— 表演中 —');
 {
     fs.writeFileSync(RANCH, JSON.stringify({ v: 1, cap: 8,
@@ -338,7 +338,7 @@ console.log('— 表演中 —');
     const st = { characterId: 'greymon', battleStartStep: 100 };
     core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'swap', id: 'zzz' } }, RANCH);
     ok(st.characterId === 'greymon', '戰鬥表演中還是換了角色');
-    ok(core.loadRanch(RANCH).pets.length === 1, '戰鬥表演中還是動了牧場');
+    ok(core.loadRanch(RANCH).pets.length === 1, '戰鬥表演中還是動了營地');
 }
 
 // ── 7. 壞掉的 ranch.json 不能讓整個流程炸掉 ────────────────────────────
@@ -346,8 +346,8 @@ console.log('— 容錯 —');
 {
     fs.writeFileSync(RANCH, '{ 這不是 JSON');
     const r = core.loadRanch(RANCH);
-    ok(r && Array.isArray(r.pets) && r.pets.length === 0, '壞掉的 ranch.json 沒有退回空牧場');
-    ok(!('nonexistent' in core.loadRanch(path.join(TMP, 'nope.json'))), '讀不到的檔案應退回空牧場');
+    ok(r && Array.isArray(r.pets) && r.pets.length === 0, '壞掉的 ranch.json 沒有退回空營地');
+    ok(!('nonexistent' in core.loadRanch(path.join(TMP, 'nope.json'))), '讀不到的檔案應退回空營地');
 
     // 指定不存在的 id → 什麼都不做，不能拋例外
     fs.writeFileSync(RANCH, JSON.stringify({ v: 1, cap: 8, pets: [] }));
@@ -399,9 +399,9 @@ console.log('— 院子 —');
         ok(F.maxY === F.h - W.SPRITE, `院子不該保留名牌位（maxY=${F.maxY}，應為 ${F.h - W.SPRITE}）`);
 
         // 空的就回 null，讓呼叫端自己決定顯示什麼（而不是畫一張空圖，那看起來像壞掉）
-        ok(P.composeYard(core, { pets: [] }, null, step, {}) === null, '空牧場應回 null');
+        ok(P.composeYard(core, { pets: [] }, null, step, {}) === null, '空營地應回 null');
         ok(P.composeYard(core, { pets: [] }, { characterId: 'agumon' }, step, {}) === null,
-           '牧場空時就算有現役也該回 null（現役不算院子成員）');
+           '營地空時就算有現役也該回 null（現役不算院子成員）');
 
         // 院子的場地比較大 → 走位不能沿用廣場的界限
         let oob = 0;
@@ -440,10 +440,10 @@ console.log('— 重播上限 —');
     ok(p.x >= W.MIN_X && p.x <= W.MAX_X && p.y >= W.MIN_Y && p.y <= W.MAX_Y, '重播上限之後位置出界');
 }
 
-// ── 牧場裡的時間類進化（大便獸彩蛋）──────────────────────────────
-// 「任一幼年期在牧場放置 48 小時 → 大便獸」。這裡最該釘住的是**不該觸發時不觸發**：
+// ── 營地裡的時間類進化（大便獸彩蛋）──────────────────────────────
+// 「任一幼年期在營地放置 48 小時 → 大便獸」。這裡最該釘住的是**不該觸發時不觸發**：
 // 誤觸的代價是玩家的收藏被無聲換成別的角色，而且不可逆。
-console.log('— 特殊進化（牧場時效）—');
+console.log('— 特殊進化（營地時效）—');
 {
     const H = 3600e3;
     const RULES = path.join(TMP, 'special-evolutions.json');
@@ -541,7 +541,7 @@ console.log('— 特殊進化（牧場時效）—');
     // ⚠️ 老化不可以依賴 force-char.json 存在。
     // 第一版把 applyRanchAging 放在 applyForceFlags 讀完 force 檔之後，而那個 parse
     // 失敗就整個 return —— 「檔案不存在」是很正常的狀態（全新安裝、從沒下過 vpet 指令）。
-    // 結果是測試全綠但真機上放了 Child 進牧場永遠不會變。真的踩過。
+    // 結果是測試全綠但真機上放了 Child 進營地永遠不會變。真的踩過。
     {
         const S = path.join(TMP, 'st'); fs.mkdirSync(S, { recursive: true });
         const noForce = path.join(S, 'does-not-exist.json');
@@ -557,7 +557,7 @@ console.log('— 特殊進化（牧場時效）—');
         core.applyForceFlags(st2, noForce);
         ran = typeof st2._ranchAgeCheckedAt === 'number';
         void orig;
-        ok(ran, 'force-char.json 不存在時，applyForceFlags 就沒跑到牧場老化（會提早 return）');
+        ok(ran, 'force-char.json 不存在時，applyForceFlags 就沒跑到營地老化（會提早 return）');
     }
 }
 

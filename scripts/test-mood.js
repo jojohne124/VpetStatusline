@@ -142,6 +142,60 @@ console.log('— 走路表情 —');
     }
 }
 
+// ── 6. 睡覺中觸碰 = 叫醒，不是摸摸 ──────────────────────────────────────
+// 以前是「叫醒 + 照演 happy/refuse + 心情 +1」：畫面會出現「跳一下又倒回去睡」，
+// 而且趁牠睡著連點就能刷心情。現在自然睡只叫醒，vpet sleep 仍然叫不動。
+console.log('— 睡覺中觸碰 —');
+{
+    const IDLE_MS = 600000;           // 與 agumon-core 的 IDLE_MS 一致
+    const asleepAt = () => Date.now() - IDLE_MS - 60000;
+
+    const st = { characterId: 'greymon', mood: 1, lastActivityAt: asleepAt() };
+    pet(st, 'happy', Date.now());
+    ok(core.getMood(st) === 1,  '睡覺中被碰 → 心情不變（不算一次摸摸）');
+    ok(st._forceWake === true,  '睡覺中被碰 → 應該設 _forceWake');
+    ok(!st._forceHappy && !st._forceRefuse, '睡覺中被碰 → 不該演 happy / refuse');
+
+    // 連點在 daemon 那邊會判成 refuse；睡著時同樣只算叫醒，不能把心情打到底
+    const st2 = { characterId: 'greymon', mood: 1, lastActivityAt: asleepAt() };
+    pet(st2, 'refuse', Date.now());
+    ok(core.getMood(st2) === 1, '睡覺中連點 → 心情也不該落底');
+    ok(st2._forceWake === true && !st2._forceRefuse, '睡覺中連點 → 只叫醒');
+
+    // 醒著照舊
+    const st3 = { characterId: 'greymon', lastActivityAt: Date.now() };
+    pet(st3, 'happy', Date.now());
+    ok(core.getMood(st3) === 1 && st3._forceHappy === true, '醒著被摸 → 照舊 +1 並演 happy');
+
+    // 強制睡（vpet sleep）契約是「叫不動」：連 _forceWake 都不該設
+    const st4 = { characterId: 'greymon', mood: 1, lastActivityAt: asleepAt() };
+    fs.writeFileSync(TMP, JSON.stringify({ petTriggerTs: Date.now(), petMood: 'happy', forceSleep: true }));
+    core.applyForceFlags(st4, TMP);
+    ok(!st4._forceWake && !st4._forceHappy, 'vpet sleep 中被碰 → 什麼都不做');
+    ok(core.getMood(st4) === 1, 'vpet sleep 中被碰 → 心情不變');
+
+    // 真的會醒：走一拍之後 lastActivityAt 更新、畫面不再是睡覺幀
+    let charDef = null;
+    try { charDef = core.loadCharacter('greymon').charDef; } catch (e) {}
+    if (!charDef) { skip++; console.log('  – 讀不到資產，跳過「真的會醒」'); }
+    else {
+        const now = Date.now();
+        const stw = { characterId: 'greymon', lastActivityAt: now - IDLE_MS - 60000, _forceWake: true };
+        const f = core.decideAgumon({}, stw, now, charDef, {});
+        ok(stw.lastActivityAt === now, '叫醒後 lastActivityAt 應更新成現在');
+        ok(!(charDef.sleepFrames || []).includes(f.frameIdx), `叫醒後仍在演睡覺幀（frameIdx=${f.frameIdx}）`);
+        ok(!('_forceWake' in stw), '_forceWake 應該用完就清掉（否則下一拍會重複計 petWake）');
+        ok(core.getStat(stw, 'petWake') >= 1, '叫醒應計入 petWake 統計');
+
+        // 強制睡走一拍：仍然在睡，而且旗標要被丟掉（不能留到 vpet wake 之後才爆發）
+        const stf = { characterId: 'greymon', lastActivityAt: now - IDLE_MS - 60000,
+                      _forceSleep: true, _forceWake: true, _forceHappy: true };
+        const f2 = core.decideAgumon({}, stf, now, charDef, {});
+        ok((charDef.sleepFrames || []).includes(f2.frameIdx), 'vpet sleep 中被碰 → 應該還在睡覺幀');
+        ok(!('_forceWake' in stf) && !('_forceHappy' in stf), 'vpet sleep 應丟掉觸碰旗標，不留到之後爆發');
+    }
+}
+
 try { fs.unlinkSync(TMP); } catch (e) {}
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));
 process.exit(fail ? 1 : 0);

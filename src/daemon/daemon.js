@@ -29,7 +29,7 @@ catch (e) { core = require(path.join(__dirname, '..', 'runtime', 'agumon-core.js
 const { computeUsage } = require('./token-source');
 const plaza = require('./plaza');   // 廣場／院子的合成器（走路在 ../shared/plaza-walk.js）
 const PW    = require('../shared/plaza-walk.js');   // 拍子換算（摸摸要把停走的拍數扣掉）
-const YT    = require('./yard-touch');              // 牧場摸摸的狀態機（輪詢間隔也從這裡取）
+const YT    = require('./yard-touch');              // 營地摸摸的狀態機（輪詢間隔也從這裡取）
 const WX    = require('../shared/weather.js');
 const wxSrc = require('./weather-source.js');
 
@@ -76,13 +76,13 @@ const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server']
 //    的 release 版是開放的（vpet help 的玩家區就有），所以不能進 DEV_ONLY，否則
 //    會變成「終端機打得動、網頁 POST 卻被擋」。這裡只是不把按鈕擺出來。
 // scope：這顆鈕在哪個畫面出現。'home' = 只在前線、'both' = 兩邊都有。
-// 前線的鈕多半是對「現役那一隻」下指令（卡片、進化樹、睡覺…），在牧場畫面按了
+// 前線的鈕多半是對「現役那一隻」下指令（卡片、進化樹、睡覺…），在營地畫面按了
 // 只會影響一隻根本沒顯示在畫面上的桌寵 —— 那比按鈕消失更難懂。
 const UI_BUTTONS = [
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
     ['album',  '📖 圖鑑', { scope: 'both' }],
-    ['yard',   '🐮 牧場', { scope: 'both' }],
+    ['yard',   '⛺ 營地', { scope: 'both' }],
     ['sleep',  '😴 睡覺', { dev: true }],
     ['wake',   '☀ 喚醒', { dev: true }],
 ];
@@ -96,10 +96,10 @@ const UI_FORMS = [
       confirm: '重抽會換掉現在的桌寵，且無法復原。確定嗎？' },
     { label: '🧊 進化凍結', buttons: [['freeze', '凍結'], ['unfreeze', '解除']] },
     { label: '⚔ 自動戰鬥', buttons: [['battleOn', '開'], ['battleOff', '關']] },
-    { label: '📋 牧場清單', action: 'ranch',     fields: [], scope: 'both' },
-    { label: '📥 收進牧場', action: 'keep',      fields: [], scope: 'both',
-      confirm: '會把現役收進牧場，並抽一隻新的桌寵。收進去的隨時可以換回來。確定嗎？' },
-    { label: '🔄 換出牧場', action: 'swap',      fields: [['which', '編號或角色名']], scope: 'both' },
+    { label: '📋 營地清單', action: 'ranch',     fields: [], scope: 'both' },
+    { label: '📥 收進營地', action: 'keep',      fields: [], scope: 'both',
+      confirm: '會把現役收進營地，並抽一隻新的桌寵。收進去的隨時可以換回來。確定嗎？' },
+    { label: '🔄 換出營地', action: 'swap',      fields: [['which', '編號或角色名']], scope: 'both' },
     { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']], scope: 'both',
       confirm: '放生會**永久刪除**那一隻，救不回來。確定嗎？' },
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
@@ -362,10 +362,15 @@ function doTick() {
         if (!st.characterId) st.characterId = 'agumon';
         const out = renderTick(i, st, now);
         forceSleeping = !!st._forceSleep;   // 給 petTouch 判斷「叫不動」
+        // 自然 idle 睡：給 petTouch 判斷「這一下是叫醒，不是摸摸」。
+        // 規則向 core 借（core.isIdleSleeping），兩邊各寫一份遲早會對不起來。
+        // typeof 防呆：daemon 可能從 repo 樹跑、core 卻是舊的安裝版（見檔頭的 require）。
+        idleSleeping  = !forceSleeping && typeof core.isIdleSleeping === 'function'
+                        && core.isIdleSleeping(st, now);
         // 當家模式：render 成功才寫 heartbeat → statusLine 據此退唯讀。tick 若拋錯就不更新，
         // heartbeat 4 秒過期 → statusLine 自動接管（daemon 壞掉的 failsafe）。
         if (AUTHORITATIVE) { try { fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ ts: now, pid: process.pid })); } catch (e) {} }
-        // 牧場人數也帶出去：「收進牧場」這顆鈕在兩個分頁都有，但只有院子分頁會打 /yard。
+        // 營地人數也帶出去：「收進營地」這顆鈕在兩個分頁都有，但只有院子分頁會打 /yard。
         // 沒有這一份的話，家裡分頁沒辦法在按下去之前就知道滿了。
         let ranchInfo = null;
         try { ranchInfo = { kept: (core.loadRanch().pets || []).length, cap: core.ranchCap() }; }
@@ -468,9 +473,9 @@ const TOUCH_WINDOW_MS = 3000;   // 判定窗口
 const TOUCH_LIMIT     = 5;      // 窗口內達此次數 → 生氣
 const SULK_MS         = 3000;   // 生氣後鬧脾氣：這段期間再戳也不理
 
-// ── 牧場的摸摸 ─────────────────────────────────────────────────────
+// ── 營地的摸摸 ─────────────────────────────────────────────────────
 // 純表演：只換一幀表情、開心時原地跳，**不動心情值、不寫 ranch.json**。
-// 牧場是冰箱，裡面的東西不會因為你戳牠而成長或變壞 —— 這是使用者明確要的分界。
+// 營地是冰箱，裡面的東西不會因為你戳牠而成長或變壞 —— 這是使用者明確要的分界。
 //
 // 狀態機本體在 ./yard-touch.js。抽出去唯一的理由是可測試：daemon.js 一 require
 // 就 server.listen，測試載不進來，而停走的拍數要累加、結清、還要跨反應保管，
@@ -486,10 +491,18 @@ const yardReactMap = (alive) => yardTouch.react(alive);
 let touchTimes = [];
 let sulkUntil  = 0;
 let forceSleeping = false;   // 由每拍的 doTick 更新（vpet sleep 狀態）
+let idleSleeping  = false;   // 同上：自然 idle 睡（超過 IDLE_MS 沒活動）
 function petTouch() {
     const now = Date.now();
     // vpet sleep 強制睡：叫不動。回明確訊息，避免使用者以為點擊壞了；也不累計連戳。
     if (forceSleeping) return { ok: true, action: 'pet', mood: 'asleep' };
+    // 自然 idle 睡：這一下是叫醒，不是摸摸 —— core 那邊已經擋掉表情與心情，
+    // 前端也不該回「摸摸 ♥」。連戳計數同樣不累計：叫醒不該讓牠之後比較容易生氣。
+    // petMood 照送 happy：core 會自己重算在不在睡，萬一那一拍牠已經醒了就走原本的摸摸。
+    if (idleSleeping) {
+        writeForce({ petTriggerTs: now, petMood: 'happy' });
+        return { ok: true, action: 'pet', mood: 'wake' };
+    }
     if (now < sulkUntil) return { ok: true, action: 'pet', mood: 'sulking' };   // 鬧脾氣中，不回應
     touchTimes = touchTimes.filter(t => now - t < TOUCH_WINDOW_MS);
     touchTimes.push(now);
@@ -540,7 +553,7 @@ const CLI_ACTIONS = {
     switch:      (a) => a.name ? [a.name] : null,          // 裸角色名/編號
     evolve:      (a) => a.name ? ['evolve', a.name] : null,
     battle:      (a) => ['battle', ...(a.enemy ? [a.enemy] : []), ...(a.result ? [a.result] : [])],
-    // 牧場（docs/ranch-spec.md）。release 一律補 yes —— CLI 的二次確認是為終端機使用者
+    // 營地（docs/ranch-spec.md）。release 一律補 yes —— CLI 的二次確認是為終端機使用者
     // 設計的，網頁這邊由 data-confirm 的對話框負責，不能讓 subprocess 吊在等輸入。
     ranch:       ()  => ['ranch'],
     keep:        ()  => ['keep'],
@@ -560,7 +573,7 @@ function runCli(args) {
 function applyCommand(action, args = {}) {
     if (IS_RELEASE && DEV_ONLY.has(action)) return { ok: false, error: '此版本未提供此指令' };
     if (action === 'pet') return petTouch();   // 觸碰要即時計數，走專用路徑
-    // 牧場的摸摸：純表演，不動心情也不寫任何檔。args.which = ranch entry 的內部 id。
+    // 營地的摸摸：純表演，不動心情也不寫任何檔。args.which = ranch entry 的內部 id。
     if (action === 'yardPet') {
         if (!args.which) return { ok: false, error: '要指定是哪一隻' };
         return yardPetTouch(args.which);
@@ -578,7 +591,7 @@ function applyCommand(action, args = {}) {
                     + (r ? r.holdSteps || 0 : 0),
             origin: r && r.anchor ? r.anchor.origin : null,
         });
-        if (!sp) return { ok: false, error: '這隻不在牧場裡' };
+        if (!sp) return { ok: false, error: '這隻不在營地裡' };
         if (!yardTouch.grab(args.which)) return { ok: false, error: '已經拿在手上了' };
         // 兩張待機幀交給前端輪替 —— 拿在手上也要繼續呼吸，不是定格
         return { ok: true, action: 'yardGrab', frames: sp.frames, x: sp.x, y: sp.y, facing: sp.facing };
@@ -656,7 +669,7 @@ function loadWindArt() {
         if (!out.length) throw new Error('空的');
         return packWind(out);
     } catch (e) {
-        // 美術不在（換過角色表、精簡過 release）也不能讓牧場開不起來 ——
+        // 美術不在（換過角色表、精簡過 release）也不能讓營地開不起來 ——
         // 退回一小團青色方塊，形狀差一點但不會是空白。
         const P = [[1,0],[2,0],[0,1],[1,1],[2,1],[3,1],[1,2],[2,2],[5,0],[6,3]];
         return packWind(P.map(([x, y]) => [x, y, 117, 232, 240]));
@@ -719,7 +732,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 院子不鋪底圖：那張圖是為家裡 52x8 的橫幅舞台烘的（center/cover），
      放到 96x24 會被裁成完全不同的一塊，看起來像另一張圖。等院子有自己的美術再說。 */
   body.yard #stage{background:rgb(24,24,24)}
-  /* 天氣層：疊在角色畫布正上方，只有牧場會出現。
+  /* 天氣層：疊在角色畫布正上方，只有營地會出現。
      刻意不用 image-rendering:pixelated —— 雨絲、光線是向量畫的，柵格化反而變鋸齒。
      pointer-events:none 是必要的，否則它會吃掉右鍵選單的命中判定。 */
   #wx{position:absolute;display:none;pointer-events:none;z-index:2}
@@ -918,7 +931,7 @@ function draw(petLines){
   }
 }
 let lastFetch=Date.now();
-// 視圖：家（statusline 那個舞台）／院子（牧場成員在 96x24 的場地散步）。
+// 視圖：家（statusline 那個舞台）／院子（營地成員在 96x24 的場地散步）。
 // 只是「這個瀏覽器分頁在看哪裡」，不是 daemon 的狀態 —— 開兩個分頁可以一個看家、
 // 一個看院子，daemon 不需要知道。
 let view = 'home';
@@ -931,8 +944,8 @@ function setView(v){
   document.getElementById('yardbar').style.display = (v==='yard') ? '' : 'none';
   document.querySelectorAll('[data-cmd="yard"]').forEach(b=>{
     // 「家」在這裡有兩個意思會打架：廣場那邊的「回家」是從廣場回到自己的舞台，
-    // 牧場這邊按了是回到現役那隻。用「前線」指現役、「牧場」指收藏，不會混。
-    b.textContent = (v==='yard') ? '⚔ 前線' : '🐮 牧場';
+    // 營地這邊按了是回到現役那隻。用「前線」指現役、「營地」指收藏，不會混。
+    b.textContent = (v==='yard') ? '⚔ 前線' : '⛺ 營地';
   });
   hudTick();
   poll();
@@ -1176,8 +1189,8 @@ async function pollYard(){
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   lastYard=y;
   document.getElementById('yardinfo').textContent = y.kept
-    ? '牧場 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
-    : '牧場是空的 —— 進階區的「📥 收進牧場」可以把現役收進來（隨時換得回去）';
+    ? '營地 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
+    : '營地是空的 —— 進階區的「📥 收進營地」可以把現役收進來（隨時換得回去）';
   document.getElementById('kind').textContent='yard';
   document.getElementById('tick').textContent='#'+y.step;
   if(y.weather){
@@ -1190,9 +1203,9 @@ async function pollYard(){
   }
   if(y.lines){ draw(y.lines); }
   else {
-    // 空牧場：仍然把畫布撐成完整的場地大小再清空。
+    // 空營地：仍然把畫布撐成完整的場地大小再清空。
     // 只 clearRect 不改尺寸的話，畫布會停在上一次畫過的家裡舞台（52 欄），
-    // 空牧場就變成一個小方塊，看起來像壞掉而不是「這裡還沒有東西」。
+    // 空營地就變成一個小方塊，看起來像壞掉而不是「這裡還沒有東西」。
     const cv=document.getElementById('pet');
     cv.width=y.cols*CW; cv.height=y.rows*CH;
     cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
@@ -1200,9 +1213,9 @@ async function pollYard(){
   syncWx();
 }
 
-let lastState=null;   // 最後一次 /state（家裡分頁靠它知道牧場滿了沒）
+let lastState=null;   // 最後一次 /state（家裡分頁靠它知道營地滿了沒）
 
-// 牧場滿了沒。院子分頁的 /yard 比較新，優先用它；家裡分頁退回 /state。
+// 營地滿了沒。院子分頁的 /yard 比較新，優先用它；家裡分頁退回 /state。
 // 回 null = 還不知道（剛開頁面），那就別擋，讓指令照送、由 CLI 那道去擋。
 function ranchFull(){
   const src = (lastYard && lastYard.cap) ? lastYard
@@ -1248,7 +1261,7 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   const wr=hit.winPct==null?'尚無戰績':(hit.wins+'/'+hit.battles+'　'+hit.winPct+'%');
   // 選單表頭就把該講的都講完了（名字 / 階段 / 戰力 / 勝率 / 收進來的時間），
   // 所以不再給一顆「名片」鈕—— 那顆鈕是把同一份資料倒到畫布下方的 #cmdout，
-  // 而牧場畫面的畫布是滿尺寸、外層會捲動，輸出區常常落在看不到的位置，
+  // 而營地畫面的畫布是滿尺寸、外層會捲動，輸出區常常落在看不到的位置，
   // 看起來就像「按了沒反應」。
   el.innerHTML='<div class="hd"><b>'+hit.name+'</b>'+
                (hit.wasName?' <span class="k2">（原：'+hit.wasName+'）</span>':'')+
@@ -1314,7 +1327,7 @@ function showOutput(text){
 }
 // 指令失敗時訊息列要顯示什麼。**把 CLI 講的理由直接放上去**，不要只說「失敗：keep」。
 // 舊版就是只說動作名：走 CLI 的指令 r.error 是 undefined，於是永遠顯示「失敗：<動作>」，
-// 而真正有用的那句（例如「牧場已滿（5/5）。先 vpet release…」）被塞進畫布下方的輸出區
+// 而真正有用的那句（例如「營地已滿（5/5）。先 vpet release…」）被塞進畫布下方的輸出區
 // —— 按了鈕只看到一句沒資訊的紅字，不會知道為什麼，也不會想到要往下看。
 // 取第一行非空白：CLI 的第一行就是給人看的結論，後面常是細節或清單。
 function failMsg(r,action){
@@ -1330,7 +1343,7 @@ async function sendCmd(action,args){
   try{
     const r=await (await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
                                        body:JSON.stringify({action,args:args||{}})})).json();
-    const MOOD={happy:'摸摸 ♥',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
+    const MOOD={happy:'摸摸 ♥',wake:'把牠叫醒了',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
     const quiet=(action==='yardGrab'||action==='yardDrop');
@@ -1340,7 +1353,7 @@ async function sendCmd(action,args){
     // 有回應文字的指令（doctor / stats / code / reset…）把 CLI 輸出原樣秀出來；
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
     if(!quiet) showOutput(r.output || r.error || '');
-    // 牧場操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
+    // 營地操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
     if(['keep','swap','release'].includes(action)) setTimeout(poll, 1300);
     // 摸摸馬上刷一次，不然要等下一次輪詢（最多 500ms）才看到牠跳起來，
     // 點下去到有反應之間那半秒會讓人以為沒點到。
@@ -1358,7 +1371,7 @@ document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('cli
       if(cmd==='keep'){
         const r=ranchFull();
         if(r && r.full){
-          flashCmdMsg('牧場已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出牧場」。','#d29922');
+          flashCmdMsg('營地已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出營地」。','#d29922');
           return;
         }
       }
@@ -1383,7 +1396,7 @@ document.querySelectorAll('#adv .form').forEach(row=>{
       if(cmd==='keep'){
         const r=ranchFull();
         if(r && r.full){
-          flashCmdMsg('牧場已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出牧場」。','#d29922');
+          flashCmdMsg('營地已滿（'+r.kept+'/'+r.cap+'）。先放生一隻，或改用「換出營地」。','#d29922');
           return;
         }
       }
@@ -1400,11 +1413,11 @@ for(const id of ['wxsel','wxcold']){
   if(e) e.addEventListener('change',()=>{ if(view==='yard') poll(); });
 }
 // 點角色＝摸摸（連戳會生氣）。
-// 牧場那一下要先做命中判定：畫布上有好幾隻，而 pet 指令是作用在現役那隻的 ——
-// 直接送出去會變成「摸了一隻、爽到另一隻」。所以牧場走 yardPet + 內部 id。
-// 而且牧場的摸摸是**純表演，不動心情值** —— 冰箱裡的東西不會因為你戳牠而變好或變壞。
+// 營地那一下要先做命中判定：畫布上有好幾隻，而 pet 指令是作用在現役那隻的 ——
+// 直接送出去會變成「摸了一隻、爽到另一隻」。所以營地走 yardPet + 內部 id。
+// 而且營地的摸摸是**純表演，不動心情值** —— 冰箱裡的東西不會因為你戳牠而變好或變壞。
 document.getElementById('pet').addEventListener('click',ev=>{
-  // 牧場改走 mousedown/mouseup（要分辨短按與長壓），這裡只剩家裡那條路
+  // 營地改走 mousedown/mouseup（要分辨短按與長壓），這裡只剩家裡那條路
   if(view!=='yard') sendCmd('pet');
 });
 
@@ -1522,9 +1535,9 @@ const server = http.createServer((req, res) => {
         }
         return;
     }
-    // 院子：牧場成員 + 現役在同一個舞台散步（docs/ranch-spec.md 階段 2）。
+    // 院子：營地成員 + 現役在同一個舞台散步（docs/ranch-spec.md 階段 2）。
     // 每次請求現算 —— 合成 20 隻約 0.3ms，沒必要放進主 tick 迴圈給不看院子的人付成本。
-    // 名單直接讀 ranch.json，不經過 latest 快取：牧場剛改完就要看得到。
+    // 名單直接讀 ranch.json，不經過 latest 快取：營地剛改完就要看得到。
     if (req.url === '/yard' || req.url.startsWith('/yard?')) {
         let body;
         try {
@@ -1537,8 +1550,8 @@ const server = http.createServer((req, res) => {
             const alive = new Set((ranch.pets || []).map(p => p.id));
             const out   = plaza.composeYard(core, ranch, st, step,
                                             { caches: yardCaches, react: yardReactMap(alive) });
-            // 場地尺寸一定要回傳，**空牧場時尤其重要**：沒有這個，前端拿不到尺寸只能
-            // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空牧場看起來就變成
+            // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
+            // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
             const F = plaza.YARD_FIELD;
             // 帶座標與資料出去，讓前端能做右鍵選單：click 座標 -> 哪一隻。
@@ -1557,7 +1570,7 @@ const server = http.createServer((req, res) => {
                 const b = st.battleTotalCount || 0, w = st.battleWinCount || 0;
                 return { stage, power, battles: b, wins: w,
                          winPct: b ? Math.floor(w / b * 100) : null, keptAt: p.keptAt,
-                         // 在牧場裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
+                         // 在營地裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
                          wasName: p.evolvedFrom ? core.getDisplayName(p.evolvedFrom) : null };
             };
             body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE,

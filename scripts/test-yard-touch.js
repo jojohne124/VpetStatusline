@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * test-yard-touch.js — 牧場摸摸：反應幀、原地跳、停走的拍數
+ * test-yard-touch.js — 營地摸摸：反應幀、原地跳、停走的拍數
  *
  * 這支存在的理由就是它測得到的東西以前測不到 —— 狀態機本來寫在 daemon.js 裡，
  * 而 daemon.js 一 require 就 server.listen，測試載不進來。抽成 yard-touch.js
@@ -149,12 +149,12 @@ console.log('— 回收 —');
 {
     const y = mk();
     y.pet('a', T0);
-    // 還在牧場：即使反應結束，帶著 holdSteps 的那筆不能被回收
+    // 還在營地：即使反應結束，帶著 holdSteps 的那筆不能被回收
     y.react(new Set(['a']), T0 + 9000);
-    ok(y.touches.has('a'), '還在牧場的成員被回收了（holdSteps 會連帶消失）');
-    // 已經離開牧場 → 收掉，不然 daemon 開整天會一直長
+    ok(y.touches.has('a'), '還在營地的成員被回收了（holdSteps 會連帶消失）');
+    // 已經離開營地 → 收掉，不然 daemon 開整天會一直長
     y.react(new Set(), T0 + 9000);
-    ok(!y.touches.has('a'), '已離開牧場的成員沒有被回收');
+    ok(!y.touches.has('a'), '已離開營地的成員沒有被回收');
 }
 
 console.log('— 畫面：跳躍只改畫在哪 —');
@@ -268,9 +268,9 @@ console.log('— 拿起來 / 放下 —');
     const w = mk();
     w.grab('c', T0); w.drop('c', 3, 3, 'right', T0);
     w.react(new Set(['c']), T0 + 60000);
-    ok(w.touches.has('c'), '還在牧場卻把落點回收了（那隻會彈回原本的起點）');
+    ok(w.touches.has('c'), '還在營地卻把落點回收了（那隻會彈回原本的起點）');
     w.react(new Set(), T0 + 60000);
-    ok(!w.touches.has('c'), '已離開牧場的落點沒有被回收');
+    ok(!w.touches.has('c'), '已離開營地的落點沒有被回收');
 }
 
 console.log('— 拿太久要自動放回去 —');
@@ -340,7 +340,7 @@ console.log('— 放下要蓋過走路快取 —');
         const y2 = mk();
         y2.grab('p1', now);
         const heldOut = P.composeYard(core, ranch, null, step, { caches: new Map(), react: y2.react(null, now) });
-        ok(heldOut === null, '牧場只有一隻且被拿著時，合成應該回 null（沒有人留在場上）');
+        ok(heldOut === null, '營地只有一隻且被拿著時，合成應該回 null（沒有人留在場上）');
 
         // 交給前端的是**兩張**待機幀：拿在手上也要繼續呼吸，不是定格。
         const sp = P.yardSpriteFor(core, ranch, 'p1', step, {});
@@ -351,7 +351,7 @@ console.log('— 放下要蓋過走路快取 —');
         ok(sp && sp.frames[0].length === 16 && sp.frames[0][0].length === 16,
            '待機幀的尺寸不對');
         ok(P.yardSpriteFor(core, { pets: [] }, 'nobody', step, {}) === null,
-           '不在牧場裡的 id 應該回 null，不是丟例外');
+           '不在營地裡的 id 應該回 null，不是丟例外');
     }
 }
 

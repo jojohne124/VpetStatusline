@@ -36,8 +36,11 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','keep','swap','release'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','camp','keep','swap','release'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
+// 顯示文字叫「營地」，指令沿用 ranch（狀態檔 ranch.json 也是），camp 是等價別名。
+// 在這裡就折成 --ranch，下面所有分支都不用知道有兩個名字。
+if (args[0] === '--camp') args[0] = '--ranch';
 
 function printHelp() {
     const dev = !IS_RELEASE;   // 開發指令只在非 release 顯示
@@ -46,10 +49,10 @@ function printHelp() {
     console.log('  vpet card                   顯示狀態卡（角色 / 階級 / 戰力 / 勝率）');
     console.log('  vpet tree                   顯示進化歷程（走過的彩色、未到的黑影問號）');
     console.log('  vpet reset                  重抽一隻起始桌寵（舊的不保留）');
-    console.log('  vpet ranch                  牧場：列出收藏的桌寵');
-    console.log('  vpet keep                   現役收進牧場 + 抽一隻新的（保留版 reset）');
-    console.log('  vpet swap <編號|名稱>       現役收進牧場，叫出指定那隻');
-    console.log('  vpet release <編號|名稱>    放生牧場裡的一隻（永久刪除）');
+    console.log('  vpet camp / ranch           營地：列出收藏的桌寵');
+    console.log('  vpet keep                   現役收進營地 + 抽一隻新的（保留版 reset）');
+    console.log('  vpet swap <編號|名稱>       現役收進營地，叫出指定那隻');
+    console.log('  vpet release <編號|名稱>    放生營地裡的一隻（永久刪除）');
     console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet album                  開啟圖鑑（瀏覽器）');
@@ -581,7 +584,7 @@ if (args[0] === '--evolve') {
     process.exit(0);
 }
 
-// ── 牧場（見 docs/ranch-spec.md）───────────────────────────────────
+// ── 營地（見 docs/ranch-spec.md）───────────────────────────────────
 // CLI 這一側只是冰箱：收進 / 拿出 / 列清單 / 放生。真正的互動（看牠們散步、
 // 點牠）是 daemon 專屬 —— 狀態列只有一行，塞不下一座院子。
 //
@@ -608,15 +611,15 @@ if (RANCH_CMDS.includes(args[0])) {
             const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
             return d ? `${d} 天前` : h ? `${h} 小時前` : '剛剛';
         })();
-        // 在牧場裡自己變掉的（大便獸彩蛋）要講清楚原本是誰 ——
+        // 在營地裡自己變掉的（大便獸彩蛋）要講清楚原本是誰 ——
         // 只顯示新角色的話，玩家會以為收藏不見了，那是 bug 的體感不是彩蛋的體感。
         const was = p.evolvedFrom ? `（原：${core.getDisplayName(p.evolvedFrom)}）` : '';
         return `${core.getDisplayName(id)}${was}  ${stage}  戰力 ${power}  收於 ${ago}`;
     };
 
-    // 編號是權威；名稱只在牧場裡唯一時才能用 —— 一直 reset 會有好幾隻 agumon，不要猜。
+    // 編號是權威；名稱只在營地裡唯一時才能用 —— 一直 reset 會有好幾隻 agumon，不要猜。
     const resolve = (key) => {
-        if (!key) return { err: '要指定編號或角色名（vpet ranch 可以看編號）' };
+        if (!key) return { err: '要指定編號或角色名（vpet camp 可以看編號）' };
         // 內部 id：daemon 的右鍵選單用這個。編號會隨清單增減而位移，
         // 「選單畫出來的當下是 #3，送出時已經變成別人」是很實際的風險。
         const byId = pets.find(p => p.id === key);
@@ -628,30 +631,30 @@ if (RANCH_CMDS.includes(args[0])) {
         }
         const k = String(key).toLowerCase();
         const hit = pets.filter(p => String(p.state && p.state.characterId).toLowerCase() === k);
-        if (!hit.length) return { err: `牧場裡沒有 ${key}` };
+        if (!hit.length) return { err: `營地裡沒有 ${key}` };
         if (hit.length > 1) {
-            return { err: `牧場裡有 ${hit.length} 隻 ${key}，請改用編號（vpet ranch 可以看）` };
+            return { err: `營地裡有 ${hit.length} 隻 ${key}，請改用編號（vpet camp 可以看）` };
         }
         return { pet: hit[0] };
     };
 
     if (args[0] === '--ranch') {
-        console.log(`牧場（${pets.length}/${cap}）`);
+        console.log(`營地（${pets.length}/${cap}）`);
         if (!pets.length) {
             console.log('  (空的) —— vpet keep 可以把現役的收進來，並抽一隻新的');
         } else {
             pets.forEach((p, i) => console.log(`  #${i + 1}  ${label(p)}`));
         }
         console.log('');
-        console.log('  vpet swap <編號|名稱>     現役收進牧場，叫出指定那隻');
-        console.log('  vpet keep                 現役收進牧場 + 抽一隻新的');
+        console.log('  vpet swap <編號|名稱>     現役收進營地，叫出指定那隻');
+        console.log('  vpet keep                 現役收進營地 + 抽一隻新的');
         console.log('  vpet release <編號|名稱>  放生（永久刪除）');
         process.exit(0);
     }
 
     if (args[0] === '--keep') {
         if (pets.length >= cap) {
-            console.log(`牧場已滿（${pets.length}/${cap}）。先 vpet release <編號> 騰出位置，或改用 vpet swap 交換。`);
+            console.log(`營地已滿（${pets.length}/${cap}）。先 vpet release <編號> 騰出位置，或改用 vpet swap 交換。`);
             process.exit(1);
         }
         // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
@@ -665,7 +668,7 @@ if (RANCH_CMDS.includes(args[0])) {
         force.dropTriggerTs  = Date.now();    // 空降表演
         delete force.evolveTriggerTs; delete force.evolveTarget;
         writeForce(force);
-        console.log(`✓ 已排入：現役收進牧場（${pets.length + 1}/${cap}），新夥伴 🎲 ${core.getDisplayName(next)}（下次 refresh 生效）`);
+        console.log(`✓ 已排入：現役收進營地（${pets.length + 1}/${cap}），新夥伴 🎲 ${core.getDisplayName(next)}（下次 refresh 生效）`);
         process.exit(0);
     }
 

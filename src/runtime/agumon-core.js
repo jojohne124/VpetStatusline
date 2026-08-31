@@ -13,6 +13,11 @@ const ANCHOR_GAP  = 4;
 const STEP_MS     = 1000;
 const BATTLE_DELAY_MS = 5000;   // prompt 後思考超過這秒數 → 自動觸發戰鬥（取代無效的 thinking 字串偵測）
 const IDLE_MS     = 600000;
+// 自然 idle 睡（不含 vpet sleep 的強制睡）。抽成函式是因為 daemon 也要問同一件事 ——
+// 觸碰睡著的角色只是叫醒，前端就不該回「摸摸 ♥」。規則放兩份遲早會對不起來。
+function isIdleSleeping(st, now = Date.now()) {
+    return (now - (st.lastActivityAt || now)) > IDLE_MS;
+}
 const MAX_POS     = 36;                                                 // 走路範圍：對齊 BATTLE_SCENE_WIDTH(52) - 角色寬(16)
 const EXPR_CHANCE = 0.10;
 const EXPR_HOLD   = 3;
@@ -72,7 +77,7 @@ function sleepSync(ms) {
 
 // 寫入真的失敗時留下痕跡。**用 append**：主檔寫不進去多半是那個檔被卡住，
 // 換一個檔名 append 通常還寫得進去；而且這種事極罕見，不必擔心檔案長大。
-// 靜靜吞掉是最糟的選擇 —— 一次吞掉的寫入就是一次「收進牧場沒生效」而使用者毫不知情。
+// 靜靜吞掉是最糟的選擇 —— 一次吞掉的寫入就是一次「收進營地沒生效」而使用者毫不知情。
 // attempts 也要寫進去：「試了 5 次還是不行」和「第一次就放棄」是完全不同的故事，
 // 前者是有人一直握著那個檔，後者是路徑/磁碟本身有問題。
 function logWriteFailure(file, e, attempts) {
@@ -94,7 +99,7 @@ function logWriteFailure(file, e, attempts) {
  *
  * ⚠️ 舊版把所有失敗**完全吞掉**（catch 之後只刪 tmp，不回報也不留痕跡）。
  * 那不只是少一行 log —— Windows 上 rename 蓋既有檔會偶發 EPERM/EBUSY（防毒、索引、
- * 另一個行程握著 handle），一次吞掉就是一次收進牧場／放生／進化默默沒生效。
+ * 另一個行程握著 handle），一次吞掉就是一次收進營地／放生／進化默默沒生效。
  * 實際咬過：完整測試套件同時寫一堆檔時，test-ranch 偶爾紅在「寫了卻沒生效」，
  * 單獨跑永遠重現不了。現在改成重試 + 留痕跡 + 回報成敗。
  */
@@ -162,25 +167,25 @@ function saveState(stateFile, s) {
 }
 
 /**
- * 牧場操作（keep / swap / release）。由 CLI 寫進 force，由「當家」那一端實際執行。
+ * 營地操作（keep / swap / release）。由 CLI 寫進 force，由「當家」那一端實際執行。
  *
  * 為什麼不讓 CLI 直接改：color-state.json 是單一寫入者制（C 方案，daemon 當家時
  * statusLine 退唯讀）。CLI 直接寫會把那個保證破壞掉，所以一律走 force —— 與
  * battle / evolve / reset 同一條路。CLI 只負責驗參數與回報「已排入」。
  *
  * ⚠️ 寫入順序：**先寫 ranch.json，再改 st**。兩個檔要一起換，中途死掉必然有一邊沒完成；
- * 這個順序下最壞是「牧場多一份、現役沒換成」，玩家看得到也救得回。
+ * 這個順序下最壞是「營地多一份、現役沒換成」，玩家看得到也救得回。
  * 反過來則是桌寵直接消失 —— 同樣是失敗，代價差很多。
  */
 // ── 特殊進化（規則型）─────────────────────────────────────────────
-// 「任一幼年期在牧場放置 48 小時 → 大便獸」這種進化，**刻意不寫進 config.evolvesTo**。
+// 「任一幼年期在營地放置 48 小時 → 大便獸」這種進化，**刻意不寫進 config.evolvesTo**。
 //
 // 理由是那會變成 19 條邊（目前 roster 有 19 隻 Child），同時汙染三個地方：
 //   vpet tree / 圖鑑（19 條線收斂到同一顆）、進化路線編輯器的 SVG、
 //   以及 parentsOf()（大便獸會有 19 個 parent，血緣長度算出來很奇怪）。
 //   而且每新增一隻 Child 就得記得補一條，遲早漏掉。
 // 寫成規則之後那三個地方**一行都不用改** —— 它們讀的是 evolvesTo，看不到這裡的規則。
-// 要露出來就走反方向：在大便獸自己的圖鑑頁寫「來源：幼年期在牧場放置 48 小時」，
+// 要露出來就走反方向：在大便獸自己的圖鑑頁寫「來源：幼年期在營地放置 48 小時」，
 // 一行字取代 19 條箭頭。
 //
 // ⚠️ 為什麼是獨立檔案而不是塞進 roster.json：進化路線編輯器存檔時會**整份重寫**
@@ -196,7 +201,7 @@ function loadSpecialEvolutions(file) {
 }
 
 /**
- * 這隻牧場成員符不符合某條規則。
+ * 這隻營地成員符不符合某條規則。
  * 未知的條件型別一律回 false —— 寧可不觸發，也不要因為看不懂就亂把人家的收藏變掉。
  */
 function matchRanchRule(rule, pet, now, opts = {}) {
@@ -214,7 +219,7 @@ function matchRanchRule(rule, pet, now, opts = {}) {
         if (c.type === 'ranch_hours') {
             // 「完全不動到 N 小時」不需要任何新狀態：keep / swap 都是新開一筆
             // keptAt，被換出來的那隻是整筆從 ranch 移除 —— 之後再收進去是全新 id。
-            // 所以 keptAt 天生就是「連續待在牧場多久」，中途取出自然歸零。
+            // 所以 keptAt 天生就是「連續待在營地多久」，中途取出自然歸零。
             if (!(now - (pet.keptAt || 0) >= c.hours * 3600e3)) return false;
         } else {
             return false;
@@ -227,10 +232,10 @@ function matchRanchRule(rule, pet, now, opts = {}) {
 const RANCH_AGE_CHECK_MS = 60000;
 
 /**
- * 套用牧場裡的時間類進化。回傳有變動的清單，沒變動回 null。
+ * 套用營地裡的時間類進化。回傳有變動的清單，沒變動回 null。
  *
- * 惰性判定（不是計時器）：牧場本來就是冰箱、裡面的東西不會自己長大，這是唯一的例外。
- * 用 keptAt 現算，所以 daemon 關掉的那段時間照樣算數 —— 你下次打開牧場才發現牠變了，
+ * 惰性判定（不是計時器）：營地本來就是冰箱、裡面的東西不會自己長大，這是唯一的例外。
+ * 用 keptAt 現算，所以 daemon 關掉的那段時間照樣算數 —— 你下次打開營地才發現牠變了，
  * 那正好就是「默默變成」該有的體感。
  */
 function applyRanchAging(st, ranchFile, opts = {}) {
@@ -286,9 +291,9 @@ function applyRanchOp(st, force, ranchFile, forceFile) {
     const op = force.ranchOp;
     if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
 
-    // 表演中不動牧場：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀。
+    // 表演中不動營地：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀。
     // ⚠️ 這一段要在「消耗時戳」**之前**，而且回 retry —— 舊版在這裡直接丟掉指令，
-    //    於是「戰鬥動畫播放中按收進牧場」會變成：牧場沒收到，但配對的抽新角色照做，
+    //    於是「戰鬥動畫播放中按收進營地」會變成：營地沒收到，但配對的抽新角色照做，
     //    現役被蓋掉且沒存進去＝永久遺失。戰鬥有 19 拍，那個窗口一點都不窄。
     //    改成保留指令，動畫播完的下一拍自然就成功了。
     if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) {
@@ -348,25 +353,25 @@ function applyRanchOp(st, force, ranchFile, forceFile) {
 // （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
 const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
 // ranchFile 只有測試會傳 —— 沒有它就只能拿真的 ranch.json 來驗「收進去失敗時
-// 不可以換角色」，那條路徑一跑就會動到使用者的牧場。
+// 不可以換角色」，那條路徑一跑就會動到使用者的營地。
 function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
-    // 牧場的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
+    // 營地的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
     // ⚠️ 放在下面的話，force-char.json 不存在時 parse 會 throw、整個函式提早 return，
-    //    牧場就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
-    //    任何 vpet 指令）。實測就是這樣抓到的：測試全綠但真機上放了一隻 Child 進牧場，
+    //    營地就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
+    //    任何 vpet 指令）。實測就是這樣抓到的：測試全綠但真機上放了一隻 Child 進營地，
     //    規則永遠不會觸發。
     applyRanchAging(st, ranchFile);
 
     let force;
     try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
 
-    // 牧場操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
-    // 順序反過來的話收進牧場的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
+    // 營地操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
+    // 順序反過來的話收進營地的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
     const ranchRes = applyRanchOp(st, force, ranchFile, forceFile);
 
     // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
     // ⚠️ 收起來失敗時**絕對不能**換角色 —— 換了就等於現役被新角色蓋掉、
-    //    而且沒有存進牧場，永久遺失。舊版沒有這道判斷（回傳值直接丟掉）。
+    //    而且沒有存進營地，永久遺失。舊版沒有這道判斷（回傳值直接丟掉）。
     const keepFailed = ranchRes && ranchRes.op === 'keep' && ranchRes.ok === false;
 
     if (force.character && !keepFailed) {
@@ -414,8 +419,16 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
     // 窗口短（3 秒）：觸碰是即時反應，過期的點擊不該補演。
     if (force.petTriggerTs && force.petTriggerTs !== st.lastPetTriggerTs) {
         const age = Date.now() - force.petTriggerTs;
+        // 睡覺中被碰 = 叫醒，不是摸摸。以前是「叫醒 + 照演 happy/refuse + 心情 +1」，
+        // 兩個問題：畫面上會出現「跳一下又倒回去睡」，而且趁牠睡著連點就能刷心情。
+        // 心情要在這裡就擋掉 —— 表演旗標到下一段才會被丟，心情卻是當場改的。
+        const asleep = isIdleSleeping(st);
         if (age >= 0 && age < 3000) {
-            if (force.petMood === 'refuse') {
+            if (force.forceSleep) {
+                // vpet sleep 的契約是「持續到 vpet wake，發訊息也不會醒」→ 觸碰整個丟棄
+            } else if (asleep) {
+                st._forceWake = true;        // 自然 idle 睡：只叫醒，不演表情、不動心情
+            } else if (force.petMood === 'refuse') {
                 st._forceRefuse = true;
                 bumpStat(st, 'petRefuse', Date.now());   // 被摸到不爽（本階段）
                 setMood(st, MOOD_MIN);      // 不爽 → 心情直接落底（不是遞減）
@@ -603,13 +616,13 @@ function evoSpendTotal(st) {
 // 直接切換角色在 release 版被 gate 擋掉，一般玩家只能靠實際養成累積。
 const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 
-// ── 牧場（見 docs/ranch-spec.md）───────────────────────────────────
-// 心智模型是冰箱：同時只有一隻現役，現役會成長，牧場裡的全部凍結。
-// 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），牧場收「個體」（這一隻本人）。
+// ── 營地（見 docs/ranch-spec.md）───────────────────────────────────
+// 心智模型是冰箱：同時只有一隻現役，現役會成長，營地裡的全部凍結。
+// 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），營地收「個體」（這一隻本人）。
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
 const RANCH_CAP  = 3;
 
-// 收進牧場時**丟掉**的欄位。其餘一律保存。
+// 收進營地時**丟掉**的欄位。其餘一律保存。
 //
 // ⚠️ 這裡用黑名單而不是白名單，是因為兩種漏掉的後果差很多：
 //   白名單漏掉一個成長欄位 → 玩家的訓練值/勝率/進化歷程永久消失，而且不會有
@@ -638,18 +651,18 @@ const RANCH_TRANSIENT_RE = [
 const isRanchTransient = (k) =>
     RANCH_TRANSIENT_EXACT.has(k) || RANCH_TRANSIENT_RE.some(re => re.test(k));
 
-/** 把現役的狀態打包成可以收進牧場的一份快照 */
+/** 把現役的狀態打包成可以收進營地的一份快照 */
 function snapshotPet(st) {
     const snap = {};
     for (const k of Object.keys(st)) {
         if (isRanchTransient(k)) continue;
         snap[k] = st[k];
     }
-    return JSON.parse(JSON.stringify(snap));   // 深拷貝，之後改 st 不會動到牧場裡那份
+    return JSON.parse(JSON.stringify(snap));   // 深拷貝，之後改 st 不會動到營地裡那份
 }
 
 /**
- * 把牧場裡的一份快照還原成現役（就地改 st）。
+ * 把營地裡的一份快照還原成現役（就地改 st）。
  *
  * 先刪掉 st 上所有「非暫態」的鍵再套用 —— 只做 Object.assign 的話，
  * 舊角色有、新角色沒有的欄位（例如 inheritedPower、某個 _evo_* latch）會殘留下來，
@@ -670,7 +683,7 @@ function loadRanch(file) {
             // ⚠️ 舊檔把 cap 存進去了（第一版寫的 8）。上限是**產品設定**不是存檔設定 ——
             //    留著的話改常數對既有玩家完全無效，而且那種 bug 很難聯想（程式改了、
             //    測試也綠，就只有自己那台沒變）。這裡直接丟掉，下次存檔就消失。
-            //    日後真要做「牧場擴充」，加一個 capBonus 欄位，不要復活這個。
+            //    日後真要做「營地擴充」，加一個 capBonus 欄位，不要復活這個。
             delete r.cap;
             return r;
         }
@@ -712,7 +725,7 @@ function recordAlbumIfChanged(st, file) {
     return recordAlbumChar(id, file);
 }
 
-// 直接登錄某個角色（不經過 st）。牧場裡發生的進化需要這個 ——
+// 直接登錄某個角色（不經過 st）。營地裡發生的進化需要這個 ——
 // recordAlbumIfChanged 看的是**現役**的 characterId，而大便獸是在冰箱裡變的，
 // 從頭到尾都沒當過現役，走那條路永遠不會被收錄。
 function recordAlbumChar(id, file) {
@@ -1463,15 +1476,18 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     if (st._forceSleep) {
         // 強制睡（vpet sleep）：契約是「持續到 vpet wake，發訊息也不會醒」→ 摸摸同樣叫不動，
         // 連表演都不演（否則會出現「演完又倒回去睡」的怪畫面）。直接丟棄觸碰。
-        delete st._forceHappy; delete st._forceRefuse;
+        delete st._forceHappy; delete st._forceRefuse; delete st._forceWake;
     } else {
-        // 自然 idle 睡（超過 IDLE_MS 沒活動）→ 摸摸視同活動，把牠叫醒。
-        // 只要更新 lastActivityAt，下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
-        if (st._forceHappy || st._forceRefuse) {
-            // 判斷要在更新 lastActivityAt 之前 —— 更新完就看不出剛才是不是在睡了
-            if ((now - (st.lastActivityAt || now)) > IDLE_MS) bumpStat(st, 'petWake', now);
+        // 自然 idle 睡（超過 IDLE_MS 沒活動）中被碰 → 只叫醒，不演表情、不動心情。
+        // applyForceFlags 已經判過在不在睡，這裡只要更新 lastActivityAt，
+        // 下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
+        if (st._forceWake) {
+            bumpStat(st, 'petWake', now);
             st.lastActivityAt = now;
+            delete st._forceWake;
         }
+        // 醒著被摸：摸摸也算一次活動（否則摸完馬上又被判定成閒置）
+        if (st._forceHappy || st._forceRefuse) st.lastActivityAt = now;
         if (st._forceHappy) {
             if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
             delete st._forceHappy;
@@ -1693,7 +1709,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
 
     // 睡覺（靜止不動，保留最後位置）；右上疊 Z 特效：sleep_1→Z、sleep_2→zZ
-    if ((now - st.lastActivityAt) > IDLE_MS) {
+    if (isIdleSleeping(st, now)) {
         st.wasSleeping = true;
         const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
         const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
@@ -2336,6 +2352,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
+    IDLE_MS, isIdleSleeping,
     ANCHOR_GAP,
     BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT, MAX_POS,
     alignWalkPhase,

@@ -181,10 +181,10 @@ function renderProbe(js) {
 
     g.__p.hold(null);                 // 收乾淨，別留給後面的斷言
 
-    // ── 牧場滿了要在按下去之前就知道 ────────────────────────────────
-    // 回報過「按收進牧場先被問『確定嗎？』，按了確定才說牧場已滿」。
+    // ── 營地滿了要在按下去之前就知道 ────────────────────────────────
+    // 回報過「按收進營地先被問『確定嗎？』，按了確定才說營地已滿」。
     // 人數前端本來就有（院子分頁的 /yard、家裡分頁的 /state），只是以前沒拿來用。
-    console.log('— 牧場滿了先擋 —');
+    console.log('— 營地滿了先擋 —');
     const RF = g.__p.ranchFull;
     ok(typeof RF === 'function', 'ranchFull 沒有露出來，這節等於沒測到');
     if (typeof RF === 'function') {
@@ -193,9 +193,9 @@ function renderProbe(js) {
 
         // 家裡分頁：只有 /state
         g.__p.setState({ ranch: { kept: 5, cap: 5 } });
-        ok(RF() && RF().full === true, '家裡分頁沒認出牧場已滿');
+        ok(RF() && RF().full === true, '家裡分頁沒認出營地已滿');
         g.__p.setState({ ranch: { kept: 4, cap: 5 } });
-        ok(RF() && RF().full === false, '沒滿卻被當成滿的（正常的收進牧場會被擋掉）');
+        ok(RF() && RF().full === false, '沒滿卻被當成滿的（正常的收進營地會被擋掉）');
 
         // 院子分頁：/yard 比較新，要優先
         g.__p.setYard({ kept: 5, cap: 5 });
@@ -209,15 +209,15 @@ function renderProbe(js) {
     }
 
     // ── 指令失敗時訊息列要說出理由 ──────────────────────────────────
-    // 回報過「daemon 執行收進牧場的提示沒變」。後端其實是對的（回 ok:false 加
-    // 「牧場已滿（5/5）…」），但前端只把動作名放進訊息列、真正的理由塞到畫布下方的
+    // 回報過「daemon 執行收進營地的提示沒變」。後端其實是對的（回 ok:false 加
+    // 「營地已滿（5/5）…」），但前端只把動作名放進訊息列、真正的理由塞到畫布下方的
     // 輸出區 —— 按了鈕只看到一句沒資訊的紅字。
     console.log('— 失敗訊息 —');
     const F = g.__p.failMsg;
     ok(typeof F === 'function', 'failMsg 沒有露出來，這節等於沒測到');
     if (typeof F === 'function') {
-        ok(F({ ok: false, output: '牧場已滿（5/5）。先 vpet release <編號> 騰出位置。' }, 'keep')
-             .includes('牧場已滿'),
+        ok(F({ ok: false, output: '營地已滿（5/5）。先 vpet release <編號> 騰出位置。' }, 'keep')
+             .includes('營地已滿'),
            '失敗訊息沒有把 CLI 的理由帶上來（使用者只會看到「失敗：keep」）');
         // CLI 第一行是結論，後面常是清單或細節 —— 訊息列只要第一行
         const multi = F({ ok: false, output: '第一行結論\n第二行細節\n第三行' }, 'x');
@@ -270,6 +270,22 @@ setTimeout(async () => {
         ok(bad.length === 0,
            `有 ${bad.length} 行的單引號沒有成對（多半是跳脫字元被 template literal 吃掉）：\n      ${bad[0]}`);
 
+        console.log('— 營地 icon 與睡覺提示 —');
+        // 觸碰睡著的角色只是叫醒，前端不該回「摸摸 ♥」。這一層測得到的是**送給瀏覽器的
+        // 提示表**；「什麼時候算睡著」的行為在 test-mood.js 的「睡覺中觸碰」那節驗。
+        const moodTable = (js.match(/MOOD\s*=\s*\{[^}]*\}/) || [''])[0];
+        ok(/\bwake\s*:/.test(moodTable),
+           `前端 MOOD 表缺 wake → 叫醒時會顯示「摸摸 ♥」（讀到：${moodTable.slice(0, 60)}）`);
+        ok(html.includes('⛺ 營地'), '營地按鈕的 icon 不是帳篷');
+        ok(!html.includes('🐮'), '頁面還留著牛 icon（營地已經不叫牧場了）');
+
+        // 接線檢查：睡覺判定要向 core 借，daemon 不可以自己再寫一份 IDLE_MS ——
+        // 兩份規則一旦漂移，就會出現「core 判睡著只叫醒、前端卻說摸摸」這種對不起來的狀況。
+        const daemonSrc = require('fs').readFileSync(
+            path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+        ok(daemonSrc.includes('core.isIdleSleeping'), 'daemon 沒有用 core.isIdleSleeping 判睡覺');
+        ok(!/IDLE_MS\s*=/.test(daemonSrc), 'daemon 自己定了一份 IDLE_MS（規則應該只有 core 一份）');
+
         console.log('— 前端實跑（天氣）—');
         renderProbe(js);
 
@@ -280,7 +296,7 @@ setTimeout(async () => {
         const y = JSON.parse(await get('/yard'));
         ok(y.ok === true, '/yard 回應失敗');
         ok(typeof y.cols === 'number' && typeof y.rows === 'number',
-           '/yard 沒有回傳場地尺寸（空牧場時畫布會塌成家裡的大小）');
+           '/yard 沒有回傳場地尺寸（空營地時畫布會塌成家裡的大小）');
 
         console.log('— 天氣 —');
         ok(y.weather && typeof y.weather.sky === 'string', '/yard 沒有回傳天氣');

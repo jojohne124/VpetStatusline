@@ -84,7 +84,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 75,
+          "pct": 70,
           "minBattles": 12
         }
       ]

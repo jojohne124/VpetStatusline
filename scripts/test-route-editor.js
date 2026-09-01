@@ -215,5 +215,63 @@ console.log('— 圖鑑真的用了可達性 —');
     ok(/loadSpecialRules/.test(src), 'album 沒有把特殊進化算進可達性（大便獸會從圖鑑消失）');
 }
 
+console.log('— 圖鑑的蒐集程度 —');
+{
+    // 百分比是那種「算錯也不會報錯、只是數字怪」的東西，而且有兩個一定要守住的邊界：
+    //   157/158 不可以顯示 100%（看到滿了卻還有一隻沒收，最惱人）
+    //   total=0 不可以變成 NaN%（看起來像壞掉）
+    // album.html 的 script 在假 DOM 裡跑，透過尾巴掛的把手取用 countLabel。
+    const fs3 = require('fs'), path3 = require('path'), vm3 = require('vm');
+    const H = fs3.readFileSync(path3.join(__dirname, '..', 'src', 'album', 'album.html'), 'utf8');
+    const mm = H.match(/<script>([\s\S]*?)<\/script>/);
+    ok(!!mm, '抓不到圖鑑頁面的 script');
+    if (mm) {
+        const el2 = () => ({
+            style: {}, classList: { add() {}, remove() {}, toggle() {} },
+            innerHTML: '', textContent: '', width: 0, height: 0,
+            getContext: () => new Proxy({}, { get: () => () => {}, set: () => true }),
+            addEventListener() {}, appendChild() {}, querySelectorAll: () => [],
+        });
+        const g2 = {
+            document: { getElementById: () => el2(), createElement: () => el2(),
+                        querySelectorAll: () => [], addEventListener() {}, body: el2() },
+            addEventListener() {}, removeEventListener() {},
+            requestAnimationFrame: () => 1, setInterval: () => 0, setTimeout: () => 0,
+            fetch: () => new Promise(() => {}),   // /data 永不回來 -> 只評估模組，不跑 IIFE 後半
+            console, Math, JSON,
+        };
+        g2.window = g2; g2.globalThis = g2;
+        vm3.createContext(g2);
+        let err2 = null;
+        try { vm3.runInContext(mm[1] + ';globalThis.__a={label:(o,t)=>countLabel(o,t)};', g2, { timeout: 5000 }); }
+        catch (e) { err2 = e; }
+        ok(!err2, '圖鑑頁面 script 執行就爆了：' + (err2 && err2.message));
+        if (!err2 && g2.__a) {
+            const L = g2.__a.label;
+            const pctOf = (s) => { const m2 = String(s).match(/(\d+)%/); return m2 ? Number(m2[1]) : null; };
+            ok(pctOf(L(0, 158)) === 0, '0/158 應該是 0%，得到 ' + L(0, 158));
+            ok(pctOf(L(158, 158)) === 100, '收滿應該是 100%，得到 ' + L(158, 158));
+            // 分母要挑到會讓四捨五入真的翻成 100% 的：199/200 = 99.5%。
+            // 原本寫 157/158（99.37%）—— round 也是 99，那條等於沒在測 floor。
+            ok(pctOf(L(199, 200)) === 99,
+               '199/200 不可以顯示 100%（四捨五入的話就會）—— 得到 ' + L(199, 200));
+            ok(pctOf(L(1, 158)) === 0, '1/158 應該向下取整成 0%，得到 ' + L(1, 158));
+            ok(pctOf(L(79, 158)) === 50, '一半應該是 50%，得到 ' + L(79, 158));
+            // total=0 不會 NaN（owned>=total 那條擋住了），但**不可以謊報 100%** ——
+            // 一隻都沒有卻說收滿了，比 NaN 更難發現是壞的。
+            ok(!/NaN|Infinity/.test(L(0, 0)), 'total=0 時出現 NaN/Infinity：' + L(0, 0));
+            ok(pctOf(L(0, 0)) !== 100, 'total=0 卻顯示 100%（一隻都沒有不該算收滿）：' + L(0, 0));
+            // 分子分母與百分比**都要在**（只留一邊都被要求改過，兩個都釘住）
+            ok(/\b42\b/.test(L(42, 158)) && /\b158\b/.test(L(42, 158)),
+               '缺了分子分母：' + L(42, 158));
+            // 標籤要先去掉再比 —— 42 與 158 之間夾著 </b>，直接對正則會永遠不match
+            const plain = (s) => String(s).replace(/<[^>]*>/g, '');
+            ok(/\d+\s*\/\s*\d+/.test(plain(L(42, 158))),
+               '分子分母之間缺了斜線：' + plain(L(42, 158)));
+            ok(pctOf(L(42, 158)) === 26, '42/158 無條件捨去應該是 26%，得到 ' + L(42, 158));
+        } else if (!err2) { ok(false, '抓不到 countLabel'); }
+    }
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

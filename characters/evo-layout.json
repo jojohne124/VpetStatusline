@@ -251,25 +251,25 @@
     "x": 300,
     "y": 670
   },
-  "godzilla_1954": {
-    "x": 560,
-    "y": 2686
-  },
-  "godzilla_1999": {
+  "goddramon": {
     "x": 820,
-    "y": 3246
+    "y": 186
   },
   "godzillasaurus": {
     "x": 300,
     "y": 2518
   },
-  "goddramon": {
-    "x": 820,
-    "y": 186
+  "godzilla_1954": {
+    "x": 560,
+    "y": 2686
   },
   "godzilla_1994": {
     "x": 820,
     "y": 3190
+  },
+  "godzilla_1999": {
+    "x": 820,
+    "y": 3246
   },
   "godzilla_jr": {
     "x": 560,
@@ -283,13 +283,13 @@
     "x": 40,
     "y": 670
   },
-  "grankuwagamon": {
-    "x": 820,
-    "y": 950
-  },
   "grandgalemon": {
     "x": 560,
     "y": 2294
+  },
+  "grankuwagamon": {
+    "x": 820,
+    "y": 950
   },
   "greymon": {
     "x": 300,
@@ -447,21 +447,21 @@
     "x": 820,
     "y": 1790
   },
-  "megakabuterimon": {
-    "x": 560,
-    "y": 1286
-  },
-  "megaseadramon": {
-    "x": 560,
-    "y": 726
-  },
   "megadramon": {
     "x": 560,
     "y": 670
   },
+  "megakabuterimon": {
+    "x": 560,
+    "y": 1286
+  },
   "megalon": {
     "x": 820,
     "y": 1846
+  },
+  "megaseadramon": {
+    "x": 560,
+    "y": 726
   },
   "metalgarurumon": {
     "x": 820,
@@ -471,21 +471,21 @@
     "x": 820,
     "y": 2966
   },
-  "metalgreymon_2010": {
-    "x": 560,
-    "y": 1342
-  },
-  "metalseadramon": {
-    "x": 820,
-    "y": 614
-  },
   "metalgreymon": {
     "x": 560,
     "y": 1846
   },
+  "metalgreymon_2010": {
+    "x": 560,
+    "y": 1342
+  },
   "metalgreymon_virus": {
     "x": 560,
     "y": 1902
+  },
+  "metalseadramon": {
+    "x": 820,
+    "y": 614
   },
   "monster_x": {
     "x": 560,

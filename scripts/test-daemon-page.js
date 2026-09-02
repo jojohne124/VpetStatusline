@@ -386,6 +386,58 @@ setTimeout(async () => {
             ok(js.includes('drawZones'), '前端沒有畫框的函式');
         }
 
+        console.log('— 指定戰鬥要把參數送到 CLI —');
+        {
+            // 使用者回報「指定戰鬥填了 Greymon_Virus 卻照樣隨機開打」。真因：applyCommand
+            // 先查 COMMANDS（快路徑），而 battle 那條只寫 battleTriggerTs、把 enemy/result
+            // 整包丟掉，下面 CLI_ACTIONS.battle 變成永遠走不到的死碼 —— 而且回 ok:true，
+            // 畫面照常演一場戰鬥，完全看不出參數被吃了。
+            //
+            // 另外起一台 daemon，state 指到暫存目錄：上面那台寫的是**真的**
+            // force-char.json，測試不該替使用者排一場戰鬥（寫這條測試時就先踩過一次）。
+            const fs2 = require('fs'), os2 = require('os');
+            const SD = fs2.mkdtempSync(path.join(os2.tmpdir(), 'agumon-cmd-test-'));
+            const P2 = 3097;
+            const c2 = spawn(process.execPath,
+                [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
+                { env: { ...process.env, AGUMON_DAEMON_PORT: String(P2), AGUMON_STATE_DIR: SD },
+                  stdio: 'ignore' });
+            const post = (action, a) => new Promise((res, rej) => {
+                const b = JSON.stringify({ action, args: a });
+                const rq = http.request({ host: '127.0.0.1', port: P2, path: '/cmd', method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) } },
+                    s => { let d = ''; s.on('data', c => d += c); s.on('end', () => { try { res(JSON.parse(d)); } catch (e) { rej(e); } }); });
+                rq.on('error', rej);
+                rq.setTimeout(8000, () => { rq.destroy(); rej(new Error('timeout')); });
+                rq.end(b);
+            });
+            await new Promise(r => setTimeout(r, 900));
+            try {
+                // 敵人不存在 → 必須是 CLI 回的拒絕。被快路徑吃掉的話會變成 ok:true，
+                // 而且真的排了一場隨機戰鬥（＝回報的症狀）。用不存在的名字才不會留下副作用。
+                const bad = await post('battle', { enemy: '__nosuchmon__', result: '' });
+                ok(bad.ok === false && /找不到敵人/.test(bad.output || ''),
+                   '指定的敵人沒有送進 CLI（回應：' + JSON.stringify(bad).slice(0, 120) + '）');
+                // 勝負亂填要當場擋掉：送進 CLI 會被當成敵人名或默默忽略，兩種都是「按了沒事」
+                // ⚠️ 只驗 ok===false 是**假綠**：沒有這道驗證時，'abc' 會被 CLI 的參數
+                //    迴圈當成敵人名，一樣回 ok:false（找不到敵人：abc）。要釘的是
+                //    「daemon 自己就擋掉了」＝沒有 CLI 的 output，訊息才不會答非所問。
+                const junk = await post('battle', { enemy: '', result: 'abc' });
+                ok(junk.ok === false && !junk.output,
+                   'result 亂填應該在 daemon 就擋掉，不要送進 CLI（回應：' + JSON.stringify(junk).slice(0, 120) + '）');
+                // 兩欄都留空 = 隨機戰鬥，這條要留在快路徑（不開子行程、不進 CLI）
+                const rnd = await post('battle', { enemy: '', result: '' });
+                ok(rnd.ok === true && !rnd.output,
+                   '兩欄留空應該走快路徑（回應：' + JSON.stringify(rnd).slice(0, 120) + '）');
+                const fc = JSON.parse(fs2.readFileSync(path.join(SD, 'force-char.json'), 'utf8'));
+                ok(typeof fc.battleTriggerTs === 'number' && !fc.forceBattleEnemy,
+                   '留空時 force 應該只有 battleTriggerTs：' + JSON.stringify(fc).slice(0, 120));
+            } finally {
+                try { c2.kill(); } catch (e) {}
+                try { fs2.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
+            }
+        }
+
         console.log('— 天氣 —');
         ok(y.weather && typeof y.weather.sky === 'string', '/yard 沒有回傳天氣');
         ok(y.weather && typeof y.weather.label === 'string', '/yard 的天氣缺少顯示文字');

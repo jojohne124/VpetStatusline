@@ -517,8 +517,13 @@ function petTouch() {
     return { ok: true, action: 'pet', mood };
 }
 
+// 快路徑：純粹寫一個 force 旗標就成立的指令。回 null = 這次帶了參數，快路徑處理不了，
+// 讓 applyCommand 往下落到 CLI_ACTIONS（那邊才會把參數帶進 vpet CLI）。
 const COMMANDS = {
-    battle:    () => ({ battleTriggerTs: Date.now() }),
+    // 指定敵人／勝負一定要走 CLI —— 這裡只寫 battleTriggerTs，敵人欄位是 CLI 在填的
+    // （forceBattleEnemy / forceBattleWin）。踩過：網頁的「指定戰鬥」填了敵人照樣
+    // 隨機開打，因為 COMMANDS 排在 CLI_ACTIONS 前面，參數整包被吃掉，而且回 ok:true。
+    battle:    (a) => (a.enemy || a.result) ? null : ({ battleTriggerTs: Date.now() }),
     card:      () => ({ cardTriggerTs:   Date.now() }),
     tree:      () => ({ treeTriggerTs:   Date.now() }),
     drop:      () => ({ dropTriggerTs:   Date.now() }),   // 空降演出（非真 reset 抽角色）
@@ -553,7 +558,13 @@ const CLI_ACTIONS = {
     'pvp-setup': (a) => (a.url && a.key) ? ['pvp-setup', a.url, a.key, ...(a.name ? [a.name] : [])] : null,
     switch:      (a) => a.name ? [a.name] : null,          // 裸角色名/編號
     evolve:      (a) => a.name ? ['evolve', a.name] : null,
-    battle:      (a) => ['battle', ...(a.enemy ? [a.enemy] : []), ...(a.result ? [a.result] : [])],
+    // result 只收 win / lose：亂填的字串會被 CLI 的參數迴圈當成敵人名（或直接忽略），
+    // 兩種都是「按了沒事發生」，不如當場擋掉講清楚。
+    battle:      (a) => {
+        const res = (a.result || '').toLowerCase();
+        if (res && res !== 'win' && res !== 'lose') return null;
+        return ['battle', ...(a.enemy ? [a.enemy] : []), ...(res ? [res] : [])];
+    },
     // 營地（docs/ranch-spec.md）。release 一律補 yes —— CLI 的二次確認是為終端機使用者
     // 設計的，網頁這邊由 data-confirm 的對話框負責，不能讓 subprocess 吊在等輸入。
     ranch:       ()  => ['ranch'],
@@ -649,12 +660,15 @@ function applyCommand(action, args = {}) {
     if (action === 'zoneedit') return openZoneEditor();
 
     const fn = COMMANDS[action];
-    if (fn) return { ok: writeForce(fn()), action };
+    if (fn) {
+        const force = fn(args || {});
+        if (force) return { ok: writeForce(force), action };   // null → 往下走 CLI
+    }
 
     const build = CLI_ACTIONS[action];
     if (!build) return { ok: false, error: 'unknown action: ' + action };
     const argv = build(args || {});
-    if (!argv) return { ok: false, error: '參數不足' };
+    if (!argv) return { ok: false, error: '參數不足或不合法' };
     return Object.assign({ action }, runCli(argv));
 }
 

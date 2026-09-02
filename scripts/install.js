@@ -59,6 +59,13 @@ const DAEMON_ONLY_FLAG = path.join(INSTALL_DIR, 'DAEMON_ONLY');
 // 刻意不放 src/editor/ —— 那整個資料夾會被 build-release 排除，放錯地方 release 就沒有。
 const PLAYER_PAGES = ['album', 'bgedit'];
 
+// 玩家頁面 require 得到的共用模組。它們住在 src/shared/，而部署樹只複製
+// PLAYER_PAGES 那幾個資料夾 —— 少了這一份，album_server.js 的
+// require('../shared/evo-rules.js') 在部署樹會 MODULE_NOT_FOUND，
+// 症狀是「vpet album 按了沒反應」（server 起不來，CLI 只負責開瀏覽器）。
+// 踩過一次：evo-rules 是後來才加進圖鑑的，install 沒跟著改。
+const SHARED_MODULES = ['evo-rules.js', 'plaza-walk.js', 'weather.js'];
+
 // statusline 顯示層專屬 —— daemon-only 不需要（daemon 自己 compose 畫面）。
 // 注意 statusline-cheat.js 不在此列：它其實是 vpet 指令通道，只是名字誤導，兩種模式都要。
 const STATUSLINE_ONLY_FILES = ['statusline-agumon-color.js', 'statusline-agumon.js'];
@@ -69,7 +76,8 @@ const RUNTIME_FILES = [
     'statusline-agumon.js',
     'statusline-cheat.js',   // = vpet 指令通道（非顯示層），daemon-only 也要
     'agumon-hook.js',        // = 訓練值/自動戰鬥/活動時戳的脈搏，daemon-only 也要
-    'doctor.js',             // vpet doctor：檢查/清除 node 孤兒（漏掉會導致 ac doctor 失效）
+    'doctor.js',             // vpet doctor：檢查/清除 node 孤兒。漏掉會讓 vpet doctor 失效，
+                             // 而且 daemon 每 10 分鐘那輪自動收屍也會靜靜地什麼都不做
 ].filter(f => !(DAEMON_ONLY && STATUSLINE_ONLY_FILES.includes(f)));
 
 // 舊版散落在 ~/.claude/ 的檔案 → 新位置
@@ -129,6 +137,18 @@ function installRuntime() {
         try { fs.rmSync(DAEMON_ONLY_FLAG); console.log(`  [clean]  DAEMON_ONLY（切回一般版）`); } catch (e) {}
     }
 
+    // REPO_PATH 指標檔：記下這份是從哪個 clone 裝的。
+    // 用途是「指路」—— 部署目錄裡沒有 GUIDE 也沒有 scripts/，使用者（或他叫來幫忙的
+    // Claude）在自己的專案目錄裡問「怎麼改成純 daemon」時，唯一能探到的東西是
+    // vpet help；有了這個檔，help 才印得出安裝指引在哪、切換指令要在哪裡跑。
+    // 靠 npm ls -g 反查也做得到，但那多一層 npm 相依且要人先想到，不如直接寫死。
+    try {
+        fs.writeFileSync(path.join(INSTALL_DIR, 'REPO_PATH'), REPO_ROOT + '\n');
+        console.log(`  [mark]   REPO_PATH -> ${REPO_ROOT}`);
+    } catch (e) {
+        console.warn(`  [warn]   REPO_PATH 寫入失敗（vpet help 將無法指路）：${e.message}`);
+    }
+
     // 玩家功能的獨立頁面（圖鑑 vpet album、底圖編輯器 vpet bg）：
     // CLI 是從 INSTALL_DIR 執行的，server 必須跟著部署過去才找得到。
     // daemon 不需要這樣做 —— 它是由 repo/release 樹的啟動器直接跑的。
@@ -139,6 +159,16 @@ function installRuntime() {
         const dst = path.join(INSTALL_DIR, sub);
         fs.mkdirSync(dst, { recursive: true });
         for (const f of fs.readdirSync(src2)) copyFile(path.join(src2, f), path.join(dst, f), sub);
+    }
+    // 頁面的 require('../shared/xxx') 解析到 INSTALL_DIR/shared/ —— 跟 assets/shared/
+    // （共用 sprite 美術）是兩回事，別混淆。
+    {
+        const dst = path.join(INSTALL_DIR, 'shared');
+        fs.mkdirSync(dst, { recursive: true });
+        for (const f of SHARED_MODULES) {
+            const s2 = path.join(REPO_ROOT, 'src', 'shared', f);
+            if (fs.existsSync(s2)) copyFile(s2, path.join(dst, f), 'shared');
+        }
     }
     // release 版標記：repo 根有 RELEASE 就部署到 INSTALL_DIR，讓 statusline-cheat 停用開發指令。
     // main（開發）沒有此檔 → 不部署（開發指令全開）。
@@ -188,6 +218,18 @@ function installCharacters() {
 function installRoster() {
     console.log('\n[3/8] 安裝 roster.json');
     copyFile(path.join(REPO_ROOT, 'characters', 'roster.json'), path.join(ASSETS_DIR, 'roster.json'));
+    // 規則型特殊進化（營地時效那類）。跟 roster 一樣是「資料」，不是某個角色的附屬檔案，
+    // 所以 installCharacters 那個迴圈掃不到，要單獨帶。沒有這個檔不是錯誤（＝沒有特殊進化）。
+    const specialEvo = path.join(REPO_ROOT, 'characters', 'special-evolutions.json');
+    if (fs.existsSync(specialEvo)) {
+        copyFile(specialEvo, path.join(ASSETS_DIR, 'special-evolutions.json'));
+    }
+    // 營地走動範圍的自訂切法（走動範圍編輯器存的）。同樣是資料不是角色附屬檔案。
+    // 沒有這個檔不是錯誤 —— 那代表全部用內建切法。
+    const yardLayouts = path.join(REPO_ROOT, 'characters', 'yard-layouts.json');
+    if (fs.existsSync(yardLayouts)) {
+        copyFile(yardLayouts, path.join(ASSETS_DIR, 'yard-layouts.json'));
+    }
 }
 
 function installShared() {
@@ -344,6 +386,24 @@ function updateSettings() {
     }
 }
 
+// macOS 免小黑窗啟動器：由 tools/vpet-standalone.applescript 編譯出 vpet-standalone.app。
+// 雙擊 .command / .sh 一定會開 Terminal 視窗，.app 不會 —— 等同 Windows 的 .vbs。
+// 只在 macOS 做，失敗不影響安裝主流程（.command/.sh 仍可用）。
+function buildMacApp() {
+    if (process.platform !== 'darwin') return;
+    const src = path.join(REPO_ROOT, 'tools', 'vpet-standalone.applescript');
+    if (!fs.existsSync(src)) return;
+    console.log('\n[mac] 建立免小黑窗啟動器 vpet-standalone.app');
+    const out = path.join(REPO_ROOT, 'vpet-standalone.app');
+    try { fs.rmSync(out, { recursive: true, force: true }); } catch (e) {}
+    const r = spawnSync('osacompile', ['-o', out, src], { stdio: 'pipe' });
+    if (!r.error && r.status === 0) {
+        console.log('  -> 已產生 vpet-standalone.app（雙擊啟動，不會有小黑窗）');
+    } else {
+        console.warn('  [warn] osacompile 失敗，改用 vpet-standalone.command / .sh（會開 Terminal 視窗）');
+    }
+}
+
 function installLauncher() {
     console.log('\n[8/8] 註冊 vpet 全域指令');
     // 首選：npm link —— npm 會把 vpet shim 放進它在 PATH 上的 global bin
@@ -418,6 +478,7 @@ function main() {
     migrateLegacyState();
     updateSettings();
     installLauncher();
+    buildMacApp();
     reportStateFiles();
 
     console.log('\n安裝完成。重新整理 Claude CLI（送一個訊息或重開）即可生效。');

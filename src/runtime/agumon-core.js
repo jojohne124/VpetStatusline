@@ -13,6 +13,11 @@ const ANCHOR_GAP  = 4;
 const STEP_MS     = 1000;
 const BATTLE_DELAY_MS = 5000;   // prompt 後思考超過這秒數 → 自動觸發戰鬥（取代無效的 thinking 字串偵測）
 const IDLE_MS     = 600000;
+// 自然 idle 睡（不含 vpet sleep 的強制睡）。抽成函式是因為 daemon 也要問同一件事 ——
+// 觸碰睡著的角色只是叫醒，前端就不該回「摸摸 ♥」。規則放兩份遲早會對不起來。
+function isIdleSleeping(st, now = Date.now()) {
+    return (now - (st.lastActivityAt || now)) > IDLE_MS;
+}
 const MAX_POS     = 36;                                                 // 走路範圍：對齊 BATTLE_SCENE_WIDTH(52) - 角色寬(16)
 const EXPR_CHANCE = 0.10;
 const EXPR_HOLD   = 3;
@@ -58,30 +63,75 @@ function sweepStaleTmps(file) {
         }
     } catch(_) {}
 }
-// atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write
-// ⚠️ rename 只保證「別的行程不會讀到寫到一半的檔」，**不保證斷電後檔案還在**。
-// 少了 fsync 的話，NTFS 可能先把 rename 這個 metadata 落盤、資料區塊還留在 page cache，
-// 非正常關機後就生出「大小正確、內容全 NUL」的檔案 —— 實際發生過 4 次
-// （2026-05-21 / 06-02 / 08-04×2，見 state/color-state.json.corrupt.log），
-// 每次都害角色被當成新玩家重發。所以 rename 前一定要 fsync。
-function atomicWrite(file, data) {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+// Windows 上「檔案暫時動不了」的錯誤碼。防毒即時掃描、搜尋索引、或另一個 vpet 行程
+// 剛好握著 handle，rename 就會丟這些 —— 隔幾毫秒再試通常就過了。
+const TRANSIENT_WRITE_ERRS = new Set(['EPERM', 'EBUSY', 'EACCES', 'EEXIST']);
+const WRITE_RETRIES = 4;
+
+// 同步等一下下。這裡不能用 setTimeout —— atomicWrite 的呼叫端（tick、CLI）都是同步的，
+// 而且重試只在罕見的失敗路徑上發生，總共最多等 30ms。
+function sleepSync(ms) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+    catch (e) { const end = Date.now() + ms; while (Date.now() < end) {} }
+}
+
+// 寫入真的失敗時留下痕跡。**用 append**：主檔寫不進去多半是那個檔被卡住，
+// 換一個檔名 append 通常還寫得進去；而且這種事極罕見，不必擔心檔案長大。
+// 靜靜吞掉是最糟的選擇 —— 一次吞掉的寫入就是一次「收進營地沒生效」而使用者毫不知情。
+// attempts 也要寫進去：「試了 5 次還是不行」和「第一次就放棄」是完全不同的故事，
+// 前者是有人一直握著那個檔，後者是路徑/磁碟本身有問題。
+function logWriteFailure(file, e, attempts) {
     try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        sweepStaleTmps(file);
-        const fd = fs.openSync(tmp, 'w');
+        fs.appendFileSync(`${file}.write-fail.log`,
+            `${new Date().toISOString()}\ttries=${attempts}\t${e && e.code || '?'}\t${e && e.message || e}\n`);
+    } catch (_) {}
+}
+
+/**
+ * atomic write：tmp 寫入後 rename（rename 在同 fs 上是 atomic），避免並行讀到 partial write。
+ * 回傳是否真的寫成功 —— 呼叫端至少有機會知道。
+ *
+ * ⚠️ rename 只保證「別的行程不會讀到寫到一半的檔」，**不保證斷電後檔案還在**。
+ * 少了 fsync 的話，NTFS 可能先把 rename 這個 metadata 落盤、資料區塊還留在 page cache，
+ * 非正常關機後就生出「大小正確、內容全 NUL」的檔案 —— 實際發生過 4 次
+ * （2026-05-21 / 06-02 / 08-04×2，見 state/color-state.json.corrupt.log），
+ * 每次都害角色被當成新玩家重發。所以 rename 前一定要 fsync。
+ *
+ * ⚠️ 舊版把所有失敗**完全吞掉**（catch 之後只刪 tmp，不回報也不留痕跡）。
+ * 那不只是少一行 log —— Windows 上 rename 蓋既有檔會偶發 EPERM/EBUSY（防毒、索引、
+ * 另一個行程握著 handle），一次吞掉就是一次收進營地／放生／進化默默沒生效。
+ * 實際咬過：完整測試套件同時寫一堆檔時，test-ranch 偶爾紅在「寫了卻沒生效」，
+ * 單獨跑永遠重現不了。現在改成重試 + 留痕跡 + 回報成敗。
+ */
+function atomicWrite(file, data) {
+    let lastErr = null, tries = 0;
+    for (let attempt = 0; attempt <= WRITE_RETRIES; attempt++) {
+        tries++;
+        const tmp = `${file}.${process.pid}.${Date.now()}.${attempt}.tmp`;
         try {
-            fs.writeFileSync(fd, data);
-            // fsync 在少數檔案系統會丟 EINVAL；失敗也要繼續 rename，
-            // 否則反而連「有寫到」都做不到，比原本更糟。
-            try { fs.fsyncSync(fd); } catch(_) {}
-        } finally {
-            fs.closeSync(fd);
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            if (attempt === 0) sweepStaleTmps(file);
+            const fd = fs.openSync(tmp, 'w');
+            try {
+                fs.writeFileSync(fd, data);
+                // fsync 在少數檔案系統會丟 EINVAL；失敗也要繼續 rename，
+                // 否則反而連「有寫到」都做不到，比原本更糟。
+                try { fs.fsyncSync(fd); } catch(_) {}
+            } finally {
+                fs.closeSync(fd);
+            }
+            fs.renameSync(tmp, file);
+            return true;
+        } catch(e) {
+            lastErr = e;
+            try { fs.unlinkSync(tmp); } catch(_) {}
+            // 不是暫時性的（路徑不合法、磁碟滿了…）再試幾次也一樣，直接放棄
+            if (!TRANSIENT_WRITE_ERRS.has(e && e.code)) break;
+            if (attempt < WRITE_RETRIES) sleepSync(2 * (attempt + 1));   // 2/4/6/8ms
         }
-        fs.renameSync(tmp, file);
-    } catch(e) {
-        try { fs.unlinkSync(tmp); } catch(_) {}
     }
+    logWriteFailure(file, lastErr, tries);
+    return false;
 }
 // last-known-good 備援：主檔壞掉時的退路。節流寫入（不是每秒都寫），理由有兩個 ——
 // 一是省 I/O，二更重要：備份必須是「早就穩穩躺在磁碟上」的舊資料才有意義，
@@ -116,14 +166,215 @@ function saveState(stateFile, s) {
     } catch(e) {}
 }
 
+/**
+ * 營地操作（keep / swap / release）。由 CLI 寫進 force，由「當家」那一端實際執行。
+ *
+ * 為什麼不讓 CLI 直接改：color-state.json 是單一寫入者制（C 方案，daemon 當家時
+ * statusLine 退唯讀）。CLI 直接寫會把那個保證破壞掉，所以一律走 force —— 與
+ * battle / evolve / reset 同一條路。CLI 只負責驗參數與回報「已排入」。
+ *
+ * ⚠️ 寫入順序：**先寫 ranch.json，再改 st**。兩個檔要一起換，中途死掉必然有一邊沒完成；
+ * 這個順序下最壞是「營地多一份、現役沒換成」，玩家看得到也救得回。
+ * 反過來則是桌寵直接消失 —— 同樣是失敗，代價差很多。
+ */
+// ── 特殊進化（規則型）─────────────────────────────────────────────
+// 「任一幼年期在營地放置 48 小時 → 大便獸」這種進化，**刻意不寫進 config.evolvesTo**。
+//
+// 理由是那會變成 19 條邊（目前 roster 有 19 隻 Child），同時汙染三個地方：
+//   vpet tree / 圖鑑（19 條線收斂到同一顆）、進化路線編輯器的 SVG、
+//   以及 parentsOf()（大便獸會有 19 個 parent，血緣長度算出來很奇怪）。
+//   而且每新增一隻 Child 就得記得補一條，遲早漏掉。
+// 寫成規則之後那三個地方**一行都不用改** —— 它們讀的是 evolvesTo，看不到這裡的規則。
+// 要露出來就走反方向：在大便獸自己的圖鑑頁寫「來源：幼年期在營地放置 48 小時」，
+// 一行字取代 19 條箭頭。
+//
+// ⚠️ 為什麼是獨立檔案而不是塞進 roster.json：進化路線編輯器存檔時會**整份重寫**
+//    roster.json，而且只寫 roster/starters/starterWeights/highTierStarters 四個 key
+//    （route_editor_server.js:273）—— 加在那裡會在下次存檔時被無聲刪掉。
+const SPECIAL_EVO_FILE = path.join(ASSETS_DIR, 'special-evolutions.json');
+
+function loadSpecialEvolutions(file) {
+    try {
+        const j = JSON.parse(fs.readFileSync(file || SPECIAL_EVO_FILE, 'utf8'));
+        return Array.isArray(j.rules) ? j.rules : [];
+    } catch (e) { return []; }   // 沒有檔案 = 沒有特殊進化，不是錯誤
+}
+
+/**
+ * 這隻營地成員符不符合某條規則。
+ * 未知的條件型別一律回 false —— 寧可不觸發，也不要因為看不懂就亂把人家的收藏變掉。
+ */
+function matchRanchRule(rule, pet, now, opts = {}) {
+    const s = pet && pet.state;
+    if (!rule || !rule.to || !s || !s.characterId) return false;
+    if (rule.to === s.characterId) return false;                 // 已經是了，不重複觸發
+    // 未實裝（不在 roster）就不生效 —— 與 checkEvolution 同一條 gate。
+    // 所以規則可以先寫好，等美術進 roster 才會真的開始變。
+    const roster = opts.rosterSet || getRosterSet();
+    if (roster && roster.size && !roster.has(rule.to)) return false;
+    if (rule.from && rule.from !== s.characterId) return false;
+    if (rule.fromStage && getCharacterStage(s.characterId) !== rule.fromStage) return false;
+
+    for (const c of (rule.conditions || [])) {
+        if (c.type === 'ranch_hours') {
+            // 「完全不動到 N 小時」不需要任何新狀態：keep / swap 都是新開一筆
+            // keptAt，被換出來的那隻是整筆從 ranch 移除 —— 之後再收進去是全新 id。
+            // 所以 keptAt 天生就是「連續待在營地多久」，中途取出自然歸零。
+            if (!(now - (pet.keptAt || 0) >= c.hours * 3600e3)) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 每隻最多幾毫秒檢查一次。48 小時的判定不需要每秒重算，而這條路徑每拍都會經過。
+const RANCH_AGE_CHECK_MS = 60000;
+
+/**
+ * 套用營地裡的時間類進化。回傳有變動的清單，沒變動回 null。
+ *
+ * 惰性判定（不是計時器）：營地本來就是冰箱、裡面的東西不會自己長大，這是唯一的例外。
+ * 用 keptAt 現算，所以 daemon 關掉的那段時間照樣算數 —— 你下次打開營地才發現牠變了，
+ * 那正好就是「默默變成」該有的體感。
+ */
+function applyRanchAging(st, ranchFile, opts = {}) {
+    const now = opts.now || Date.now();
+    if (st && !opts.force) {
+        if (st._ranchAgeCheckedAt && now - st._ranchAgeCheckedAt < RANCH_AGE_CHECK_MS) return null;
+        st._ranchAgeCheckedAt = now;
+    }
+    const rules = loadSpecialEvolutions(opts.rulesFile);
+    if (!rules.length) return null;
+
+    const ranch = loadRanch(ranchFile);
+    const changed = [];
+    for (const pet of (ranch.pets || [])) {
+        for (const rule of rules) {
+            if (!matchRanchRule(rule, pet, now, opts)) continue;
+            const from = pet.state.characterId;
+            applySpecialEvo(pet.state, rule.to, now);
+            // 右鍵選單要顯示「大便獸（原：亞古獸）」。全藏起來的話玩家會以為收藏不見了
+            // 而恐慌 —— 那是 bug 的體感，不是彩蛋的體感。
+            pet.evolvedFrom = from;
+            pet.evolvedAt   = now;
+            changed.push({ id: pet.id, from, to: rule.to, rule: rule.id || null });
+            recordAlbumChar(rule.to, opts.albumFile);
+            break;                                   // 一隻一次只套一條規則
+        }
+    }
+    if (changed.length) saveRanch(ranch, ranchFile);
+    return changed.length ? changed : null;
+}
+
+/** 把一筆快照就地變成 to。比照正常進化 commit 的清理，不多不少。 */
+function applySpecialEvo(snap, to, now) {
+    const prev = snap.characterId;
+    snap.characterId = to;
+    delete snap.inheritedPower;      // 非 SU 目標：回歸 config.power
+    resetStageStats(snap, now);      // 訓練值 / 勝率 / 隱藏統計 / 心情歸零（同正常進化）
+    // evoHistory 要自己接上。放著不管的話，之後換出來時 updateEvoHistory 會發現
+    // 「大便獸不是前一隻的 evolvesTo 目標」而判定為斷點，把整條血緣清成單一顆 ——
+    // vpet tree 的格數就沒了。使用者的定位是「視做一種進化」，血緣就該留著。
+    const h = Array.isArray(snap.evoHistory) ? snap.evoHistory.slice() : [];
+    if (h[h.length - 1] !== to) h.push(to);
+    snap.evoHistory = h;
+    return prev;
+}
+
+// 回傳值的語意（呼叫端靠它決定要不要套用配對的 force.character，見 applyForceFlags）：
+//   null                         這一拍沒有新指令（沒有 op、或時戳已經處理過）
+//   { op, ok:true, ... }         成功
+//   { op, ok:false, retry:true } 這一拍不能做，但**指令保留**，下一拍再試
+//   { op, ok:false }             永久失敗，指令已消耗
+function applyRanchOp(st, force, ranchFile, forceFile) {
+    const op = force.ranchOp;
+    if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
+
+    // 表演中不動營地：交換會把 st 整包換掉，正在播的戰鬥/進化會接到不存在的對手或幀。
+    // ⚠️ 這一段要在「消耗時戳」**之前**，而且回 retry —— 舊版在這裡直接丟掉指令，
+    //    於是「戰鬥動畫播放中按收進營地」會變成：營地沒收到，但配對的抽新角色照做，
+    //    現役被蓋掉且沒存進去＝永久遺失。戰鬥有 19 拍，那個窗口一點都不窄。
+    //    改成保留指令，動畫播完的下一拍自然就成功了。
+    if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) {
+        return { op: op.op, ok: false, retry: true, reason: 'busy' };
+    }
+
+    st.lastRanchTriggerTs = force.ranchTriggerTs;   // 從這裡開始，這道指令算用掉了
+
+    // 過期的指令不補做。下界給 5 秒的餘裕而不是 0 —— CLI 與當家端可能是不同 process，
+    // 系統時鐘微調（NTP、休眠喚醒）就足以讓時戳看起來「來自未來」，
+    // 嚴格要求 age >= 0 會讓指令無聲消失，而使用者只會看到「打了沒反應」。
+    const age = Date.now() - force.ranchTriggerTs;
+    if (!(age >= -5000 && age < 300000)) {
+        if (op.op === 'keep' && forceFile) clearForceCharacter(forceFile);   // 同上
+        return { op: op.op, ok: false, reason: 'expired' };
+    }
+
+    const ranch = loadRanch(ranchFile);
+
+    if (op.op === 'release') {
+        const i = ranch.pets.findIndex(p => p.id === op.id);
+        if (i < 0) return { op: 'release', ok: false, reason: 'notfound' };
+        ranch.pets.splice(i, 1);
+        saveRanch(ranch, ranchFile);
+        return { op: 'release', ok: true };
+    }
+
+    if (op.op === 'keep') {
+        // 滿了就不收（CLI 已擋，這是第二道 —— 兩次檢查之間可能又被別的視窗收了一隻）
+        if (ranch.pets.length >= ranchCap()) {
+            // 永久失敗 → 把配對的「抽新的」也一起作廢，否則下一拍時戳已過期、
+            // keepFailed 不再成立，那隻新角色就會補上來把現役蓋掉。
+            if (forceFile) clearForceCharacter(forceFile);
+            return { op: 'keep', ok: false, reason: 'full' };
+        }
+        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        saveRanch(ranch, ranchFile);
+        // 抽新的那一步交給 force.character（CLI 一併寫入），走既有的換角色路徑
+        return { op: 'keep', ok: true };
+    }
+
+    if (op.op === 'swap') {
+        const i = ranch.pets.findIndex(p => p.id === op.id);
+        if (i < 0) return { op: 'swap', ok: false, reason: 'notfound' };
+        const incoming = ranch.pets[i];
+        ranch.pets.splice(i, 1);
+        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        saveRanch(ranch, ranchFile);
+        restorePet(st, incoming.state);
+        return { op: 'swap', ok: true, to: st.characterId };
+    }
+    return { op: op.op, ok: false, reason: 'unknown' };
+}
+
 // ── force-char.json 指令套用（statusline 與 daemon 共用，單一真理避免兩份分歧）──────
 // 讀 force-char.json 把 cheat/指令轉成 st 上的 _force* 旗標與持續開關；每拍都要跑
 // （sleep/freeze/autobattle 是持續狀態）。檔案不存在/壞掉 → 靜默略過（等同原本 try/catch）。
 const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
-function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
+// ranchFile 只有測試會傳 —— 沒有它就只能拿真的 ranch.json 來驗「收進去失敗時
+// 不可以換角色」，那條路徑一跑就會動到使用者的營地。
+function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
+    // 營地的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
+    // ⚠️ 放在下面的話，force-char.json 不存在時 parse 會 throw、整個函式提早 return，
+    //    營地就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
+    //    任何 vpet 指令）。實測就是這樣抓到的：測試全綠但真機上放了一隻 Child 進營地，
+    //    規則永遠不會觸發。
+    applyRanchAging(st, ranchFile);
+
     let force;
     try { force = JSON.parse(fs.readFileSync(forceFile, 'utf8')); } catch (e) { return; }
-    if (force.character) {
+
+    // 營地操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
+    // 順序反過來的話收進營地的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
+    const ranchRes = applyRanchOp(st, force, ranchFile, forceFile);
+
+    // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
+    // ⚠️ 收起來失敗時**絕對不能**換角色 —— 換了就等於現役被新角色蓋掉、
+    //    而且沒有存進營地，永久遺失。舊版沒有這道判斷（回傳值直接丟掉）。
+    const keepFailed = ranchRes && ranchRes.op === 'keep' && ranchRes.ok === false;
+
+    if (force.character && !keepFailed) {
         const changed = st.characterId !== force.character;
         st.characterId = force.character;
         if (changed) {
@@ -168,8 +419,16 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT) {
     // 窗口短（3 秒）：觸碰是即時反應，過期的點擊不該補演。
     if (force.petTriggerTs && force.petTriggerTs !== st.lastPetTriggerTs) {
         const age = Date.now() - force.petTriggerTs;
+        // 睡覺中被碰 = 叫醒，不是摸摸。以前是「叫醒 + 照演 happy/refuse + 心情 +1」，
+        // 兩個問題：畫面上會出現「跳一下又倒回去睡」，而且趁牠睡著連點就能刷心情。
+        // 心情要在這裡就擋掉 —— 表演旗標到下一段才會被丟，心情卻是當場改的。
+        const asleep = isIdleSleeping(st);
         if (age >= 0 && age < 3000) {
-            if (force.petMood === 'refuse') {
+            if (force.forceSleep) {
+                // vpet sleep 的契約是「持續到 vpet wake，發訊息也不會醒」→ 觸碰整個丟棄
+            } else if (asleep) {
+                st._forceWake = true;        // 自然 idle 睡：只叫醒，不演表情、不動心情
+            } else if (force.petMood === 'refuse') {
                 st._forceRefuse = true;
                 bumpStat(st, 'petRefuse', Date.now());   // 被摸到不爽（本階段）
                 setMood(st, MOOD_MIN);      // 不爽 → 心情直接落底（不是遞減）
@@ -357,6 +616,98 @@ function evoSpendTotal(st) {
 // 直接切換角色在 release 版被 gate 擋掉，一般玩家只能靠實際養成累積。
 const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 
+// ── 營地（見 docs/ranch-spec.md）───────────────────────────────────
+// 心智模型是冰箱：同時只有一隻現役，現役會成長，營地裡的全部凍結。
+// 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），營地收「個體」（這一隻本人）。
+const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
+const RANCH_CAP  = 3;
+
+// 收進營地時**丟掉**的欄位。其餘一律保存。
+//
+// ⚠️ 這裡用黑名單而不是白名單，是因為兩種漏掉的後果差很多：
+//   白名單漏掉一個成長欄位 → 玩家的訓練值/勝率/進化歷程永久消失，而且不會有
+//                            任何錯誤訊息，只是他幾十小時的心血無聲不見。
+//   黑名單漏掉一個暫態欄位 → 還原出一個過期的動畫狀態，下一拍就自我修正。
+// 所以判準是「**不確定就不要加進黑名單**」。
+//
+// 用規則而不是純列舉，是因為這個 codebase 的暫態欄位命名很一致
+// （xxxStartStep / xxxShownElapsed / lastXxxTriggerTs / _forceXxx），
+// 日後新增同型欄位會自動被涵蓋，不會因為忘了加而被誤存。
+const RANCH_TRANSIENT_EXACT = new Set([
+    '_albumLast', '_ranchAgeCheckedAt',                                                   // 圖鑑去重快取，重算即可
+    '_forceSleep', '_freezeEvolve', '_noAutoBattle', '_petHidden',  // 每拍從 force 重讀
+    'battleArmHookTs', 'battleFiredHookTs', 'battlePending', 'battleNoCount',  // hook 武裝狀態，屬於這台機器不屬於這隻
+    'battleEnemy', 'battleWin', 'battleVersion', 'evoNextCharId', 'exprIdx',   // 演出中的一次性資料
+    'lastActivityAt', 'lastHookTs',                                 // 使用者活動時戳，全域不是個體的
+    'lastFacing', 'lastPos', 'walkPhaseOffset', 'lastStepSeen',     // 走路相位
+    'wasSleeping',
+]);
+const RANCH_TRANSIENT_RE = [
+    /StartStep$/,                 // 各種表演的起始拍
+    /ShownElapsed$/,              // 各種表演的播放進度
+    /^last[A-Za-z]*TriggerTs$/,   // force 去重時戳 —— 還原舊值會讓現在的 trigger 被當成新的而重放
+    /^_force/, /^_pvp/, /^pvp/,   // 一次性旗標與 PvP 名牌
+];
+const isRanchTransient = (k) =>
+    RANCH_TRANSIENT_EXACT.has(k) || RANCH_TRANSIENT_RE.some(re => re.test(k));
+
+/** 把現役的狀態打包成可以收進營地的一份快照 */
+function snapshotPet(st) {
+    const snap = {};
+    for (const k of Object.keys(st)) {
+        if (isRanchTransient(k)) continue;
+        snap[k] = st[k];
+    }
+    return JSON.parse(JSON.stringify(snap));   // 深拷貝，之後改 st 不會動到營地裡那份
+}
+
+/**
+ * 把營地裡的一份快照還原成現役（就地改 st）。
+ *
+ * 先刪掉 st 上所有「非暫態」的鍵再套用 —— 只做 Object.assign 的話，
+ * 舊角色有、新角色沒有的欄位（例如 inheritedPower、某個 _evo_* latch）會殘留下來，
+ * 變成兩隻寵物的狀態混在一起。這種 bug 只在特定組合下才顯現，很難查。
+ */
+function restorePet(st, snap) {
+    for (const k of Object.keys(st)) {
+        if (!isRanchTransient(k)) delete st[k];
+    }
+    Object.assign(st, JSON.parse(JSON.stringify(snap)));
+    return st;
+}
+
+function loadRanch(file) {
+    try {
+        const r = JSON.parse(fs.readFileSync(file || RANCH_FILE, 'utf8'));
+        if (r && Array.isArray(r.pets)) {
+            // ⚠️ 舊檔把 cap 存進去了（第一版寫的 8）。上限是**產品設定**不是存檔設定 ——
+            //    留著的話改常數對既有玩家完全無效，而且那種 bug 很難聯想（程式改了、
+            //    測試也綠，就只有自己那台沒變）。這裡直接丟掉，下次存檔就消失。
+            //    日後真要做「營地擴充」，加一個 capBonus 欄位，不要復活這個。
+            delete r.cap;
+            return r;
+        }
+    } catch (e) {}
+    return { v: 1, pets: [] };
+}
+
+/** 目前的收納上限。一律以常數為準，不看存檔。 */
+function ranchCap() { return RANCH_CAP; }
+function saveRanch(r, file) {
+    return atomicWrite(file || RANCH_FILE, JSON.stringify(r));
+}
+
+// 短亂數 id。**不能用 characterId 當識別** —— 一直 reset 會有好幾隻 agumon，
+// 牠們是不同個體。這裡的隨機不影響任何模擬結果，只是產生一個名字。
+function newRanchId(ranch) {
+    const taken = new Set((ranch.pets || []).map(p => p.id));
+    for (let i = 0; i < 1000; i++) {
+        const id = Math.random().toString(36).slice(2, 7);
+        if (!taken.has(id)) return id;
+    }
+    return 'r' + Date.now().toString(36);
+}
+
 function loadAlbum(file) {
     try {
         const a = JSON.parse(fs.readFileSync(file || ALBUM_FILE, 'utf8'));
@@ -371,6 +722,14 @@ function recordAlbumIfChanged(st, file) {
     const id = st && st.characterId;
     if (!id || st._albumLast === id) return false;
     st._albumLast = id;
+    return recordAlbumChar(id, file);
+}
+
+// 直接登錄某個角色（不經過 st）。營地裡發生的進化需要這個 ——
+// recordAlbumIfChanged 看的是**現役**的 characterId，而大便獸是在冰箱裡變的，
+// 從頭到尾都沒當過現役，走那條路永遠不會被收錄。
+function recordAlbumChar(id, file) {
+    if (!id) return false;
     const f = file || ALBUM_FILE;
     const a = loadAlbum(f);
     if (a.chars[id]) return false;          // 已收錄，不覆蓋首次取得時間
@@ -673,15 +1032,21 @@ function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 // 顯示用角色名：runtime 的 id 一律小寫（assets/<lc>/），大小寫真相在 config.name
 // （＝原始資料夾名，如 BurningGodzilla / BabyGodZilla / Godzilla_Jr）。
 // 舊資料 name 是小寫或缺漏時，退回「首字大寫」的舊行為，不會壞。
+// 底線是**資料夾名的產物**（Agumon_Black / GodZilla_1954），不是角色名字的一部分，
+// 所以顯示前一律換成空白。兩條 return 路徑都要換 —— config.name 通常就等於資料夾名，
+// 只改其中一條的話 23 隻裡沒有一隻會生效。
+// 長度不變（一個字元換一個字元），所以卡片那邊「補滿或截斷到 TEXT_W」的排版不受影響。
+const prettyName = (s) => String(s).replace(/_/g, ' ');
+
 function getDisplayName(name) {
     if (!name) return '';
     try {
         const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
         if (typeof config.name === 'string' && config.name && config.name.toLowerCase() === String(name).toLowerCase()) {
-            return config.name;   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
+            return prettyName(config.name);   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
         }
     } catch(e) {}
-    return name.charAt(0).toUpperCase() + name.slice(1);
+    return prettyName(name.charAt(0).toUpperCase() + name.slice(1));
 }
 
 // 角色的內部分類標籤（config.tags）。給 tag_battles 進化條件判斷對手屬性用；不對玩家顯示。
@@ -1111,15 +1476,18 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     if (st._forceSleep) {
         // 強制睡（vpet sleep）：契約是「持續到 vpet wake，發訊息也不會醒」→ 摸摸同樣叫不動，
         // 連表演都不演（否則會出現「演完又倒回去睡」的怪畫面）。直接丟棄觸碰。
-        delete st._forceHappy; delete st._forceRefuse;
+        delete st._forceHappy; delete st._forceRefuse; delete st._forceWake;
     } else {
-        // 自然 idle 睡（超過 IDLE_MS 沒活動）→ 摸摸視同活動，把牠叫醒。
-        // 只要更新 lastActivityAt，下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
-        if (st._forceHappy || st._forceRefuse) {
-            // 判斷要在更新 lastActivityAt 之前 —— 更新完就看不出剛才是不是在睡了
-            if ((now - (st.lastActivityAt || now)) > IDLE_MS) bumpStat(st, 'petWake', now);
+        // 自然 idle 睡（超過 IDLE_MS 沒活動）中被碰 → 只叫醒，不演表情、不動心情。
+        // applyForceFlags 已經判過在不在睡，這裡只要更新 lastActivityAt，
+        // 下面既有的 wasSleeping 相位重對齊就會接手，走路從原位續走。
+        if (st._forceWake) {
+            bumpStat(st, 'petWake', now);
             st.lastActivityAt = now;
+            delete st._forceWake;
         }
+        // 醒著被摸：摸摸也算一次活動（否則摸完馬上又被判定成閒置）
+        if (st._forceHappy || st._forceRefuse) st.lastActivityAt = now;
         if (st._forceHappy) {
             if (!(st.happyStartStep >= 0) && !(st.refuseStartStep >= 0)) st.happyStartStep = step;
             delete st._forceHappy;
@@ -1341,7 +1709,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
 
     // 睡覺（靜止不動，保留最後位置）；右上疊 Z 特效：sleep_1→Z、sleep_2→zZ
-    if ((now - st.lastActivityAt) > IDLE_MS) {
+    if (isIdleSleeping(st, now)) {
         st.wasSleeping = true;
         const idx = SLEEP_PERIOD ? Math.floor(step / SLEEP_PERIOD) % sleepFrames.length : 0;
         const sleepFx = idx === 0 ? 'zsleep1' : 'zsleep2';
@@ -1984,6 +2352,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 
 module.exports = {
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
+    IDLE_MS, isIdleSleeping,
     ANCHOR_GAP,
     BATTLE_LENGTH, BATTLE_LENGTH_V2, BATTLE_SCENE_WIDTH, BATTLE_SCENE_HEIGHT, MAX_POS,
     alignWalkPhase,
@@ -1994,7 +2363,7 @@ module.exports = {
     decideEvoFrame,
     composeEvoScene,
     composeDropScene,
-    loadState, saveState, atomicWrite,
+    loadState, saveState, atomicWrite, TRANSIENT_WRITE_ERRS, WRITE_RETRIES,
     applyForceFlags, applyForceTriggers, clearForceCharacter,
     decideAgumon,
     checkEvolution,
@@ -2006,6 +2375,10 @@ module.exports = {
     getBasePower, computeInheritedPower,
     bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
+    RANCH_FILE, RANCH_CAP, ranchCap, loadRanch, saveRanch, newRanchId,
+    snapshotPet, restorePet, isRanchTransient, applyRanchOp,
+    SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
+    recordAlbumChar,
     getDisplayName,
     getCharacterTags,
     getCharacterPower,

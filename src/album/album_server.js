@@ -39,6 +39,21 @@ function loadRosterFresh() {
         return Array.isArray(list) && list.length ? new Set(list) : null;
     } catch (e) { return null; }   // 讀不到 → fail-open（不過濾），與 core 的行為一致
 }
+
+function loadStartersFresh() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
+        return Array.isArray(raw.starters) && raw.starters.length ? raw.starters : null;
+    } catch (e) { return null; }
+}
+
+function loadSpecialRules() {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'special-evolutions.json'), 'utf8'));
+        return Array.isArray(j.rules) ? j.rules : [];
+    } catch (e) { return []; }
+}
+const RULES = require('../shared/evo-rules.js');   // 可達性判定（純敵人＝走不到 starter）
 const ASSETS_DIR = path.join(core.INSTALL_ROOT, 'assets');
 const PORT = parseInt(process.env.AGUMON_ALBUM_PORT || '3004', 10);
 const HTML_FILE = path.join(__dirname, 'album.html');
@@ -73,6 +88,26 @@ function loadAll() {
             next: (cfg.evolvesTo || []).map(e => e.character).filter(Boolean),
         };
     }
+    return pruneUnreachable(out);
+}
+
+// roster 只擋掉一半。**在 roster 裡、但沒有任何角色進化到它**的那幾隻
+// （biollante / xiquemon / shishimamon / destoroyah）症狀一模一樣：
+// 玩家永遠到不了，卻算在分母裡 —— 永遠停在 129/133，四個 ??? 解不開。
+//
+// 規則：走不到 starter 的都算純敵人。用**算的**而不是列名單 ——
+// 名單會過期，musyamon 那條鏈就是靠 roster 意外擋住的，不是有人記得把它列進去。
+function pruneUnreachable(all) {
+    const starters = loadStartersFresh();
+    if (!starters) return all;   // fail-open，同 roster
+    const nodes = Object.values(all).map(n => ({ id: n.id, stage: n.stage }));
+    const edges = [];
+    for (const n of Object.values(all))
+        for (const nx of n.next) if (all[nx]) edges.push({ from: n.id, to: nx });
+    const reach = RULES.reachableFrom({ nodes, edges }, starters, loadSpecialRules());
+    if (!reach) return all;
+    const out = {};
+    for (const id of Object.keys(all)) if (reach.has(id)) out[id] = all[id];
     return out;
 }
 

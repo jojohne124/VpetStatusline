@@ -80,6 +80,9 @@ node scripts/install.js
 兩個方向都只要**重跑一次安裝指令**，桌寵的角色與進度完全不受影響（存檔在 `state/`，
 安裝腳本不會動它）。
 
+> **忘記當初 clone 到哪了？** 打 **`vpet help`**，最後幾行會印出目前的安裝模式、
+> 這份指引的完整路徑，以及兩個方向的切換指令。
+
 **B → A（改成只用獨立視窗）**
 
 ```bash
@@ -214,6 +217,9 @@ vpet code 新名牌     # 改名牌（會同步更新後端上的戰卡）
 - **狀態列沒出現桌寵**：確認已重開 Claude Code；檢查 `~/.claude/settings.json` 的
   `statusLine.command` 有指向 `agumon-statusline/statusline-agumon-color.js`。
 - **打 `vpet` 說找不到指令**：重開終端機；仍不行就照安裝時印的 PATH 指示加一下。
+- **忘記 clone 在哪 / 不確定自己裝的是哪種模式**：`vpet help` 最後會印出來。
+  若顯示「找不到當初 clone 的資料夾」，代表那個資料夾被刪或搬走了 —— 重新
+  `git clone` 一份再跑安裝即可（存檔在 `~/.claude/agumon-statusline/state/`，不會遺失）。
 - **只裝了獨立視窗（A），狀態列當然不會有桌寵** —— 那是預期行為。
   桌寵在 `vpet-standalone.bat` / `.sh` 開的視窗裡。想改回狀態列就重跑一次一般安裝。
 - **想從「狀態列版」改成「只用獨立視窗」**：見 [§二「隨時可以互換」](#隨時可以互換)。

@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "規則型進化：不掛在任何角色的 config.evolvesTo 上，所以不會出現在 vpet tree /",
+    "圖鑑 / 進化路線編輯器的連線上。用於「來源是一整個階段」這種會爆出幾十條邊的進化。",
+    "要露出來請走反方向：在目標角色自己的圖鑑頁寫『來源：...』。",
+    "",
+    "⚠️ 不要把這些搬進 roster.json —— 進化路線編輯器存檔時會整份重寫 roster.json，",
+    "只保留 roster/starters/starterWeights/highTierStarters，加在那裡會被無聲刪掉。",
+    "",
+    "欄位：",
+    "  to         目標角色 id（不在 roster 就不生效，可以先寫著等美術）",
+    "  fromStage  來源階段（Child / Adult / ...）；或用 from 指定單一角色",
+    "  conditions 目前只支援 { type: 'ranch_hours', hours: N }",
+    "             = 連續待在營地 N 小時。中途取出會歸零（keptAt 天生就是這個語意）",
+    "  hidden     取得前不在圖鑑上顯示來源"
+  ],
+  "rules": [
+    {
+      "id": "sukamon-neglect",
+      "to": "sukamon",
+      "fromStage": "Child",
+      "conditions": [{ "type": "ranch_hours", "hours": 48 }],
+      "hidden": true,
+      "note": "彩蛋：原作疏於照顧會變大便獸。我們省略了餵食/清掃/關燈，改用「丟在營地完全不動 48 小時」當替代。不可逆、可出戰，視為一種進化。"
+    }
+  ]
+}

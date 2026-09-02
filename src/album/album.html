@@ -49,6 +49,18 @@
 const CELL=4;                 // idle 縮圖：1 邏輯像素 = 4x4
 const COL_W=140, ROW_H=112;   // 節點間距（ROW_H 含兩行名字的空間：canvas 66 + 名字最多 24）
 const $=id=>document.getElementById(id);
+
+// 蒐集程度：分子分母 + 百分比，百分比**無條件捨去**。
+//
+// floor 而不是 round：199/200 四捨五入是 100%，而「看到 100% 卻還有一隻沒收」
+// 是最惱人的那種假訊息。只有真的收滿才給 100%。
+// owned >= total 才夾成 100 —— 這一條同時擋掉「owned 大於 total」時算出 101% 的情況。
+// total=0（資產讀不到、或 roster 空的）不能謊報 100%：一隻都沒有不該算收滿。
+function countLabel(owned, total){
+  if(!total) return '已收錄 <b>0</b> / 0　<b>0%</b>';
+  const pct = owned >= total ? 100 : Math.floor(owned / total * 100);
+  return `已收錄 <b>${owned}</b> / ${total}　<b>${pct}%</b>`;
+}
 const view=$('view'), world=$('world'), edges=$('edges');
 let DATA=null, frame=0, cvs=[];
 let tx=40, ty=40, scale=1;
@@ -143,7 +155,7 @@ view.addEventListener('wheel',e=>{
 
 (async()=>{
   DATA=await (await fetch('/data')).json();
-  $('count').innerHTML=`已收錄 <b>${DATA.owned}</b> / ${DATA.total}`;
+  $('count').innerHTML=countLabel(DATA.owned, DATA.total);
   applyTransform();
   layout();
 })();

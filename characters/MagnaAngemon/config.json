@@ -62,6 +62,20 @@
   ],
   "evolvesTo": [
     {
+      "character": "goddramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 65,
+          "minBattles": 12
+        }
+      ]
+    },
+    {
       "character": "dominimon",
       "conditions": [
         {
@@ -70,7 +84,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 75,
+          "pct": 70,
           "minBattles": 12
         }
       ]

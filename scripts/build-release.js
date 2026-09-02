@@ -6,8 +6,9 @@
  *   node scripts/build-release.js            # 產到 dist/release
  *   node scripts/build-release.js <out-dir>  # 產到指定目錄
  *
- * 產物只含執行 vpet statusline 所需：runtime js、部署用角色 json、shared json、
- * install/uninstall、bin 薄殼、package.json、tools/agumon-doctor 自救包，並放一個
+ * 產物只含執行 vpet statusline 所需：runtime js、daemon js、src/shared 共用模組、
+ * 部署用角色 json 與 characters/ 的資料 json、shared 美術 json、install/uninstall、
+ * bin 薄殼、package.json、tools/agumon-doctor 自救包，並放一個
  * RELEASE 標記檔（install 後 statusline-cheat 會據此停用開發／作弊指令）。
  *
  * 移除（開發資產）：角色原圖 PNG、pixels.json/bullet.json 中介檔、*.bak、
@@ -62,6 +63,17 @@ if (fs.existsSync(daemonDir))
     for (const f of fs.readdirSync(daemonDir))
         if (f.endsWith('.js')) copyRel(path.join('src', 'daemon', f));
 
+// src/shared/：出貨的程式在**樹內**就 require 得到的共用模組。兩條路都要它，
+// 而且漏掉都是無聲死掉：
+//   1. daemon 是直接從 release 樹跑的 → src/daemon/plaza.js 的
+//      require('../shared/plaza-walk.js') 解析到 <樹>/src/shared/，缺檔＝daemon 一起動
+//      就 MODULE_NOT_FOUND，獨立介面（安裝指引推薦的模式）整個開不起來。
+//   2. install.js 會再把這幾支複製到部署樹的 shared/ 給圖鑑用（見那邊的 SHARED_MODULES）。
+const sharedSrc = path.join(REPO, 'src', 'shared');
+if (fs.existsSync(sharedSrc))
+    for (const f of fs.readdirSync(sharedSrc))
+        if (f.endsWith('.js')) copyRel(path.join('src', 'shared', f));
+
 // 玩家用的獨立頁面（圖鑑 vpet album、底圖編輯器 vpet bg）：都是玩家功能，必須出貨。
 // 放 src/<name>/ 而非 src/editor/ 就是為了這個 —— src/editor 整個被排除，
 // 放錯地方 release 使用者就沒得用。判準是「改的是使用者的檔還是 repo 資產」：
@@ -102,6 +114,13 @@ for (const f of ['vpet-tray.ps1', 'vpet.ico'])
 
 // characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）
 copyRel(path.join('characters', 'roster.json'));
+// characters/ 底下的「資料」檔 —— 不屬於任何角色資料夾，所以下面那個迴圈掃不到，
+// 要單獨帶（install.js 那邊也是分開處理的）。缺了不會報錯，只會安靜地少功能：
+//   special-evolutions.json 沒了 → 規則型特殊進化（營地時效那類）永遠不會發生
+//   yard-layouts.json 沒了 → 營地走動範圍退回內建切法，編輯器調過的分區不算
+// evo-layout.json 刻意不出貨：那是進化路線編輯器的版面，只有 dev 用得到。
+for (const f of ['special-evolutions.json', 'yard-layouts.json'])
+    if (fs.existsSync(path.join(REPO, 'characters', f))) copyRel(path.join('characters', f));
 const KEEP_CHAR = new Set(['art.json', 'config.json', 'bullet-art.json', 'cutin-art.json']);
 for (const d of fs.readdirSync(path.join(REPO, 'characters'), { withFileTypes: true })) {
     if (!d.isDirectory()) continue;

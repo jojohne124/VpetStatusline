@@ -241,8 +241,17 @@ console.log('— 營地分區 —');
         return (dx > 0 && dy > 0) ? dx * dy : 0;
     };
 
-    // 4.4-a 區域本身要合法
-    for (const n of [1, 2, 3]) {
+    // ⚠️ 上限調大但忘了補切法 → yardZones 找不到那個隻數，**退回整場共用**，
+    //    畫面就回到分區之前（實測 4 隻整場共用：嚴重重疊 94%），而且不會有任何
+    //    錯誤訊息。2026-09-07 上限 3 → 4 時就是這個狀況，所以把兩邊釘在一起。
+    const CAP = (core && core.ranchCap) ? core.ranchCap() : 3;
+    ok(!!W.YARD_LAYOUTS[CAP],
+       `營地上限是 ${CAP} 隻，但 YARD_LAYOUTS 沒有 ${CAP} 隻的切法 → 會退回整場共用`);
+    ok(!!W.YARD_LAYOUT_DEFAULT[CAP],
+       `YARD_LAYOUT_DEFAULT 少了 ${CAP} 隻的預設切法`);
+
+    // 4.4-a 區域本身要合法（1 隻到上限，逐一驗）
+    for (let n = 1; n <= CAP; n++) {
         const Z = W.yardZones(n);
         ok(Z.length === n, `yardZones(${n}) 給了 ${Z.length} 塊`);
         const bad = Z.filter(z => z.minX < F.minX || z.maxX > F.maxX
@@ -412,10 +421,15 @@ console.log('— 營地分區 —');
 }
 
 // ── 4.5 客製右向幀 ───────────────────────────────────────────────────
-// Mastemon 左半天使（白／銀／金髮／水藍）、右半惡魔（紫黑／黃綠／粉），這個
-// 左右分色是設計本身、不是視角 —— 純鏡射會把黑白兩半互換，看起來像換了一隻。
-// 所以她自帶 _r 幀（config.rightOffset），輪廓照鏡射、顏色留在原本的螢幕半邊。
-// 產生方式見 scripts/gen-mastemon-right.js。
+// 會需要 _r 的角色，前提就是「左右不對稱」—— Mastemon 左半天使（白／銀／金髮／
+// 水藍）、右半惡魔（紫黑／黃綠／粉），純鏡射會把黑白兩半互換，像換了一隻。
+// 所以她自帶 _r 幀（config.rightOffset），runtime 改讀後半段而不是 flipRows()。
+//
+// ⚠️ 這一節**不驗輪廓**。_r 是獨立畫的一組圖，跟左向幀不必有幾何關係 ——
+//    非鏡射是常態，完全不同的姿態也合法（使用者明講過）。曾經有一條「輪廓要
+//    逐格鏡射」的斷言，2026-09-07 重畫右向幀就紅了，而美術並沒有錯，是那條
+//    斷言把「Mastemon 那次的產生方法（鏡射＋換色）」誤當成 _r 的通則。
+//    留下來的都是結構性的（漏了會壞掉），加上標明是「這隻的美術意圖」的兩組。
 console.log('— 客製右向幀 —');
 {
     const fs = require('fs');
@@ -476,8 +490,10 @@ console.log('— 客製右向幀 —');
         ok(Math.abs(R.a - L.a) < 2.5 && Math.abs(R.d - L.d) < 2.5,
            `${name} 右向幀的分色位置與左向差太多（天使 ${L.a.toFixed(2)}→${R.a.toFixed(2)}，惡魔 ${L.d.toFixed(2)}→${R.d.toFixed(2)}）`);
 
-        // 4.5-b2 _r 面對玩家的是天使側，所以它的天使側要比原圖天使側更亮
-        // （惡魔半身本來就暗，直接鏡射過來會太多黑點）。
+        // 4.5-b2 ⚠️ 這組是 **Mastemon 這隻的美術意圖**（使用者當初指定「天使側要更多
+        // 白點」），不是 _r 的通則：_r 面對玩家的是天使側，惡魔半身本來就暗（平均
+        // lum 70 vs 天使側 110），直接鏡射過來會太多黑點。哪天這隻的設計改了，
+        // 連這兩條一起改，不要為了讓它綠而回頭改圖。
         const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
         const bright = (from, to) => {
             let n = 0, sum = 0, white = 0;
@@ -496,23 +512,22 @@ console.log('— 客製右向幀 —');
         ok(bR.whitePct >= bL.whitePct + 5,
            `${name} 的 _r 天使側亮點不夠多，${bL.whitePct.toFixed(0)}% → ${bR.whitePct.toFixed(0)}%（要 >= ${(bL.whitePct+5).toFixed(0)}%）`);
 
-        // 4.5-c 輪廓要真的鏡射過，而且不能只是純鏡射（那就是現在要修的 bug）
-        if (!core || !core.getFacingRows) { skip++; console.log('  – 讀不到 agumon-core，跳過輪廓檢查'); }
+        // 4.5-c _r 真的是另一組圖 —— 這兩條是結構性的，跟畫成什麼樣子無關：
+        //   identical：右向等於左向 → 面右時角色會朝反邊（等於沒畫）
+        //   plainFlip：右向就是純鏡射 → rightOffset 白留，runtime 自己 flip 就好，
+        //              而且對 Mastemon 這種分色角色，那正是「黑白互換」的原始 bug
+        if (!core || !core.getFacingRows) { skip++; console.log('  – 讀不到 agumon-core，跳過 _r 檢查'); }
         else {
-            let shapeDiff = 0, plainFlip = 0, identical = 0;
+            const art = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'art.json'), 'utf8'));
+            let plainFlip = 0, identical = 0;
             for (let i = 0; i < cfg.frameCount; i++) {
-                const l = px.frames[i], r = px.frames[cfg.rightOffset + i];
-                for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
-                    if (!!l[y * N + (N - 1 - x)] !== !!r[y * N + x]) shapeDiff++;
-                const art = JSON.parse(fs.readFileSync(path.join(CHARS, name, 'art.json'), 'utf8'));
                 const a = JSON.stringify(core.getFacingRows(art, i, 'left',  cfg.rightOffset));
                 const b = JSON.stringify(core.getFacingRows(art, i, 'right', cfg.rightOffset));
                 if (b === JSON.stringify(core.flipRows(JSON.parse(a)))) plainFlip++;
                 if (b === a) identical++;
             }
-            ok(shapeDiff === 0, `${name} 右向幀的輪廓沒有照鏡射（差 ${shapeDiff} 格）`);
-            ok(plainFlip === 0, `${name} 有 ${plainFlip} 幀的右向就是純鏡射，等於沒修`);
-            ok(identical === 0, `${name} 有 ${identical} 幀的右向直接等於左向原圖（沒鏡射）`);
+            ok(plainFlip === 0, `${name} 有 ${plainFlip} 幀的右向就是純鏡射（rightOffset 等於白留）`);
+            ok(identical === 0, `${name} 有 ${identical} 幀的右向直接等於左向原圖（面右會朝反邊）`);
         }
 
         // 4.5-d cut-in 同理：runtime 沒有 frames[1] 就會翻轉 frames[0]

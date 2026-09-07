@@ -620,7 +620,7 @@ const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 // 心智模型是冰箱：同時只有一隻現役，現役會成長，營地裡的全部凍結。
 // 與圖鑑是不同維度 —— 圖鑑記「種類」（你養過誰），營地收「個體」（這一隻本人）。
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
-const RANCH_CAP  = 3;
+const RANCH_CAP  = 4;
 
 // 收進營地時**丟掉**的欄位。其餘一律保存。
 //

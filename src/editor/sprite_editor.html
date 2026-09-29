@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Sprite Editor</title>
 <style>
 :root {
@@ -218,6 +219,28 @@ h1 { margin: 0 0 16px; font-size: 18px; }
     linear-gradient(-45deg, transparent 75%, #333 75%);
   background-size: 10px 10px;
   background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
+/* ── 觸控／窄螢幕（手機）──────────────────── */
+#editor, .thumb, .swatch {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (max-width: 900px) {
+  :root { --cell-px: 20px; }
+  body { padding: 10px; font-size: 15px; }
+  h1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; }
+  .mode-toggle, .tool-toggle { margin-left: 0; }
+  .mode-toggle button, .tool-toggle button { padding: 8px 12px; font-size: 13px; }
+  .layout { grid-template-columns: 1fr; gap: 12px; }
+  .thumbs { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+  .thumb { flex: 0 0 auto; flex-direction: column; gap: 2px; }
+  .canvas-row { flex-wrap: wrap; overflow-x: auto; }
+  .battle-row { flex-direction: column; }
+  #battle-canvas { width: 100%; height: auto; }
+  .battle-ctrls { min-width: 0; }
+  .palette { grid-template-columns: repeat(6, 1fr); gap: 6px; }
 }
 </style>
 </head>
@@ -862,6 +885,57 @@ document.addEventListener('mouseup', () => {
         dragState = null;
     }
 });
+// ── 觸控支援（手機／平板）────────────────
+// 桌面走 cell.onmousedown / onmouseenter；但手指拖曳不會觸發 mouseenter，
+// 所以觸控改成在 #editor 這層監聽，用 elementFromPoint 找出手指底下的格子。
+// 格子是 renderEditor() 每次重建的，綁在容器上才不會失效。
+(function enableTouchDrawing() {
+    const el = document.getElementById('editor');
+    if (!el) return;
+    let lastKey = null;
+    const FAKE = { altKey: false, shiftKey: false, button: 0, preventDefault() {} };
+
+    function cellAt(touch) {
+        if (!touch) return null;
+        const t = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (!t || !t.classList.contains('cell')) return null;
+        const x = Number(t.dataset.x), y = Number(t.dataset.y);
+        if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+        return { x, y };
+    }
+
+    el.addEventListener('touchstart', (e) => {
+        if (e.touches.length > 1) return;          // 雙指留給縮放／捲動
+        const c = cellAt(e.touches[0]);
+        if (!c) return;
+        e.preventDefault();
+        lastKey = c.x + ',' + c.y;
+        if (currentTool === 'select') return handleSelectMouseDown(FAKE, c.x, c.y);
+        isDragging = true;
+        paint(FAKE, c.x, c.y);
+    }, { passive: false });
+
+    el.addEventListener('touchmove', (e) => {
+        if (!isDragging && !dragState) return;
+        e.preventDefault();
+        const c = cellAt(e.touches[0]);
+        if (!c) return;
+        const key = c.x + ',' + c.y;
+        if (key === lastKey) return;                // 同一格不重畫
+        lastKey = key;
+        if (dragState) return handleSelectMouseEnter(c.x, c.y);
+        if (isDragging) paint(FAKE, c.x, c.y);
+    }, { passive: false });
+
+    const endTouch = () => {
+        lastKey = null;
+        // 收尾邏輯（放下選區、清 isDragging）沿用既有的 mouseup handler
+        document.dispatchEvent(new MouseEvent('mouseup'));
+    };
+    el.addEventListener('touchend', endTouch);
+    el.addEventListener('touchcancel', endTouch);
+})();
+
 document.getElementById('save').onclick = save;
 document.getElementById('undo').onclick = undo;
 document.getElementById('reload').onclick = () => { if (confirm('重新載入？未儲存的變更會遺失！')) load(); };

@@ -22,12 +22,27 @@ const PORT = 3099;
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + msg); } };
 
-const get = (p) => new Promise((res, rej) => {
-    const r = http.get({ host: '127.0.0.1', port: PORT, path: p }, (s) => {
+const getOn = (port, p) => new Promise((res, rej) => {
+    const r = http.get({ host: '127.0.0.1', port, path: p }, (s) => {
         let d = ''; s.on('data', c => d += c); s.on('end', () => res(d));
     });
     r.on('error', rej);
     r.setTimeout(8000, () => { r.destroy(); rej(new Error('timeout')); });
+});
+const get = (p) => getOn(PORT, p);
+
+// /cmd 是 POST + JSON（前端的 sendCmd 就是這樣送的）——「留空的指定戰鬥」要驗的是
+// 伺服器端寫進 force 檔的內容，所以必須走真的端點，不能只檢查原始碼。
+const post = (port, p, body) => new Promise((res, rej) => {
+    const data = Buffer.from(JSON.stringify(body));
+    const r = http.request({ host: '127.0.0.1', port, path: p, method: 'POST',
+                             headers: { 'Content-Type': 'application/json',
+                                        'Content-Length': data.length } }, (s) => {
+        let d = ''; s.on('data', c => d += c); s.on('end', () => res(d));
+    });
+    r.on('error', rej);
+    r.setTimeout(8000, () => { r.destroy(); rej(new Error('timeout')); });
+    r.end(data);
 });
 
 // --isolated：只寫 daemon-state.json，不碰正式 color-state.json，也不寫 heartbeat
@@ -521,6 +536,54 @@ setTimeout(async () => {
         ok(onlyCold.weather && onlyCold.weather.cold === true, '?w=cold 應保留真實天空並加上寒流');
         const rev = JSON.parse(await get('/yard?w=' + encodeURIComponent('cold+rain')));
         ok(rev.weather && rev.weather.sky === 'rain' && rev.weather.cold === true, '參數順序不該有影響');
+        console.log('— 留空的指定戰鬥不該沿用上次 —');
+        {
+            // force.json 是**累積**的。指定過一次敵人之後，「留空＝隨機」若只寫
+            // battleTriggerTs，上次那隻還躺在檔案裡 → 下一場照著牠打。回報過。
+            // CLI 那條路徑（--battle）本來就把這幾個欄位刪乾淨，快路徑漏掉就是分叉。
+            //
+            // 另外起一個 daemon，AGUMON_STATE_DIR 指到暫存目錄：驗得到 force 檔的
+            // 前後內容，又不會去動使用者真正的 force-char.json。
+            const os = require('os'), fs2 = require('fs');
+            const dir = fs2.mkdtempSync(path.join(os.tmpdir(), 'vpet-force-'));
+            const ff = path.join(dir, 'force-char.json');
+            const STALE = { forceBattleEnemy: 'greymon', forceBattleWin: true,
+                            pvpOppLabel: 'opp', pvpMeLabel: 'me', battleNoCount: true };
+            // freezeEvolve 不相干，用來擋「清過頭」—— 整個檔案砍掉重寫也會讓上面那些消失。
+            fs2.writeFileSync(ff, JSON.stringify({ ...STALE, freezeEvolve: true }));
+            const PORT2 = PORT + 1;
+            const kid = spawn(process.execPath,
+                [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
+                { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT2),
+                         AGUMON_STATE_DIR: dir }, stdio: 'ignore' });
+            try {
+                let up = false;
+                for (let i = 0; i < 100 && !up; i++) {
+                    try { await getOn(PORT2, '/state'); up = true; }
+                    catch (e) { await new Promise(r => setTimeout(r, 100)); }
+                }
+                ok(up, '第二個 daemon 起不來，這節等於沒測到');
+                if (up) {
+                    const r = JSON.parse(await post(PORT2, '/cmd', { action: 'battle', args: {} }));
+                    ok(r.ok === true, '留空的指定戰鬥送不出去：' + (r.error || ''));
+                    const f = JSON.parse(fs2.readFileSync(ff, 'utf8'));
+                    ok(typeof f.battleTriggerTs === 'number',
+                       '沒有寫 battleTriggerTs —— 戰鬥根本不會觸發');
+                    for (const k of Object.keys(STALE))
+                        ok(!(k in f), `留空的指定戰鬥沒清掉上次的 ${k}（還是 ${JSON.stringify(f[k])}）`);
+                    ok(f.freezeEvolve === true, '清過頭了，不相干的 force 欄位被一起砍掉');
+                    // 有指定時要走 CLI，快路徑必須讓路（回 null）。這裡只驗「沒有被快路徑
+                    // 吃掉」—— 真的跑 CLI 會 spawn 子行程、還會寫到真的 state，不在這裡做。
+                    const src = fs2.readFileSync(
+                        path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+                    ok(/\(a\.enemy \|\| a\.result\) \? null/.test(src),
+                       '指定了敵人／勝負時快路徑沒有讓路給 CLI（參數會被整包吃掉）');
+                }
+            } finally {
+                try { kid.kill(); } catch (e) {}
+                try { fs2.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+            }
+        }
     } catch (e) {
         fail++; console.log('  ✗ 例外：' + e.message);
     }

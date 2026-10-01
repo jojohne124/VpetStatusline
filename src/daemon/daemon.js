@@ -465,10 +465,16 @@ setTimeout(sweepOrphans, 3000).unref();
 // ── UI 指令 → force-char.json（跟 vpet CLI 同一個指令通道）───────────────────
 // 當家時 daemon 自己讀套用；隔離時 statusLine 讀 → UI 等於「圖形版 vpet 指令」，兩模式皆可用。
 // merge 寫入（保留其他欄位），與 statusline-cheat 寫法一致。
+// force.json 是**累積**的：這裡是 merge 進既有內容，不是覆寫。
+// 所以「這次沒指定某個參數」必須寫成明確的刪除（patch 裡給 null），不能只是不寫 ——
+// 不寫等於沿用上一次的值。踩過：指定過一次敵人之後，「留空＝隨機」的戰鬥
+// 全部照著上次那隻打（見 COMMANDS.battle）。
 function writeForce(patch) {
     let f = {};
     try { f = JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8')); } catch (e) {}
-    Object.assign(f, patch);
+    for (const k of Object.keys(patch)) {
+        if (patch[k] === null) delete f[k]; else f[k] = patch[k];
+    }
     try {
         fs.mkdirSync(path.dirname(FORCE_FILE), { recursive: true });
         fs.writeFileSync(FORCE_FILE, JSON.stringify(f));
@@ -531,7 +537,16 @@ const COMMANDS = {
     // 指定敵人／勝負一定要走 CLI —— 這裡只寫 battleTriggerTs，敵人欄位是 CLI 在填的
     // （forceBattleEnemy / forceBattleWin）。踩過：網頁的「指定戰鬥」填了敵人照樣
     // 隨機開打，因為 COMMANDS 排在 CLI_ACTIONS 前面，參數整包被吃掉，而且回 ok:true。
-    battle:    (a) => (a.enemy || a.result) ? null : ({ battleTriggerTs: Date.now() }),
+    // ⚠️ 留空 ≠ 什麼都不用寫。force.json 是累積的，上一次指定過的敵人／勝負還躺在裡面，
+    //    只寫 battleTriggerTs 的話下一場「隨機」會照著上次那隻打 —— 回報過。
+    //    CLI 那條路徑（statusline-cheat.js 的 --battle）本來就會把這五個欄位刪乾淨，
+    //    快路徑漏了同一套清理就是分叉。這裡要跟它一字不差。
+    battle:    (a) => (a.enemy || a.result) ? null : ({
+        battleTriggerTs: Date.now(),
+        forceBattleEnemy: null, forceBattleWin: null,
+        pvpOppLabel: null, pvpMeLabel: null,   // 手動戰鬥非 PvP，清掉腳下名牌
+        battleNoCount: null,                   // 手動戰鬥照常計入勝率
+    }),
     card:      () => ({ cardTriggerTs:   Date.now() }),
     tree:      () => ({ treeTriggerTs:   Date.now() }),
     drop:      () => ({ dropTriggerTs:   Date.now() }),   // 空降演出（非真 reset 抽角色）
@@ -798,12 +813,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   body.yard #hud{display:block}
   #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
   #hud .prev{color:#d29922;font-size:10px}
-  /* 左上角的日／月。跟右上那塊看板分開放：那邊是會長長短短的一行字（天氣＋溫度＋
-     城市＋預覽標），天色塞進去會被擠著跑。小一點、只有一個字，掃一眼就知道現在幾更天。 */
-  #hudL{position:absolute;display:none;top:6px;left:8px;z-index:3;
-        pointer-events:none;font-size:14px;line-height:1;
-        text-shadow:0 1px 3px #000, 0 0 6px #000}
-  body.yard #hudL{display:block}
+  /* 左上角曾經放過一顆日／月，拿掉了：右上的看板已經有時鐘，晴夜的圖示也是月亮，
+     早晚本來就看得出來 —— 多一顆只是把同一件事講第二次。 */
   #wxsel{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;
          font:inherit;font-size:11px;padding:1px 4px;margin-left:6px}
   /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
@@ -856,7 +867,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div><div id="hudL">–</div></div>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1312,7 +1323,6 @@ async function pollYard(){
     // 日夜跟著伺服器走，不看自己的時鐘 —— 右上的時間是看板（本機時鐘、每秒自己跳），
     // 天色是場景狀態。兩邊各判各的話，預覽夜晚時會變成「月亮出來了但陽光還在」。
     wxState.night = !!y.weather.night;
-    document.getElementById('hudL').textContent = wxState.night ? '🌙' : '☀️';
     document.getElementById('hudWx').innerHTML =
       y.weather.icon+' '+y.weather.label+(y.weather.temp?'　'+y.weather.temp:'')
       + (y.weather.city?' <span class="k">'+y.weather.city+'</span>':'')

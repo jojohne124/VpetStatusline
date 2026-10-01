@@ -140,5 +140,41 @@ console.log('— 離線行為 —');
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+console.log('— 日夜 —');
+{
+    // 06:00–18:00 為日。邊界各驗一次 —— 這種「< 還是 <=」的錯只會在邊界那一分鐘
+    // 顯現，平常跑一百次都正常。
+    const at = (h, m) => { const d = new Date(2026, 0, 15, h, m || 0); return WX.isNight(d); };
+    ok(at(5, 59) === true,  '05:59 應該算夜');
+    ok(at(6, 0)  === false, '06:00 應該算日（日的那一端是閉區間）');
+    ok(at(12, 0) === false, '正午應該算日');
+    ok(at(17, 59) === false, '17:59 應該算日');
+    ok(at(18, 0) === true,  '18:00 應該算夜（夜的那一端是開區間）');
+    ok(at(23, 30) === true, '深夜應該算夜');
+    ok(typeof WX.isNight() === 'boolean', '不給時間時應該用現在的時鐘，而不是丟例外');
+    // 這套切法跟 agumon-core 的 time_of_day 進化條件共用同一組數字，寫死在這裡當哨兵：
+    // 有人去動 DAY_START/DAY_END 卻忘了同步 core，這條會紅。
+    ok(WX.DAY_START === 6 && WX.DAY_END === 18,
+       `日夜切點被改了（${WX.DAY_START}–${WX.DAY_END}）—— agumon-core 的 time_of_day 要一起改`);
+}
+
+console.log('— 日夜的圖示 —');
+{
+    // 晚上掛一顆太陽是這次要修的毛病本身，所以釘住。
+    const icon = (w) => WX.describe(w).icon;
+    const sun  = WX.SKY_LABEL[WX.SKY.CLEAR].icon;
+    ok(icon({ sky: WX.SKY.CLEAR, night: false }) === sun, '白天的晴天應該是太陽');
+    ok(icon({ sky: WX.SKY.CLEAR, night: true })  !== sun, '夜裡的晴天還掛著太陽');
+    ok(icon({ sky: WX.SKY.CLEAR, night: true }).indexOf('🌙') === 0, '夜裡的晴天應該是月亮');
+    // 其餘天空日夜同圖 —— 雨就是雨，不會因為天黑就變成別的東西
+    for (const s of [WX.SKY.CLOUDY, WX.SKY.RAIN, WX.SKY.STORM, WX.SKY.THUNDER])
+        ok(icon({ sky: s, night: true }) === WX.SKY_LABEL[s].icon, `${s} 不該因為入夜換圖示`);
+    // 寒流仍然蓋過一切（冷的時候氣溫才是主角）
+    ok(icon({ sky: WX.SKY.CLEAR, night: true, cold: true }) === icon({ sky: WX.SKY.CLEAR, cold: true }),
+       '寒流的圖示不該被日夜影響');
+    // 文字不分日夜：「晴」在晚上也還是晴，不需要寫成「晴夜」
+    ok(WX.describe({ sky: WX.SKY.CLEAR, night: true }).label === '晴', '夜裡的晴天文字不該被改掉');
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -332,7 +332,10 @@ const weather = wxSrc.create({
 // 天氣預覽：?w=rain 之類的參數強制指定，讓五種表演不用等真的下雨才看得到。
 // 只影響回傳的畫面，不寫進任何檔案，也不影響真實天氣的抓取。
 function weatherFor(q) {
-    const real = weather.get();
+    // 日夜嚴格說不是天氣，但前端要靠它決定「晴天的光柱要不要畫」，而且它跟天氣
+    // 一樣是**伺服器說了算**的場景狀態（之後長成廣場時，大家的天色必須一致，
+    // 不能各自看自己的時鐘）。跟 weather 一起送，前端只要讀一份。
+    const real = { ...weather.get(), night: WX.isNight() };
     // 開發專屬。跟其他 dev 功能同一條規矩：只把 UI 藏起來是不夠的，
     // /yard 是公開端點，伺服器端必須一起擋，否則 release 版照樣能用網址切天氣。
     if (!q || IS_RELEASE) return real;
@@ -344,11 +347,16 @@ function weatherFor(q) {
     // 預覽若只給幾個寫死的組合，等於把資料模型講錯了。
     //   ?w=cold       → 真實天空 + 強制寒流
     //   ?w=rain+cold  → 雨 + 寒流（順序隨意）
+    //   ?w=night      → 強制入夜（day 則強制白天；不寫就跟著真實時鐘）
+    //                   —— 沒有這個就得等到 18:00 才驗得了「夜裡不該有陽光」。
     const parts = String(q).trim().toLowerCase().split(/[+ ]+/).filter(Boolean);
     const sky   = parts.find(x => WX.SKY_ORDER.includes(x)) || null;
     const cold  = parts.includes('cold');
-    if (!sky && !cold) return real;   // 看不懂的參數一律忽略
-    return { ...real, sky: sky || real.sky, cold, preview: true };
+    const night = parts.includes('night') ? true
+                : parts.includes('day')   ? false
+                : real.night;
+    if (!sky && !cold && night === real.night) return real;   // 看不懂的參數一律忽略
+    return { ...real, sky: sky || real.sky, cold, night, preview: true };
 }
 
 let startedAt = Date.now();
@@ -790,6 +798,12 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   body.yard #hud{display:block}
   #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
   #hud .prev{color:#d29922;font-size:10px}
+  /* 左上角的日／月。跟右上那塊看板分開放：那邊是會長長短短的一行字（天氣＋溫度＋
+     城市＋預覽標），天色塞進去會被擠著跑。小一點、只有一個字，掃一眼就知道現在幾更天。 */
+  #hudL{position:absolute;display:none;top:6px;left:8px;z-index:3;
+        pointer-events:none;font-size:14px;line-height:1;
+        text-shadow:0 1px 3px #000, 0 0 6px #000}
+  body.yard #hudL{display:block}
   #wxsel{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;
          font:inherit;font-size:11px;padding:1px 4px;margin-left:6px}
   /* 黑邊：只蓋上下那 ${PAD_DOTS} dot 的留白，不動中間 —— 這樣戰鬥的非 cut-in 拍
@@ -842,7 +856,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div><div id="hudL">–</div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -861,6 +875,7 @@ ${IS_RELEASE ? '' : `
         <option value="thunder">雷雨</option>
       </select></label>
       <label class="k"><input type="checkbox" id="wxcold"> 寒流</label>
+      <label class="k"><input type="checkbox" id="wxnight"> 夜晚</label>
       <label class="k"><input type="checkbox" id="zonebox"> 走動範圍 <span class="devtag">dev</span></label>
       <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label>`}
     </div>
@@ -1038,7 +1053,7 @@ function setView(v){
 // 雨滴位置用固定種子起始，重整看到同一場雨；但之後**不需要**跨 client 一致
 // （沒有人分得出你我的雨滴有沒有對齊），所以接廣場時這段原封不動就能用。
 // 走路那邊就不一樣了，那個必須逐拍決定性，見 shared/plaza-walk.js。
-const wxState = {sky:'clear', cold:false};
+const wxState = {sky:'clear', cold:false, night:false};
 let wxParts=null, wxLast=0, wxSeed=1;
 function wxRand(){ wxSeed=(Math.imul(wxSeed,1664525)+1013904223)>>>0; return wxSeed/4294967296; }
 
@@ -1144,7 +1159,9 @@ function wxDraw(ts){
   g.clearRect(0,0,w,h);
 
   // 晴：斜射的光柱。用 lighter 疊加，只加亮不遮擋 —— 光線蓋住角色會很怪。
-  if(sky==='clear'){
+  // ⚠️ 夜裡一定要關掉。光柱是**陽光**，天黑了還有幾道斜射的亮帶，看起來不是
+  //    「晚上的晴天」而是「畫面壞了」。晴朗的夜空就該是空的，沒有粒子。
+  if(sky==='clear'&&!wxState.night){
     g.globalCompositeOperation='lighter';
     for(const f of P.shaft){
       f.x+=7*dt; if(f.x>w+h) f.x-=w+h+80;
@@ -1260,7 +1277,9 @@ async function pollYard(){
   // 混進同一份清單會讓人以為「寒流」是某種天空，也組不出陰・寒流那類常見情況。
   const es = document.getElementById('wxsel');
   const ec = document.getElementById('wxcold');
+  const en = document.getElementById('wxnight');
   const parts=[]; if(es&&es.value) parts.push(es.value); if(ec&&ec.checked) parts.push('cold');
+  if(en&&en.checked) parts.push('night');
   const q = parts.join('+');
   const zl = document.getElementById('zonelayout');
   const qs = [];
@@ -1290,6 +1309,10 @@ async function pollYard(){
   document.getElementById('tick').textContent='#'+y.step;
   if(y.weather){
     wxState.sky = y.weather.sky; wxState.cold = !!y.weather.cold;
+    // 日夜跟著伺服器走，不看自己的時鐘 —— 右上的時間是看板（本機時鐘、每秒自己跳），
+    // 天色是場景狀態。兩邊各判各的話，預覽夜晚時會變成「月亮出來了但陽光還在」。
+    wxState.night = !!y.weather.night;
+    document.getElementById('hudL').textContent = wxState.night ? '🌙' : '☀️';
     document.getElementById('hudWx').innerHTML =
       y.weather.icon+' '+y.weather.label+(y.weather.temp?'　'+y.weather.temp:'')
       + (y.weather.city?' <span class="k">'+y.weather.city+'</span>':'')
@@ -1516,7 +1539,7 @@ document.querySelectorAll('#adv .form').forEach(row=>{
     i.addEventListener('keydown',e=>{ if(e.key==='Enter')sendCmd(row.dataset.cmd,collect()); }));
 });
 // release 版沒有這顆下拉（dev 專屬），所以要防呆
-for(const id of ['wxsel','wxcold']){
+for(const id of ['wxsel','wxcold','wxnight']){
   const e=document.getElementById(id);
   if(e) e.addEventListener('change',()=>{ if(view==='yard') poll(); });
 }
@@ -1533,7 +1556,12 @@ document.getElementById('pet').addEventListener('click',ev=>{
 // 拿在手上的那隻**不在伺服器合成的那張圖裡**（見 plaza.js 的 held），改由這裡
 // 跟著游標畫在天氣那層疊加畫布上 —— 那層本來就有 60fps 的 rAF 迴圈，等於免費。
 // 若改成讓伺服器每幀重畫，就得把 /yard 從 4fps 拉到 60fps（15KB x 60），完全不划算。
-const LONGPRESS_MS=200;   // 低於這個時間放開 = 摸摸
+// 低於這個時間放開 = 摸摸，超過就把牠拎起來。
+// 一路從 500 降到 200 再到 120：拎起來這個動作在手裡要「跟手」，等待感一旦被察覺，
+// 讀起來就是介面在卡而不是我在長壓。
+// ⚠️ 120 已經接近下限。有意識地點一下大約是 60–120ms，再往下砍就會開始把
+//    「摸摸」判成「拎起來」—— 那是把一個正常操作弄壞，比反應慢更糟。
+const LONGPRESS_MS=120;
 const MOVE_TOL=1.5;       // dot。按著微微晃動不該被當成想拖曳
 // 拎起／放下的上下位移。沒有它的話拿起來是「瞬間貼到游標」、放開是「瞬間出現在地上」，
 // 讀起來像瞬移而不是被拿起來。

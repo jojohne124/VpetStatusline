@@ -84,12 +84,29 @@ const SKY_LABEL = {
     [SKY.THUNDER]: { label: '雷雨', icon: '⛈' + VS16 },
 };
 
+// ── 日夜 ──────────────────────────────────────────────────────────────────
+// 06:00–18:00 為日。用當地時間，同一時刻每個 client 判定一致 → 無 race。
+//
+// ⚠️ 這套切法跟 agumon-core.js 的 time_of_day 進化條件**必須一致**，改了要一起改。
+//    沒有共用同一份 require 的原因是部署樹的相對路徑對不上：core 裝在
+//    INSTALL_DIR 根目錄（要寫 ./shared/），repo 裡在 src/runtime/（要寫 ../shared/）。
+const DAY_START = 6, DAY_END = 18;
+function isNight(d) {
+    const h = (d || new Date()).getHours();
+    return h < DAY_START || h >= DAY_END;
+}
+
+// 晴天的夜晚不該掛一顆太陽。其餘天空狀態日夜同圖 —— 雨就是雨，不分日夜。
+const NIGHT_CLEAR_ICON = '🌙' + VS16;
+
 /** 給右上角那一行用的文字。寒流是**加註**在天空狀態後面，不是取代它。 */
 function describe(w) {
     const base = SKY_LABEL[w && w.sky] || SKY_LABEL[SKY.CLEAR];
     const cold = !!(w && w.cold);
+    const night = !!(w && w.night);
+    const icon = (night && (!w || w.sky === SKY.CLEAR)) ? NIGHT_CLEAR_ICON : base.icon;
     return {
-        icon:  cold ? '🥶' + VS16 : base.icon,   // 冷的時候氣溫才是主角，圖示讓給它
+        icon:  cold ? '🥶' + VS16 : icon,        // 冷的時候氣溫才是主角，圖示讓給它
         label: cold ? base.label + '・寒流' : base.label,
         temp:  w && w.tempC != null ? Math.round(w.tempC) + '°C' : '',
     };
@@ -105,5 +122,6 @@ function describe(w) {
 
 module.exports = {
     SKY, SKY_ORDER, COLD_C, WMO,
+    DAY_START, DAY_END, isNight,
     classify, describe, SKY_LABEL,
 };

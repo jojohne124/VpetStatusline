@@ -85,7 +85,7 @@ function renderProbe(js) {
     g.window = g; g.globalThis = g;
     vm.createContext(g);
     // 頂層的 let/const 不會變成 context 的屬性 → 補一段尾巴把要用的東西露出來
-    const epilogue = ';globalThis.__p={sky:(s,c)=>{wxState.sky=s;wxState.cold=!!c;wxParts=null;},'
+    const epilogue = ';globalThis.__p={sky:(s,c,n)=>{wxState.sky=s;wxState.cold=!!c;wxState.night=!!n;wxParts=null;},'
                    + 'view:(v)=>{view=v;},'
                    // 拎起／放下的上下位移在 drag 這個模組層變數裡，從外面碰不到 -> 開個把手
                    + 'hold:(d)=>{drag=d;},lift:()=>liftNow(),'
@@ -95,7 +95,7 @@ function renderProbe(js) {
                    // dev 走動範圍：把框真的畫一次，才驗得到幾何（框畫在哪、多大）
                    + 'drawZones:(z,ctx)=>{zoneBoxes=z;showZones=true;drawZones(ctx);},'
                    + 'yardSprite:(s)=>{yardSprite=s;},'
-                   + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH}};';
+                   + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH,LONGPRESS_MS}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
     ok(!!g.__p, '抓不到前端的內部狀態（探針壞了，不是頁面壞了）');
@@ -103,8 +103,8 @@ function renderProbe(js) {
     g.__p.view('yard');
 
     // 每種天氣都要能畫完一整幀而不丟例外
-    const run = (sky, cold, t0, frames = 4) => {
-        g.__p.sky(sky, cold);
+    const run = (sky, cold, t0, frames = 4, night = false) => {
+        g.__p.sky(sky, cold, night);
         calls.length = 0;
         for (let i = 0; i < frames; i++) {
             try { raf(t0 + i * 17); }
@@ -137,6 +137,37 @@ function renderProbe(js) {
     // 閃電：整片 fillRect。時間往後跳一大段，確保排到下一次閃。
     const bolt = run('thunder', false, t + 60000, 6);
     ok((bolt.n.fillRect || 0) > 0, '雷雨沒有閃電');
+
+    // ── 夜裡不該有陽光 ──────────────────────────────────────────────
+    // 晴天的光柱是**陽光**。天黑了還有幾道斜射的亮帶，看起來不是「晚上的晴天」，
+    // 是畫面壞了。這一條是這次改動的主詞，所以連「白天還在畫」一起釘住 ——
+    // 只驗夜裡沒有的話，把光柱整個刪掉也會過。
+    console.log('— 夜裡不該有陽光 —');
+    t += 2000;
+    const clearDay   = run('clear', false, t, 4, false); t += 500;
+    const clearNight = run('clear', false, t, 4, true);  t += 500;
+    ok((clearDay.n.fill || 0) > 0, '白天的晴天沒有畫出光柱（這條顧的是別把功能整個砍掉）');
+    ok((clearNight.n.fill || 0) === 0,
+       `夜裡的晴天還在畫光柱（${clearNight.n.fill} 次 fill）`);
+    ok((clearNight.n.lineTo || 0) === 0, '夜裡的晴天還在畫光柱的邊');
+
+    // 入夜只關掉陽光，其它表演照舊 —— 雨會下到半夜，寒流也不會因為天黑就停。
+    const rainNight = run('rain', false, t, 4, true); t += 500;
+    ok((rainNight.n.lineTo || 0) > 0, '入夜之後雨就不下了');
+    const coldNight = run('clear', true, t, 4, true); t += 500;
+    ok((coldNight.n.fillRect || 0) > 0, '入夜之後寒流的冷風就不吹了');
+    // 閃電的下一次時間是模組層變數，前面那次雷雨已經把它排到未來了 ——
+    // 時間要跳得夠遠才保證排到下一次閃，不然這條會偶爾紅在「時機沒對上」而不是功能壞了。
+    const boltNight = run('thunder', false, t + 600000, 6, true);
+    ok((boltNight.n.fillRect || 0) > 0, '入夜之後就不打雷了');
+
+    // ── 拎起來的判定時間 ────────────────────────────────────────────
+    // 數字本身是手感，不該由測試決定；但有上下界：太長會像介面在卡，
+    // 太短會把「摸摸」（有意識地點一下大約 60–120ms）判成「拎起來」。
+    ok(g.__p.K.LONGPRESS_MS <= 150,
+       `長壓判定 ${g.__p.K.LONGPRESS_MS}ms 太久，拎起來會有等待感`);
+    ok(g.__p.K.LONGPRESS_MS >= 100,
+       `長壓判定 ${g.__p.K.LONGPRESS_MS}ms 太短，點一下摸摸會被判成拎起來`);
 
     // ── 拎起／放下的上下位移 ────────────────────────────────────────
     // 這段只在前端跑（伺服器合成的那張圖裡根本沒有被拿著的那隻），除了這裡沒別的地方測得到。
@@ -330,6 +361,32 @@ setTimeout(async () => {
         ok(y.ok === true, '/yard 回應失敗');
         ok(typeof y.cols === 'number' && typeof y.rows === 'number',
            '/yard 沒有回傳場地尺寸（空營地時畫布會塌成家裡的大小）');
+
+        console.log('— 日夜由伺服器說了算 —');
+        {
+            // 天色跟天氣一樣是場景狀態，不是各自看自己的時鐘 —— 之後長成廣場時，
+            // 同一時刻所有人的天色必須一致。前端只讀這一份。
+            ok(y.weather && typeof y.weather.night === 'boolean',
+               '/yard 沒有回傳 night（前端不知道該不該畫陽光，只能自己猜）');
+            // 沒有 ?w=night 的話，要等到天黑才驗得了「夜裡不該有陽光」。
+            const n = JSON.parse(await get('/yard?w=night'));
+            ok(n.weather.night === true, '?w=night 沒有強制入夜');
+            const d = JSON.parse(await get('/yard?w=day'));
+            ok(d.weather.night === false, '?w=day 沒有強制白天');
+            // night 是獨立旗標，跟天空正交 —— 組合不該互相吃掉
+            const nr = JSON.parse(await get('/yard?w=rain+night'));
+            ok(nr.weather.night === true && nr.weather.sky === 'rain',
+               '雨+夜晚組不起來（night 應該跟天空正交，就像寒流那樣）');
+            const nc = JSON.parse(await get('/yard?w=night+cold'));
+            ok(nc.weather.night === true && nc.weather.cold === true, '夜晚+寒流組不起來');
+            // 夜裡的晴天在看板上也不該掛太陽
+            const ns = JSON.parse(await get('/yard?w=clear+night'));
+            ok(ns.weather.icon.indexOf('🌙') === 0,
+               `夜裡的晴天看板圖示是 ${ns.weather.icon}，不是月亮`);
+            // 看不懂的參數一律忽略，不要連真實天色都被打掉
+            const junk = JSON.parse(await get('/yard?w=banana'));
+            ok(junk.weather.night === y.weather.night, '看不懂的 ?w= 把日夜弄掉了');
+        }
 
         console.log('— 營地分區 —');
         {

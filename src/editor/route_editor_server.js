@@ -111,6 +111,15 @@ function loadIdleSprite(dir, cfg) {
     } catch(e) { return null; }
 }
 
+// 特殊進化（大便獸等）不在 evolvesTo 裡。「可取得」的判定要把它們算進來，
+// 否則玩家明明養得出來的角色會被分到「不可取得」。
+function loadSpecialRules() {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(CHARS_ROOT, 'special-evolutions.json'), 'utf8'));
+        return Array.isArray(j.rules) ? j.rules : [];
+    } catch (e) { return []; }
+}
+
 // ── 建圖：給前端 ───────────────────────────────────────────────────────────
 function buildGraph() {
     const cfgs = loadConfigs();
@@ -159,7 +168,7 @@ function buildGraph() {
             });
         }
     }
-    return { nodes, edges, tagOrder: loadTagOrder() };
+    return { nodes, edges, tagOrder: loadTagOrder(), specialRules: loadSpecialRules() };
 }
 
 // ── 驗證：補建議 pct + 死路 ─────────────────────────────────────────────────
@@ -309,6 +318,11 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'GET' && urlPath === '/') {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(fs.readFileSync(HTML_PATH));
+        } else if (req.method === 'GET' && urlPath === '/evo-rules.js') {
+            // 「可取得」與圖鑑分母用**同一份**可達性判定（shared/evo-rules.js 的 reachableFrom）。
+            // 前端另寫一份 BFS 的話，兩邊遲早會對特殊進化、未實裝 starter 的處理分叉。
+            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+            res.end(fs.readFileSync(path.join(__dirname, '..', 'shared', 'evo-rules.js')));
         } else if (req.method === 'GET' && urlPath === '/graph') {
             json(200, buildGraph());
         } else if (req.method === 'POST' && urlPath === '/validate') {

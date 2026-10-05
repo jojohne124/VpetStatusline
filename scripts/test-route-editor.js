@@ -23,8 +23,12 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + msg); } };
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'src', 'editor', 'route_editor.html'), 'utf8');
-const m = HTML.match(/<script>([\s\S]*?)<\/script>/);
+// 頁面前面還有一小段墊 module 的 script（給 /evo-rules.js 用）→ 取最長的那段才是主程式。
+const blocks = [...HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(x => x[1]);
+const m = blocks.length ? [null, blocks.reduce((a, b) => (b.length > a.length ? b : a))] : null;
 if (!m) { console.log('  ✗ 抓不到頁面 script'); process.exit(1); }
+ok(HTML.includes('<script src="/evo-rules.js"></script>'),
+   '頁面沒載入共用的 evo-rules.js（可取得的判定會退回 fail-open，整片都算可取得）');
 
 // 最小假 DOM：頁面在載入時就會 getElementById 幾個圖層
 const el = () => ({
@@ -47,8 +51,11 @@ const g = {
 };
 g.window = g; g.globalThis = g;
 vm.createContext(g);
+// 跟瀏覽器一樣：先墊 module、跑 evo-rules.js，主程式才拿得到 reachableFrom。
+vm.runInContext('var module = { exports: {} };' +
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'evo-rules.js'), 'utf8'), g);
 const epilogue = ';globalThis.__t={computeLayout:()=>computeLayout(),autoLayout:(s)=>autoLayout(s),'
-               + 'setG:(x)=>{G=x;},get:()=>G,K:{ROW_H,HEAD_H,BAND_GAP,MIN_UN_ROWS,COL_W,STAGE_ORDER}};';
+               + 'setG:(x)=>{G=x;},get:()=>G,obtainableSet:()=>obtainableSet(),K:{ROW_H,HEAD_H,BAND_GAP,MIN_UN_ROWS,MIN_NA_ROWS,COL_W,STAGE_ORDER}};';
 try { vm.runInContext(m[1] + epilogue, g, { timeout: 5000 }); }
 catch (e) { console.log('  ✗ 頁面 script 執行就爆了：' + e.message); process.exit(1); }
 const T = g.__t;
@@ -137,6 +144,74 @@ console.log('— 未實裝多的時候要撐開 —');
     T.autoLayout(true);
     const ys = T.get().nodes.filter(n => !n.implanted).map(n => n.y);
     ok(new Set(ys).size === ys.length, '未實裝的節點疊在同一個 y 上');
+}
+
+console.log('— 實裝再分：可取得／不可取得 —');
+{
+    // 可取得 = 從實裝的 starter 沿進化邊走得到。實裝了卻走不到的（純敵人、線接到一半的）
+    // 以前跟可取得的混在同一區，要拉線時得一隻隻點開看有沒有人連到它。
+    const N = (id, stage, implanted, extra) => ({ ...node(id, stage, implanted, 10), ...extra });
+    const E = (from, to) => ({ from, to });
+    T.setG({
+        nodes: [
+            N('s',  'Child', true, { starter: true }),
+            N('a',  'Adult', true),            // s → a：可取得
+            N('lone', 'Adult', true),          // 實裝了但沒有任何線進來：不可取得
+            N('viaUn', 'Adult', true),         // 只有未實裝的 u 連到它：遊戲裡等於沒有線
+            N('u',  'Child', false),           // 未實裝
+            N('poop', 'Adult', true),          // 只靠特殊進化取得
+            N('ghostStarter', 'Child', false, { starter: true }),  // 未實裝的 starter
+            N('g1', 'Adult', true),            // 只有未實裝 starter 連到它
+        ],
+        // s → u 一定要有：真實情況是「可取得的角色 → 未實裝的 → 實裝的」。
+        // 少了它，u 本身就沒人連到，viaUn 那條斷言不管過濾在不在都會過（驗過，是假綠）。
+        edges: [E('s', 'a'), E('s', 'u'), E('u', 'viaUn'), E('ghostStarter', 'g1')],
+        specialRules: [{ to: 'poop', fromStage: 'Child' }],
+    });
+    const L = T.computeLayout();
+    const col = (st) => L.cols.find(c => c.stage === st);
+    const ids = (arr) => arr.map(n => n.id).sort().join(',');
+    ok(L.reachKnown === true, '有實裝的 starter 卻判成「無法判定」');
+    ok(ids(col('Adult').im) === 'a,poop', '可取得的分錯了：' + ids(col('Adult').im));
+    ok(ids(col('Adult').na) === 'g1,lone,viaUn', '不可取得的分錯了：' + ids(col('Adult').na));
+    ok(ids(col('Child').im) === 's', 'starter 本身應該算可取得');
+    ok(ids(col('Child').un) === 'ghostStarter,u', '未實裝的不該跑進實裝區');
+    // 個別的理由各釘一條 —— 合在一起驗的話，修壞其中一種情況訊息看不出是哪個
+    ok(col('Adult').im.some(n => n.id === 'poop'),
+       '只靠特殊進化取得的角色被判成不可取得（大便獸是玩家養得出來的）');
+    ok(col('Adult').na.some(n => n.id === 'viaUn'),
+       '從未實裝角色連過來的邊被算進去了 —— runtime 會跳過非 roster 目標，那條線不存在');
+    ok(col('Adult').na.some(n => n.id === 'g1'),
+       '未實裝的 starter 被當成起點了 —— 玩家抽不到牠，牠的後代也就到不了');
+
+    // 位置：未實裝 → 不可取得 → 可取得，由上而下，跨欄對齊
+    T.autoLayout(true);
+    const y = (id) => T.get().nodes.find(n => n.id === id).y;
+    ok(y('u') < L.dividerY, '未實裝應該在第一條分隔線上面');
+    ok(y('lone') > L.dividerY && y('lone') < L.divider2Y, '不可取得應該夾在兩條分隔線中間');
+    ok(y('a') > L.divider2Y, '可取得應該在第二條分隔線下面');
+    ok(y('s') === y('a'), '不同欄的可取得起點沒對齊');
+    ok(L.divider2Y - L.dividerY >= 3 * K.ROW_H,
+       `不可取得區的高度沒有撐到最多的那欄（Adult 有 3 隻，區高只有 ${L.divider2Y - L.dividerY}px）`);
+}
+{
+    // 一隻不可取得的都沒有時，區域仍要留一列：兩條分隔線疊在一起就分不出誰是誰了
+    T.setG({ nodes: [node('s', 'Child', true), node('a', 'Adult', true)], edges: [{ from: 's', to: 'a' }] });
+    T.get().nodes[0].starter = true;
+    const L = T.computeLayout();
+    ok(L.cols.every(c => c.na.length === 0), '這張圖不該有不可取得的');
+    // ⚠️ 期望值不能寫成 K.MIN_NA_ROWS * ROW_H —— K 是從被測的頁面讀出來的，
+    //    有人把那個常數改成 0，期望值也跟著變 0，這條就永遠會過。寫死「至少一列」。
+    ok(L.divider2Y - L.dividerY >= K.ROW_H, '不可取得區是空的時候被壓扁了，兩條線疊在一起');
+}
+{
+    // 沒有任何實裝的 starter → 不知道誰可取得 → 全部當可取得（同圖鑑的 fail-open）。
+    // 反過來的話，資料缺一角就讓整個實裝區一起掉進「不可取得」，看起來像全部壞掉。
+    T.setG({ nodes: [node('a', 'Adult', true), node('b', 'Adult', true)], edges: [] });
+    const L = T.computeLayout();
+    ok(L.reachKnown === false, '沒有 starter 時應該標成「無法判定」');
+    ok(L.cols.find(c => c.stage === 'Adult').im.length === 2, '沒有 starter 時應該全部當可取得（fail-open）');
+    ok(T.obtainableSet() === null, '沒有 starter 時 obtainableSet 應該回 null（＝不知道），不是空集合');
 }
 
 console.log('— 算版面與移動節點是分開的 —');

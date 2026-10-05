@@ -119,6 +119,9 @@
     <div style="text-align:right;margin-top:12px"><button onclick="closeTagManager()">關閉</button></div>
   </div>
 </div>
+<!-- 共用的可達性判定（跟圖鑑分母同一份）。它是 CommonJS，先墊一個 module 讓它掛得上去。 -->
+<script>var module = { exports: {} };</script>
+<script src="/evo-rules.js"></script>
 <script>
 // Super-Ultimate = 隱藏第 5 階（目前只有敵方角色，我方進化條件未定）。
 // 必須列在 STAGE_ORDER：否則該階節點不會被 autoLayout 定位，且右側 stage 下拉選單
@@ -135,6 +138,10 @@ const BAND_GAP = 18;        // 未實裝區與分隔線之間的留白
 // 未實裝區至少保留幾列。全部實裝完之後高度不會塌成 0 ——
 // 塌下去會讓整張圖往上位移，剛建立的空間記憶就沒了。
 const MIN_UN_ROWS = 3;
+// 「實裝・不可取得」區至少留一列：就算目前一隻都沒有，兩條分隔線也不會疊在一起看不清楚。
+const MIN_NA_ROWS = 1;
+const EVO_RULES = (typeof module !== 'undefined' && module.exports && module.exports.reachableFrom)
+                ? module.exports : null;
 
 let G = { nodes: [], edges: [] };
 let byId = {};
@@ -207,6 +214,21 @@ function payload() {
 // 所以存過一次檔之後就不會再排 —— 欄標題與分隔線若綁在排版裡，那時就整組消失。
 // computeLayout 是純計算、每次 render 都跑（187 個節點，成本可忽略），
 // applyLayout 才會動到 n.x / n.y。
+// 可取得 = 從（已實裝的）starter 沿進化邊走得到。規則跟圖鑑分母同一份（shared/evo-rules.js），
+// 特殊進化（大便獸）也算在內。
+// 只看實裝的節點與邊：runtime 的 checkEvolution 會跳過非 roster 的目標，
+// 一條指向未實裝角色的邊在遊戲裡等於不存在。
+// 回 null = 不知道（規則沒載到、或沒有任何實裝的 starter）→ 呼叫端當全部可取得，
+// 跟圖鑑同樣 fail-open：資料缺一角不該讓整個實裝區變成「不可取得」。
+function obtainableSet() {
+  if (!EVO_RULES) return null;
+  const im = new Set(G.nodes.filter(n => n.implanted).map(n => n.id));
+  const nodes = G.nodes.filter(n => im.has(n.id)).map(n => ({ id: n.id, stage: n.stage }));
+  const edges = G.edges.filter(e => im.has(e.from) && im.has(e.to));
+  const starters = G.nodes.filter(n => n.starter && im.has(n.id)).map(n => n.id);
+  return EVO_RULES.reachableFrom({ nodes, edges }, starters, G.specialRules || []);
+}
+
 function computeLayout() {
   const cols = {};
   STAGE_ORDER.forEach(s => cols[s] = []);
@@ -221,28 +243,44 @@ function computeLayout() {
     if (s === 'UnStage') continue;
     maxUn = Math.max(maxUn, (cols[s] || []).filter(n => !n.implanted).length);
   }
+  // 實裝再拆成「可取得／不可取得」。順序刻意是 未實裝 → 不可取得 → 可取得：
+  // 小的兩區放上面，一打開就看得到，不用捲過整片可取得區去底下找。
+  // 不可取得的就是「實裝了但沒有線接到它」，正是要拉線的對象，放在未實裝旁邊最順手。
+  const reach = obtainableSet();
+  const obtainable = (n) => !reach || reach.has(n.id);
+  let maxNa = MIN_NA_ROWS;
+  for (const s of STAGE_ORDER) {
+    if (s === 'UnStage') continue;
+    maxNa = Math.max(maxNa, (cols[s] || []).filter(n => n.implanted && !obtainable(n)).length);
+  }
   const unTop = 40 + HEAD_H;
-  const dividerY = unTop + maxUn * ROW_H + BAND_GAP;
-  const out = { cols: [], unTop, dividerY, width: STAGE_ORDER.length * COL_W };
+  const dividerY = unTop + maxUn * ROW_H + BAND_GAP;      // 未實裝 | 不可取得
+  const naTop = dividerY + BAND_GAP;
+  const divider2Y = naTop + maxNa * ROW_H + BAND_GAP;     // 不可取得 | 可取得
+  const imTop = divider2Y + BAND_GAP;
+  const out = { cols: [], unTop, dividerY, naTop, divider2Y, imTop,
+                reachKnown: !!reach, width: STAGE_ORDER.length * COL_W };
   STAGE_ORDER.forEach((s, ci) => {
     const all = (cols[s] || []).sort(byPower);
-    const single = (s === 'UnStage');   // 暫存區不分上下：整欄都是未實裝
+    const single = (s === 'UnStage');   // 暫存區不分區：整欄都是未實裝
     out.cols.push({
       stage: s, x: 40 + ci * COL_W, single,
       un: single ? all : all.filter(n => !n.implanted),
-      im: single ? []  : all.filter(n => n.implanted),
+      na: single ? []  : all.filter(n => n.implanted && !obtainable(n)),
+      im: single ? []  : all.filter(n => n.implanted && obtainable(n)),
     });
   });
   return out;
 }
 
-let layout = { cols: [], unTop: 0, dividerY: 0, width: 0 };
+let layout = { cols: [], unTop: 0, dividerY: 0, naTop: 0, divider2Y: 0, imTop: 0, width: 0 };
 
 function autoLayout(silent) {
   layout = computeLayout();
   for (const c of layout.cols) {
     c.un.forEach((n, ri) => { n.x = c.x; n.y = layout.unTop + ri * ROW_H; });
-    c.im.forEach((n, ri) => { n.x = c.x; n.y = layout.dividerY + BAND_GAP + ri * ROW_H; });
+    c.na.forEach((n, ri) => { n.x = c.x; n.y = layout.naTop + ri * ROW_H; });
+    c.im.forEach((n, ri) => { n.x = c.x; n.y = layout.imTop + ri * ROW_H; });
   }
   if (!silent) { dirty = true; fitView(); render(); }
 }
@@ -265,12 +303,17 @@ function renderChrome() {
   const split = layout.cols.filter(c => !c.single);
   if (split.length) {
     const x1 = split[0].x - 14, x2 = split[split.length-1].x + NODE_W + 14;
-    const ln = mk('line', { x1, y1: layout.dividerY, x2, y2: layout.dividerY,
-                            stroke: '#4a515a', 'stroke-width': 1, 'stroke-dasharray': '6,5' });
-    bgLayer.appendChild(ln);
-    const tag = mk('text', { x: x1 + 4, y: layout.dividerY - 6, fill: '#6f767e', 'font-size': 11 });
-    tag.textContent = '↑ 未實裝　↓ 實裝';
-    bgLayer.appendChild(tag);
+    const line = (y, label, color) => {
+      bgLayer.appendChild(mk('line', { x1, y1: y, x2, y2: y, stroke: color,
+                                       'stroke-width': 1, 'stroke-dasharray': '6,5' }));
+      const tag = mk('text', { x: x1 + 4, y: y - 6, fill: color, 'font-size': 11 });
+      tag.textContent = label;
+      bgLayer.appendChild(tag);
+    };
+    line(layout.dividerY, '↑ 未實裝　↓ 實裝・不可取得（實裝了，但從 starter 進化不到）', '#6f767e');
+    line(layout.divider2Y, layout.reachKnown
+      ? '↑ 不可取得　↓ 實裝・可取得'
+      : '↑ 不可取得　↓ 實裝（沒有 starter，無法判定可不可取得，全部當可取得）', '#6f767e');
   }
   for (const c of layout.cols) {
     const t = mk('text', { x: c.x, y: 40 + 14, fill: STAGE_COLOR[c.stage] || '#888',
@@ -280,7 +323,7 @@ function renderChrome() {
     // 數量寫在標題下面一行 —— 沒有它就看不出「這一階還有幾隻沒實裝」
     const sub = mk('text', { x: c.x, y: 40 + 28, fill: '#7f868e', 'font-size': 11 });
     sub.textContent = c.single ? `${c.un.length} 待設定`
-                              : `實裝 ${c.im.length}　未實裝 ${c.un.length}`;
+                              : `可取得 ${c.im.length}　不可取得 ${c.na.length}　未實裝 ${c.un.length}`;
     bgLayer.appendChild(sub);
   }
 }

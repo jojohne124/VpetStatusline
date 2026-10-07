@@ -469,12 +469,12 @@ statusline / CLI 看的**（顯示「在廣場」、擋指令），不代表持�
 
 ### 使用者：不用設定
 
-廣場伺服器的位址**內建在 release 裡**：`http://KAIHSIANGCHANG:37373`。
+廣場伺服器的位址**內建在 release 裡**：`http://192.168.164.46:37373`（主機 `KAIHSIANGCHANG` 的 IP）。
 
-- 用**電腦名稱**而不是 IP：公司 DHCP 換 IP 的話不用重發 release
+- 用 **IP** 而不是電腦名稱（2026-10-07 改）：內網不一定解析得到電腦名稱；代價是主機 IP 變了要改 `plaza-client.js` 重發 release，所以要請 IT 固定這台的 IP
 - 需要時可用環境變數 `VPET_PLAZA_URL` 覆寫（開發、換主機時用），一般使用者用不到
 
-⚠️ 若公司內網解析不到電腦名稱（某些網段只能用 IP），就改內建 IP 並請 IT 固定。
+⚠️ 已改用 IP。主機 IP 若被 DHCP 換掉，所有人都會連不上 → 請 IT 固定這台的 IP；換了就改 `plaza-client.js` 的 `DEFAULT_URL` 重發 release。
 這要在第一次跨電腦實測時確認。
 
 ### 主機：一次性設定

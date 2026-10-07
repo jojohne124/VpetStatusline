@@ -40,8 +40,11 @@ console.log('— 模擬指標 —');
     const sg = Z.measure(good), sb = Z.measure(bad), sf = Z.measure(flat);
     ok(sg.overlapPct < sf.overlapPct / 3,
        `分區沒有明顯壓低重疊：不分區 ${sf.overlapPct.toFixed(1)}% -> quadFull ${sg.overlapPct.toFixed(1)}%`);
-    ok(sb.overlapPct > sg.overlapPct * 3,
-       `rows 應該明顯比 quadFull 差（${sb.overlapPct.toFixed(1)}% vs ${sg.overlapPct.toFixed(1)}%）`);
+    // 用平均重疊面積比，不用「嚴重重疊率」：模擬改成量營地畫面上的角色（16 細格，
+    // 比走路格子的 16 格小一圈）之後，這兩種切法的嚴重重疊（蓋掉 >= 25% 身體）都是 0%，
+    // 那個指標已經分不出好壞了。平均面積還分得出來（rows 約是 quadFull 的十幾倍）。
+    ok(sb.avgOverlap > sg.avgOverlap * 3,
+       `rows 應該明顯比 quadFull 差（平均重疊 ${sb.avgOverlap.toFixed(1)} vs ${sg.avgOverlap.toFixed(1)} dot²）`);
     ok(sg.coverPct > 99, `quadFull 應該蓋滿場地，得到 ${sg.coverPct.toFixed(0)}%`);
     ok(Z.measure(Z.rectsToZones(Z.builtinToExact(3, 'quad'))).coverPct < 90,
        'quad 有死區，場地利用不該接近 100%（這條若過了代表覆蓋率算錯）');
@@ -184,39 +187,62 @@ console.log('— 前端座標換算 —');
         };
         g.window = g; g.globalThis = g;
         vm.createContext(g);
-        const epilogue = ';globalThis.__p={setST:(s)=>{ST=s;},r2b:(r)=>rectToBody(r),b2r:(b)=>bodyToRect(b)};';
+        const epilogue = ';globalThis.__p={setST:(s)=>{ST=s;},r2b:(r)=>rectToBody(r),b2r:(b)=>bodyToRect(b),'
+                       + 'mv:(r,dx,dy)=>moveRect(r,dx,dy),sz:(r,z)=>sameZone(r,z)};';
         let err = null;
         try { vm.runInContext(m[1] + epilogue, g, { timeout: 5000 }); } catch (e) { err = e; }
         ok(!err, '頁面 script 執行就爆了：' + (err && err.message));
         if (!err && g.__p) {
             const F = W.YARD_FIELD;
+            // 營地畫面的座標：編輯器要跟營地用同一套（plaza.js 那份），從伺服器拿
+            const PL = require(path.join(REPO, 'src', 'daemon', 'plaza.js'));
+            const R = PL.YARD_RENDER;
             // ⚠️ margin 一定要給。少了它 zoneGap() 會是 NaN，而 NaN 一路傳下去
             //    畫出來只是「框沒出現」，不會報錯 —— 假 ST 漏欄位就是這樣騙過測試的。
+            //    render 也一樣：少了它換算整個爆掉（改成畫面座標時踩過，整支測試當掉）。
             g.__p.setST({ field: { minX: F.minX, maxX: F.maxX, minY: F.minY, maxY: F.maxY },
-                          sprite: W.SPRITE, margin: W.ZONE_MARGIN });
-            // 整場（左上角能站遍全場）→ 身體覆蓋整張畫布（可走範圍 + 一個角色）
+                          sprite: W.SPRITE, margin: W.ZONE_MARGIN,
+                          render: { w: R.w, h: R.h, kx: R.kx, ky: R.ky } });
+            // 整場（左上角能站遍全場）→ 身體剛好鋪滿營地畫布（營地就是這樣畫的）
             const full = g.__p.r2b([F.minX, F.maxX, F.minY, F.maxY]);
-            ok(full.x === F.minX && full.y === F.minY, `整場的原點不對：(${full.x},${full.y})`);
-            ok(full.w === F.maxX - F.minX + W.SPRITE && full.h === F.maxY - F.minY + W.SPRITE,
-               `整場的身體範圍應是 ${F.maxX - F.minX + W.SPRITE}x${F.maxY - F.minY + W.SPRITE}，得到 ${full.w}x${full.h}`);
+            ok(full.x === 0 && full.y === 0, `整場的原點不對：(${full.x},${full.y})`);
+            ok(full.w === R.w && full.h === R.h,
+               `整場應該剛好鋪滿營地畫布 ${R.w}x${R.h}，得到 ${full.w}x${full.h}`);
 
-            // **畫面上的框必須等於 runtime 真正算出來的區域**（回報過「實際的可走
-            // 範圍似乎比編輯的小」）。編輯器全程 exact，所以這是純粹的 +16 dot。
+            // **編輯器的框必須等於營地畫面上實際的區域**（回報過「走動範圍編輯器跟畫面
+            // 不符」）。營地畫框用的是 plaza.yardToDraw，這裡逐區比對。
             for (const name of Object.keys(W.YARD_LAYOUTS[3])) {
                 const exact = Z.builtinToExact(3, name);
                 const zones = W.yardZones(3, undefined, undefined, { exact });
                 exact.forEach((r, i) => {
                     const b = g.__p.r2b(r), z = zones[i];
-                    const same = b.x === z.minX && b.y === z.minY
-                              && b.w === z.maxX - z.minX + W.SPRITE
-                              && b.h === z.maxY - z.minY + W.SPRITE;
-                    ok(same, `${name} #${i + 1} 畫面的框與實際區域不符：`
-                        + `框 ${b.w}x${b.h}@(${b.x},${b.y}) vs 實際 `
-                        + `${z.maxX - z.minX + W.SPRITE}x${z.maxY - z.minY + W.SPRITE}@(${z.minX},${z.minY})`);
+                    const lo = PL.yardToDraw(z.minX, z.minY), hi = PL.yardToDraw(z.maxX, z.maxY);
+                    const same = b.x === lo.x && b.y === lo.y
+                              && b.w === hi.x + W.SPRITE - lo.x && b.h === hi.y + W.SPRITE - lo.y;
+                    ok(same, `${name} #${i + 1} 編輯器的框與營地畫面不符：`
+                        + `框 ${b.w}x${b.h}@(${b.x},${b.y}) vs 營地 `
+                        + `${hi.x + W.SPRITE - lo.x}x${hi.y + W.SPRITE - lo.y}@(${lo.x},${lo.y})`);
                 });
             }
 
-            // 來回換算要**完全**對得回去（exact 是純加減，沒有分支，不該有誤差）
+            // 區域清單旁的「框與實際不符」：資料正確時一個都不能亮。換成畫面座標時漏改，
+            // 拿細格的框去比走路格子，每一區都誤報過。
+            {
+                let falseAlarm = 0, checked = 0;
+                for (const n of Object.keys(W.YARD_LAYOUTS).map(Number)) {
+                    for (const name of Object.keys(W.YARD_LAYOUTS[n])) {
+                        const exact = Z.builtinToExact(n, name);
+                        const zones = W.yardZones(n, undefined, undefined, { exact });
+                        exact.forEach((r, i) => { checked++; if (!g.__p.sz(r, zones[i])) falseAlarm++; });
+                    }
+                }
+                ok(checked > 5, '檢查得太少');
+                ok(falseAlarm === 0, `資料正確卻標了 ${falseAlarm} 次「框與實際不符」`);
+                // 真的不一樣時要抓得到（不然這個檢查等於沒有）
+                ok(!g.__p.sz([0, 14, 0, 8], { minX: 0, maxX: 13, minY: 0, maxY: 8 }), '範圍真的不同卻沒標出來');
+            }
+
+            // 來回換算要**完全**對得回去（倍率都大於 1，每個走路格子對到不同的畫面 dot）
             for (const r of Z.builtinToExact(3, 'quadFull')) {
                 const back = g.__p.b2r(g.__p.r2b(r));
                 ok(JSON.stringify(back) === JSON.stringify(r),
@@ -224,21 +250,26 @@ console.log('— 前端座標換算 —');
             }
 
             // **平移不可以改變尺寸** —— 這是「移動區到邊緣會變動區塊大小」那個 bug。
-            // 一路平移到貼齊四個邊，每一步的寬高都要跟原本一樣。
+            // 存檔的矩形（走路格子）寬高一格都不能變。直接測頁面的 moveRect，
+            // 不在這裡另寫一份夾法（另寫的那份對了，不代表頁面的對）。
+            // 位移用小數、各種相位都掃 —— 畫面與走路格子的倍率不是整數，
+            // 「移動畫面上的框再換回去」只在某些位置才會差 1 格，掃少了抓不到。
             {
                 const r0 = [10, 19, 6, 14];
-                const b0 = g.__p.r2b(r0);
-                let drifted = 0;
-                for (const [dx, dy] of [[-99, 0], [99, 0], [0, -99], [0, 99], [-99, -99], [99, 99]]) {
-                    // 模擬前端拖曳時的夾法：先夾位置、不動尺寸
-                    const maxW = F.maxX - F.minX + W.SPRITE, maxH = F.maxY - F.minY + W.SPRITE;
-                    const b = { ...b0 };
-                    b.x = Math.max(0, Math.min(maxW - b.w, b.x + dx));
-                    b.y = Math.max(0, Math.min(maxH - b.h, b.y + dy));
-                    const back = g.__p.r2b(g.__p.b2r(b));
-                    if (back.w !== b0.w || back.h !== b0.h) drifted++;
+                const w0 = r0[1] - r0[0], h0 = r0[3] - r0[2];
+                let drifted = 0, outside = 0, tried = 0;
+                for (let dx = -60; dx <= 60; dx += 0.7) for (const dy of [-60, -7.3, -1.2, 0, 2.6, 9.9, 60]) {
+                    const r = g.__p.mv(r0, dx, dy); tried++;
+                    if (r[1] - r[0] !== w0 || r[3] - r[2] !== h0) drifted++;
+                    if (r[0] < F.minX || r[1] > F.maxX || r[2] < F.minY || r[3] > F.maxY) outside++;
                 }
-                ok(drifted === 0, `平移之後尺寸變了 ${drifted} 次（原本 ${b0.w}x${b0.h}）`);
+                ok(tried > 500, '平移掃得太少');
+                ok(drifted === 0, `平移之後尺寸變了 ${drifted} 次（原本 ${w0}x${h0} 走路格）`);
+                ok(outside === 0, `平移超出場地 ${outside} 次`);
+                // 拖到最邊要真的貼齊（夾住之後還是要能貼邊，不是停在半路）
+                const left = g.__p.mv(r0, -999, -999), right = g.__p.mv(r0, 999, 999);
+                ok(left[0] === F.minX && left[2] === F.minY, '拖到左上角沒有貼齊：' + JSON.stringify(left));
+                ok(right[1] === F.maxX && right[3] === F.maxY, '拖到右下角沒有貼齊：' + JSON.stringify(right));
             }
         } else if (!err) { ok(false, '抓不到前端的換算函式'); }
     }

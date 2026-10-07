@@ -37,6 +37,12 @@ const ASSETS_FILE = path.join(INSTALL_DIR, 'assets', 'yard-layouts.json');
 const HTML_PATH   = path.join(__dirname, 'zone_editor.html');
 
 const F = W.YARD_FIELD, SPR = W.SPRITE;
+// 營地畫面的座標（細格）。走路照舊在 YARD_FIELD 上算，畫的時候換到一張更細、
+// 鋪滿畫布的格子，角色在那裡是 16 個細格（比走路格子的 16 格小一圈）。
+// 編輯器的預覽與模擬都要用**這一套**，不然框和數字都跟營地實際看到的對不上 ——
+// 回報過「走動範圍編輯器跟畫面不符」。換算只有一份，在 plaza.js（營地合成用的那份）。
+const PLAZA = require('../daemon/plaza.js');
+const R = PLAZA.YARD_RENDER, toDraw = PLAZA.yardToDraw;
 
 // ── 資料 ─────────────────────────────────────────────────────────────
 function loadOverride() {
@@ -50,7 +56,9 @@ function loadOverride() {
 function buildState() {
     const over = loadOverride();
     const out = { field: { w: F.w, h: F.h, minX: F.minX, maxX: F.maxX, minY: F.minY, maxY: F.maxY },
-                  sprite: SPR, margin: W.ZONE_MARGIN, counts: {} };
+                  sprite: SPR, margin: W.ZONE_MARGIN, counts: {},
+                  // 畫面座標：前端用它畫、用它拖；存回去之前換回走路格子
+                  render: { w: R.w, h: R.h, kx: R.kx, ky: R.ky } };
     for (const n of Object.keys(W.YARD_LAYOUTS).map(Number)) {
         const builtin = W.YARD_LAYOUTS[n] || {};
         const custom  = over.layouts[n] || {};
@@ -81,6 +89,8 @@ function overlapArea(a, b) {
     return (dx > 0 && dy > 0) ? dx * dy : 0;
 }
 
+// 位置一律先換成畫面座標（細格）再量：重疊、覆蓋率講的都是「營地畫面上看到的」，
+// 角色在那裡是 16 細格。用走路格子量的話角色等於大了一圈，重疊率會高估。
 function measure(zones, trials = 12, steps = 1500) {
     const n = zones.length;
     let bad = 0, tot = 0, area = 0, pairs = 0, real = 0, seen = 0, stay = 0, shortest = Infinity;
@@ -92,10 +102,12 @@ function measure(zones, trials = 12, steps = 1500) {
         for (let s = 0; s < steps; s++) {
             const p = [];
             for (let i = 0; i < n; i++) {
-                const q = W.posAt(occ[i], s, cache[i], zones[i]); cache[i] = q.cache; p.push(q); seen++;
+                const q = W.posAt(occ[i], s, cache[i], zones[i]); cache[i] = q.cache; seen++;
+                const d = toDraw(q.x, q.y);
+                p.push(d);
                 heat[i].set(q.x + ',' + q.y, (heat[i].get(q.x + ',' + q.y) || 0) + 1);
-                for (let bx = q.x; bx < q.x + SPR; bx++)
-                    for (let by = q.y; by < q.y + SPR; by++) cov.add(bx + ',' + by);
+                for (let bx = d.x; bx < d.x + SPR; bx++)
+                    for (let by = d.y; by < d.y + SPR; by++) cov.add(bx + ',' + by);
                 if (q.x <= F.minX || q.x >= F.maxX || q.y <= F.minY || q.y >= F.maxY) {
                     real++; if (!q.moving) stay++;
                 }
@@ -124,7 +136,7 @@ function measure(zones, trials = 12, steps = 1500) {
         const sum = [...heat[i].values()].reduce((a, b) => a + b, 0);
         if (sum) hot = Math.max(hot, Math.max(...heat[i].values()) / sum * cells);
     });
-    const all = (F.maxX - F.minX + SPR) * (F.maxY - F.minY + SPR);
+    const all = R.w * R.h;   // 營地畫布（細格）
     return {
         overlapPct: 100 * bad / tot,          // 嚴重重疊（一對蓋掉 >= 25% 身體）的拍數比例
         avgOverlap: area / pairs,

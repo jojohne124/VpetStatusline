@@ -155,23 +155,29 @@ const NPCS = [
 // 資料，不動。只有「畫」換到一張更細的格子：場地實際大小不變（約 416x320 px），
 // 前端用 6px 一格而不是 8px 來畫，角色的 16 dot 就小一號（128px → 96px）。
 //
-// 角色在自己原本的落腳處（16 個粗格 = 21.3 個細格）裡**水平置中、腳貼底**，
-// 看起來就是「站在同一個位置，人變小了」。不這樣對齊的話，角色會整群往左上偏：
-// 可走範圍是用粗格的 16 扣出來的，換到細格只用掉 16，右邊和下面會空出一條。
+// 走路格子的範圍**線性鋪滿整張畫布**：最左上（0,0）對到畫布左上角，最右下
+// （maxX,maxY）對到「畫布右下角減一隻角色」。上下左右都碰得到邊，四個區一樣大。
+//
+// ⚠️ 第一版是「放大 4/3 倍、角色在原本的落腳處裡置中、腳貼底」。粗格的落腳處
+//    （16 粗格 = 21.3 細格）比 16 細格的角色大一圈，多出來的全塞在**上面**好讓腳貼地，
+//    結果畫布最上面 5 格（約 30px）變成誰都到不了的死區：下排兩隻走得到畫布底，
+//    上排兩隻永遠碰不到畫布頂，拎起來放到上緣也被拉回來 —— 回報過。
+//    線性鋪滿就沒有哪一邊要吃掉多出來的空間。代價是 x、y 的倍率略有不同
+//    （約 1.47 與 1.58），角色每走一步的距離不完全一樣，肉眼看不出來。
 //
 // 前端完全活在「細格」裡（/yard 的 cols/rows、pets 的 x/y、zones），
 // 換算只發生在伺服器的邊界上：yardToDraw（走路 → 畫）與 yardFromDraw（放下的落點 → 走路）。
+// 兩個倍率都大於 1，所以每個走路格子對到不同的細格，換過去再換回來一定是同一格。
 const YARD_RENDER = (() => {
     const s = 8 / 6;
     const F = W.YARD_FIELD, S = W.SPRITE;
-    const foot = S * s - S;
-    return { s, w: Math.round(F.w * s), h: 2 * Math.round(F.h * s / 2),
-             offX: Math.round(foot / 2), offY: Math.round(foot) };
+    const w = Math.round(F.w * s), h = 2 * Math.round(F.h * s / 2);
+    return { s, w, h, kx: (w - S) / F.maxX, ky: (h - S) / F.maxY };
 })();
-const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.s) + YARD_RENDER.offX,
-                                y: Math.round(y * YARD_RENDER.s) + YARD_RENDER.offY });
-const yardFromDraw = (x, y) => ({ x: Math.round((x - YARD_RENDER.offX) / YARD_RENDER.s),
-                                  y: Math.round((y - YARD_RENDER.offY) / YARD_RENDER.s) });
+const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.kx),
+                                y: Math.round(y * YARD_RENDER.ky) });
+const yardFromDraw = (x, y) => ({ x: Math.round(x / YARD_RENDER.kx),
+                                  y: Math.round(y / YARD_RENDER.ky) });
 
 // opts.render：{ w, h, toDraw(x,y) } —— 畫在另一張格子上（營地用）。沒給就跟走路同一張（廣場）。
 function composePlaza(core, occupants, step, opts = {}) {

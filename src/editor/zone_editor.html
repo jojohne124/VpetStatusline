@@ -104,7 +104,7 @@ let ST = null;        // /state
 let n = 3;            // 目前編幾隻
 let rects = [];       // [[minX,maxX,minY,maxY] ...]（dot 絕對座標，角色左上角的可走範圍）
 let curName = '';
-let SCALE = 12;       // dot -> px
+let SCALE = 9;        // 畫面 dot（細格）-> px。細格是 69x54，9px 約等於原本 52x40 x 12px 的大小
 let drag = null;
 let measureTimer = null;
 
@@ -112,29 +112,56 @@ const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
 
 // ── 座標換算 ─────────────────────────────────────────────────────────
-// rects 是 dot 絕對座標 [minX,maxX,minY,maxY]（角色**左上角**能站的範圍），
-// 畫面上編的是**身體會蓋到的範圍**（+ 一個角色的寬高）。兩者只差那 16 dot，
-// 所以換算是純粹的加減、沒有分支 —— **可逆**。
+// rects 存的是**走路格子**的絕對座標 [minX,maxX,minY,maxY]（角色左上角能站的範圍），
+// 存檔格式不變。但畫、拖都在**營地畫面的座標**（細格）上：營地把走路範圍線性鋪滿
+// 畫布，角色畫成 16 個細格（比走路格子的 16 格小一圈）。用走路格子畫的話，
+// 框會比營地實際看到的大一圈、位置也對不上 —— 回報過。換算倍率 kx/ky 來自伺服器
+// （plaza.js 營地合成用的那一份），這裡不另外算。
+// 畫面上編的是**身體會蓋到的範圍**（左上角範圍 + 一隻角色）。
 //
 // ⚠️ 這裡刻意不用內建表那套「比例 + 接縫讓開」。那個換算在場地邊界有分支
 //    （貼邊的邊不讓、內側的邊要讓 gap），把一塊區域平移到貼邊時其中一條邊會
 //    跨過分支，尺寸就跟著變（回報：「移動區到邊緣會變動區塊大小」）。
 //    直接操作的工具不能有這種行為，所以編輯器全程用絕對座標，存下去也是。
 function rectToBody(r) {
-  const S = ST.sprite;
-  return { x: r[0], y: r[2], w: r[1] - r[0] + S, h: r[3] - r[2] + S };
+  const S = ST.sprite, R = ST.render;
+  const x = Math.round(r[0] * R.kx), y = Math.round(r[2] * R.ky);
+  return { x, y, w: Math.round(r[1] * R.kx) + S - x, h: Math.round(r[3] * R.ky) + S - y };
 }
 function bodyToRect(b) {
-  const S = ST.sprite;
-  return [b.x, b.x + Math.max(0, b.w - S), b.y, b.y + Math.max(0, b.h - S)];
+  const S = ST.sprite, R = ST.render, F = ST.field;
+  const cx = (v) => Math.max(F.minX, Math.min(F.maxX, v)), cy = (v) => Math.max(F.minY, Math.min(F.maxY, v));
+  const minX = cx(Math.round(b.x / R.kx)), minY = cy(Math.round(b.y / R.ky));
+  return [minX, Math.max(minX, cx(Math.round((b.x + b.w - S) / R.kx))),
+          minY, Math.max(minY, cy(Math.round((b.y + b.h - S) / R.ky)))];
+}
+
+// 平移：直接把存檔的那個矩形（走路格子）整格移動，尺寸一格都不動。
+// ⚠️ 不能「移動畫面上的框、再換回走路格子」：畫面與走路格子的倍率不是整數，換回去
+//    會四捨五入，同一個框移到不同位置，寬高可能差 1 格 —— 正是以前「移動區到邊緣會
+//    變動區塊大小」那個 bug。dx/dy 是畫面 dot（細格），可以有小數。
+function moveRect(r, dx, dy) {
+  const R = ST.render, F = ST.field;
+  const w = r[1] - r[0], h = r[3] - r[2];
+  const x0 = Math.max(F.minX, Math.min(F.maxX - w, r[0] + Math.round(dx / R.kx)));
+  const y0 = Math.max(F.minY, Math.min(F.maxY - h, r[2] + Math.round(dy / R.ky)));
+  return [x0, x0 + w, y0, y0 + h];
+}
+
+// 編輯器裡的範圍 == 伺服器實際算出來的區域？對不上代表換算又漂了，直接標紅講出來，
+// 不要讓它變成「畫的跟跑的不一樣」那種只能靠肉眼發現的錯。
+// ⚠️ 兩邊都用**走路格子**比。畫面上的框是細格（營地畫面的座標），拿它去跟伺服器的
+//    走路格子比，單位不同、永遠對不上 —— 換成畫面座標時漏改，每一區都誤報過「框與實際不符」。
+function sameZone(r, z) {
+  return !!r && !!z && r[0] === z.minX && r[1] === z.maxX && r[2] === z.minY && r[3] === z.maxY;
 }
 
 // ── 畫 ───────────────────────────────────────────────────────────────
 let lastZones = null;
 function draw() {
   if (!ST) return;
-  const F = ST.field, S = ST.sprite;
-  const W = (F.maxX - F.minX + S), H = (F.maxY - F.minY + S);
+  const S = ST.sprite, R = ST.render;
+  const W = R.w, H = R.h;   // 營地畫布（細格）
   cv.width = W * SCALE; cv.height = H * SCALE;
   ctx.clearRect(0, 0, cv.width, cv.height);
   // 場地
@@ -157,7 +184,8 @@ function draw() {
     // 定位點（伺服器算的實際 zone 中心；放下超出範圍時走回這裡）
     if (lastZones && lastZones[i]) {
       const z = lastZones[i];
-      const ax = ((z.minX + z.maxX) / 2 + S / 2) * SCALE, ay = ((z.minY + z.maxY) / 2 + S / 2) * SCALE;
+      const ax = (Math.round((z.minX + z.maxX) / 2 * R.kx) + S / 2) * SCALE,
+            ay = (Math.round((z.minY + z.maxY) / 2 * R.ky) + S / 2) * SCALE;
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(ax, ay, 3, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay);
@@ -194,14 +222,18 @@ cv.addEventListener('mousemove', ev => {
       : (h.edge.l || h.edge.r) ? 'ew-resize' : 'ns-resize';
     return;
   }
-  const F = ST.field, S = ST.sprite;
-  const maxW = F.maxX - F.minX + S, maxH = F.maxY - F.minY + S;
+  const S = ST.sprite;
+  const maxW = ST.render.w, maxH = ST.render.h;   // 營地畫布（細格）
+  // 移動與縮放分兩條路：移動交給 moveRect（矩形整格平移、尺寸不動），
+  // 縮放才在畫面上改框的邊。兩件事混在一起就會出現「拖到邊緣結果變小」。
+  if (!drag.edge) {
+    rects[drag.i] = moveRect(drag.startRect, (mx - drag.mx) / SCALE, (my - drag.my) / SCALE);
+    draw(); scheduleMeasure();
+    return;
+  }
   const dx = Math.round((mx - drag.mx) / SCALE), dy = Math.round((my - drag.my) / SCALE);
-  // 移動時**先夾位置、不動尺寸**；縮放時才改尺寸。兩件事混在一起就會出現
-  // 「拖到邊緣結果變小」—— 位置被夾住、寬高卻繼續被減。
   const b = { ...drag.start };
-  if (!drag.edge) { b.x += dx; b.y += dy; }
-  else {
+  {
     if (drag.edge.l) { b.x += dx; b.w -= dx; }
     if (drag.edge.r) { b.w += dx; }
     if (drag.edge.t) { b.y += dy; b.h -= dy; }
@@ -218,7 +250,7 @@ cv.addEventListener('mousedown', ev => {
   const mx = ev.clientX - r.left, my = ev.clientY - r.top;
   const h = hit(mx, my);
   if (!h) return;
-  drag = { i: h.i, edge: h.edge, mx, my, start: rectToBody(rects[h.i]) };
+  drag = { i: h.i, edge: h.edge, mx, my, start: rectToBody(rects[h.i]), startRect: rects[h.i].slice() };
   ev.preventDefault();
 });
 window.addEventListener('mouseup', () => { drag = null; });
@@ -245,11 +277,7 @@ async function runMeasure() {
     ? '<span class="warn">⚠ ' + r.warn.join('；') + '</span>'
     : (s.stayOnEdge ? '<span class="warn">⚠ 有 ' + s.stayOnEdge + ' 拍站在場地邊發呆</span>' : '');
   $('zones').innerHTML = r.zones.map((z, i) => {
-    const b = rectToBody(rects[i]);
-    // 畫面上的框就是伺服器算出來的 zone —— 對不上代表換算又漂了，直接標紅講出來，
-    // 不要讓它變成「畫的跟跑的不一樣」那種只能靠肉眼發現的錯。
-    const same = b.x === z.minX && b.y === z.minY
-              && b.w === z.maxX - z.minX + ST.sprite && b.h === z.maxY - z.minY + ST.sprite;
+    const same = sameZone(rects[i], z);
     return '<div><span class="sw" style="background:' + COLORS[i % COLORS.length] + '"></span>#' + (i + 1) + '　'
       + (z.maxX - z.minX + 1) + '×' + (z.maxY - z.minY + 1) + ' @ (' + z.minX + ',' + z.minY + ')'
       + (same ? '' : ' <span class="bad">框與實際不符</span>') + '</div>';
@@ -277,7 +305,16 @@ function loadLayout(name) {
   draw(); runMeasure();
 }
 async function reload(keepN) {
-  ST = await (await fetch('/state')).json();
+  const st = await (await fetch('/state')).json();
+  // 頁面每次都從磁碟讀最新的，伺服器卻可能是更新前就開著的那一個 —— 舊伺服器沒有
+  // render（營地畫面的座標），新頁面拿它算框會直接出錯，畫面一片空白，什麼提示都沒有
+  // （回報過「編輯器內是空的」）。講清楚要怎麼做，不要讓它看起來像壞了。
+  if (!st.render) {
+    $('msg').innerHTML = '<span class="bad">編輯器的伺服器是更新前開的舊版，跟這個頁面對不上。'
+      + '請關掉它（工作列的 node / 或 zone-editor 那個視窗）再重新打開編輯器。</span>';
+    return;
+  }
+  ST = st;
   const ns = Object.keys(ST.counts).map(Number).sort((a, b) => a - b);
   $('n').innerHTML = ns.map(v => '<option value="' + v + '">' + v + ' 隻</option>').join('');
   if (keepN && ns.includes(keepN)) n = keepN; else n = ns.includes(3) ? 3 : ns[0];

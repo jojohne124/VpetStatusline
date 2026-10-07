@@ -131,6 +131,38 @@ console.log('— dev 資產不可以混進 release —');
        'scripts/ 只該留 install / uninstall，出現了別的：' + all.filter(f => f.startsWith('scripts/')).join(', '));
 }
 
+console.log('— 根目錄乾淨、預設安裝是純 daemon —');
+{
+    // 一般使用者打開資料夾只該看到三件事：安裝、打開桌寵、解除安裝。
+    const rootFiles = fs.readdirSync(OUT, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name);
+    const allowed = /^(README\.md|RELEASE|package\.json|(install|uninstall)\.(bat|command|sh)|vpet-standalone\.(bat|command|sh|vbs))$/;
+    const extra = rootFiles.filter(f => !allowed.test(f));
+    ok(extra.length === 0, 'release 根目錄多了這些檔（不在「安裝／打開／解除安裝」裡）：' + extra.join(', '));
+
+    // install.* 一定是純 daemon：不碰使用者的 statusline 是預設安裝的承諾
+    for (const f of ['install.bat', 'install.command', 'install.sh']) {
+        ok(has(f), 'release 少了 ' + f);
+        if (has(f)) ok(/--daemon-only/.test(fs.readFileSync(path.join(OUT, f), 'utf8')),
+                       f + ' 不是純 daemon 安裝（會接管使用者的 statusline）');
+    }
+    for (const f of ['install-daemon-only.bat', 'album.bat', 'bg-editor.bat'])
+        ok(!has(f), f + ' 又出現在 release 根目錄了（已併入 install.* ／網頁按鈕）');
+
+    // 指南裡叫人雙擊的檔，release 裡都要真的有。.app 是 mac 安裝時才編出來的，不在樹裡。
+    const readme = has('README.md') ? fs.readFileSync(path.join(OUT, 'README.md'), 'utf8') : '';
+    ok(readme.length > 1000, 'release 的 README.md 不見了或是空的');
+    const named = [...new Set([...readme.matchAll(/`(?:\.\/)?([\w.-]+\.(?:bat|command|sh|vbs))`/g)].map(m => m[1]))];
+    ok(named.length >= 6, `README 只提到 ${named.length} 個啟動檔（掃描壞了會假綠）`);
+    const ghost = named.filter(f => !has(f) && !has('tools/agumon-doctor/' + f));
+    ok(ghost.length === 0, 'README 叫人雙擊的這些檔 release 裡沒有：' + ghost.join(', '));
+    ok(!/install-daemon-only|album\.bat|bg-editor/.test(readme), 'README 還提到已經不出貨的啟動檔');
+
+    // .sh / .command 要是 LF（CRLF 會讓 shebang 在 mac / linux 壞掉）
+    const crlf = rootFiles.filter(f => /\.(sh|command)$/.test(f))
+                          .filter(f => fs.readFileSync(path.join(OUT, f), 'utf8').includes('\r\n'));
+    ok(crlf.length === 0, '這些 shell 啟動檔是 CRLF：' + crlf.join(', '));
+}
+
 try { fs.rmSync(OUT, { recursive: true, force: true }); } catch (_) {}
 
 console.log(`\n結果：${pass} passed, ${fail} failed`);

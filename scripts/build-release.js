@@ -6,7 +6,11 @@
  *   node scripts/build-release.js            # 產到 dist/release
  *   node scripts/build-release.js <out-dir>  # 產到指定目錄
  *
- * 產物只含執行 vpet statusline 所需：runtime js、daemon js、src/shared 共用模組、
+ * 預設的安裝是**純 daemon**（獨立視窗，不碰使用者的 statusline）：release 根目錄的
+ * install.* 就是 main 的 install-daemon-only.*（打包時改名）。接管 statusline 的安裝
+ * 不放啟動檔，GUIDE 的附錄寫成一行指令（node scripts/install.js）。
+ *
+ * 產物只含執行 vpet 所需：runtime js、daemon js、src/shared 共用模組、
  * 部署用角色 json 與 characters/ 的資料 json、shared 美術 json、install/uninstall、
  * bin 薄殼、package.json、tools/agumon-doctor 自救包，並放一個
  * RELEASE 標記檔（install 後 statusline-cheat 會據此停用開發／作弊指令）。
@@ -31,8 +35,9 @@ const isShell = f => SHELL_SHIMS.has(path.basename(f)) || /\.(sh|command)$/.test
 let files = 0, chars = 0, skippedPng = 0, savedBytes = 0;
 
 function rmrf(p) { if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true }); }
-function copyRel(rel) {
-    const src = path.join(REPO, rel), dst = path.join(OUT, rel);
+// asRel：出貨時換個名字（release 根目錄的 install.* 來自 main 的 install-daemon-only.*）
+function copyRel(rel, asRel) {
+    const src = path.join(REPO, rel), dst = path.join(OUT, asRel || rel);
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     if (isShell(src)) {
         // shell 薄殼強制 LF，避免 CRLF 讓 shebang 在 unix/mac 壞掉
@@ -88,19 +93,23 @@ for (const sub of ['album', 'bgedit']) {
 for (const f of ['install.js', 'uninstall.js'])
     if (fs.existsSync(path.join(REPO, 'scripts', f))) copyRel(path.join('scripts', f));
 
-// 根目錄雙擊啟動器（免打指令）：安裝 + 獨立介面
+// 根目錄雙擊啟動器（免打指令）。刻意只放三件事：安裝、打開桌寵、解除安裝 ——
+// 每件事三個平台各一份（.bat／.command／.sh），再多根目錄就是一整排看不出先按哪個。
 //   .vbs = Windows 免小黑窗（收進工作列 tray），.bat = 保留 console 版（看得到錯誤訊息）
 //   .command/.sh 由 isShell() 強制 LF
-for (const f of ['install.bat', 'install.command',
-                 'vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
+//
+// 安裝：預設是純 daemon（不接管 statusLine）。來源是 main 的 install-daemon-only.*，
+//   出貨時改名成 install.* —— 一般使用者只該看到一個「安裝」。那幾支只靠自己所在的
+//   資料夾找路徑（cd "%~dp0" / dirname "$0"），跟自己叫什麼名字無關，改名安全。
+// 不出貨：main 的 install.*（接管 statusline，GUIDE 附錄寫成一行指令）、
+//   album.* / bg-editor.*（網頁上已經有按鈕，也有 vpet album / vpet bg 指令）。
+for (const [from, to] of [['install-daemon-only.bat', 'install.bat'],
+                          ['install-daemon-only.command', 'install.command'],
+                          ['install-daemon-only.sh', 'install.sh']])
+    if (fs.existsSync(path.join(REPO, from))) copyRel(from, to);
+for (const f of ['vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.vbs',
                  'vpet-standalone.command',
-                 'album.bat', 'album.sh', 'album.command',
-                 // 底圖編輯器：玩家功能（改的是使用者自己的 bg.png），要出貨
-                 'bg-editor.bat', 'bg-editor.sh', 'bg-editor.command',
-                 // 只裝 daemon（不接管 statusLine）+ 解除安裝，兩者都要出貨：
-                 // 前者是「想用自己 statusline」的人的唯一入口，後者沒有的話
-                 // 非開發者只能手動編 settings.json。
-                 'install-daemon-only.bat', 'install-daemon-only.sh', 'install-daemon-only.command',
+                 // 解除安裝要出貨：沒有的話非開發者只能手動編 settings.json
                  'uninstall.bat', 'uninstall.sh', 'uninstall.command'])
     if (fs.existsSync(path.join(REPO, f))) copyRel(f);
 
@@ -149,7 +158,12 @@ fs.writeFileSync(path.join(OUT, 'RELEASE'), '1\n');
 
 // 新手指南當 README（clone release 就看到安裝指引）
 const guide = path.join(REPO, 'GUIDE.md');
-if (fs.existsSync(guide)) { fs.copyFileSync(guide, path.join(OUT, 'README.md')); files++; }
+// HTML 註解不出貨：那是寫給開發者的備註（例如 release 的 install.* 對應 main 的哪個檔），
+// 畫面上看不到，但會留在使用者的 README.md 原始檔裡。
+if (fs.existsSync(guide)) {
+    const text = fs.readFileSync(guide, 'utf8').replace(/<!--[\s\S]*?-->\s*/g, '');
+    fs.writeFileSync(path.join(OUT, 'README.md'), text); files++;
+}
 else console.warn('  [warn] 找不到 GUIDE.md，release 少了 README');
 
 const mb = (savedBytes / 1048576).toFixed(1);

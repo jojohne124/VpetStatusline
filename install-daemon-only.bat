@@ -30,6 +30,6 @@ set "RC=%errorlevel%"
 
 echo.
 echo [vpet-install] done ^(exit %RC%^). See the log above for what happened to statusLine.
-echo Run vpet-standalone.bat to open the pet window.
+echo Double-click vpet-standalone.vbs to open the pet window (no console window).
 echo Press any key to close.
 pause >nul

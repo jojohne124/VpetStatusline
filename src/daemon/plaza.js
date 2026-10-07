@@ -155,23 +155,44 @@ const NPCS = [
 // 資料，不動。只有「畫」換到一張更細的格子：場地實際大小不變（約 416x320 px），
 // 前端用 6px 一格而不是 8px 來畫，角色的 16 dot 就小一號（128px → 96px）。
 //
-// 角色在自己原本的落腳處（16 個粗格 = 21.3 個細格）裡**水平置中、腳貼底**，
-// 看起來就是「站在同一個位置，人變小了」。不這樣對齊的話，角色會整群往左上偏：
-// 可走範圍是用粗格的 16 扣出來的，換到細格只用掉 16，右邊和下面會空出一條。
+// 走路格子的範圍**線性鋪滿整張畫布**：最左上（0,0）對到畫布左上角，最右下
+// （maxX,maxY）對到「畫布右下角減一隻角色」。上下左右都碰得到邊，四個區一樣大。
+//
+// ⚠️ 第一版是「放大 4/3 倍、角色在原本的落腳處裡置中、腳貼底」。粗格的落腳處
+//    （16 粗格 = 21.3 細格）比 16 細格的角色大一圈，多出來的全塞在**上面**好讓腳貼地，
+//    結果畫布最上面 5 格（約 30px）變成誰都到不了的死區：下排兩隻走得到畫布底，
+//    上排兩隻永遠碰不到畫布頂，拎起來放到上緣也被拉回來 —— 回報過。
+//    線性鋪滿就沒有哪一邊要吃掉多出來的空間。代價是 x、y 的倍率略有不同
+//    （約 1.47 與 1.58），角色每走一步的距離不完全一樣，肉眼看不出來。
 //
 // 前端完全活在「細格」裡（/yard 的 cols/rows、pets 的 x/y、zones），
 // 換算只發生在伺服器的邊界上：yardToDraw（走路 → 畫）與 yardFromDraw（放下的落點 → 走路）。
+// 兩個倍率都大於 1，所以每個走路格子對到不同的細格，換過去再換回來一定是同一格。
 const YARD_RENDER = (() => {
     const s = 8 / 6;
     const F = W.YARD_FIELD, S = W.SPRITE;
-    const foot = S * s - S;
-    return { s, w: Math.round(F.w * s), h: 2 * Math.round(F.h * s / 2),
-             offX: Math.round(foot / 2), offY: Math.round(foot) };
+    const w = Math.round(F.w * s), h = 2 * Math.round(F.h * s / 2);
+    return { s, w, h, kx: (w - S) / F.maxX, ky: (h - S) / F.maxY };
 })();
-const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.s) + YARD_RENDER.offX,
-                                y: Math.round(y * YARD_RENDER.s) + YARD_RENDER.offY });
-const yardFromDraw = (x, y) => ({ x: Math.round((x - YARD_RENDER.offX) / YARD_RENDER.s),
-                                  y: Math.round((y - YARD_RENDER.offY) / YARD_RENDER.s) });
+const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.kx),
+                                y: Math.round(y * YARD_RENDER.ky) });
+const yardFromDraw = (x, y) => ({ x: Math.round(x / YARD_RENDER.kx),
+                                  y: Math.round(y / YARD_RENDER.ky) });
+
+// ── 廣場（第二版）：大小比照營地，但直接在細格上走 ─────────────────────
+// 畫布跟營地畫出來的一樣大（69x54 細格、角色 16 細格），走路**就在這張細格上**，
+// 一拍 1 細格。營地是粗格走、放大畫，每步跳 1~2 細格 —— 廣場第一版照抄，
+// 回報「步伐很大」。底部留 LABEL_RESERVE 給名牌（見 plaza-walk 的 PLAZA_LIVE_FIELD）。
+// 走路座標＝畫的座標，所以不需要換算；plazaToDraw 留著是讓呼叫端不用分兩種寫法。
+// （第一版的 96x48 PLAZA_FIELD 留給 plaza-preview 鷹架與既有測試，不再用於真的廣場。）
+const PLAZA_LIVE_FIELD = W.PLAZA_LIVE_FIELD;
+const PLAZA_RENDER = { w: PLAZA_LIVE_FIELD.w, h: PLAZA_LIVE_FIELD.h, kx: 1, ky: 1 };
+const plazaToDraw = (x, y) => ({ x, y });
+
+/** 真的廣場：在場名單（伺服器發的）→ 畫面。原住民（NPC）先不放。 */
+function composePlazaLive(core, occupants, step, opts = {}) {
+    return composePlaza(core, occupants, step, { ...opts, npc: false, field: PLAZA_LIVE_FIELD, textLabels: false });
+}
 
 // opts.render：{ w, h, toDraw(x,y) } —— 畫在另一張格子上（營地用）。沒給就跟走路同一張（廣場）。
 function composePlaza(core, occupants, step, opts = {}) {
@@ -198,10 +219,17 @@ function composePlaza(core, occupants, step, opts = {}) {
         const key = o.key || o.code;
         // o.field = 這一隻自己的可走範圍（營地分區）。沒帶就用整場（廣場一直是這樣）。
         // 畫布尺寸與名牌仍然吃外層的 field —— 分區只縮走路範圍，不縮畫面。
-        const p = W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin, anchor: o.anchor },
-                          step, caches.get(key), o.field || field);
+        // o.walk = 廣場的完整走法（自動或手動，見 plaza-walk 的 walkPos），要用毫秒算；
+        // 沒有就是營地／舊版的 seed + joinStep。
+        const p = o.walk
+            ? W.walkPos(o.walk, opts.nowMs != null ? opts.nowMs : step * W.STEP_MS, caches.get(key), o.field || field)
+            : W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin, anchor: o.anchor },
+                      step, caches.get(key), o.field || field);
         caches.set(key, p.cache);
-        placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving });
+        // 手動模式放著太久 → 睡著：換成睡覺幀（兩張輪流，跟家裡睡覺同一個節奏）
+        const react = p.sleeping ? (Math.floor(step / 2) % 2 ? 'SLEEP_2' : 'SLEEP_1') : o.react;
+        placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving,
+                      sleeping: !!p.sleeping, react });
     }
 
     // 3. y 小的先畫 -> y 大的（比較靠近觀眾）蓋在上面。
@@ -217,6 +245,9 @@ function composePlaza(core, occupants, step, opts = {}) {
         // dx/dy = **畫出來**的位置（細格；含跳躍）。前端的命中判定要用這個。
         const at = render ? render.toDraw(p.x, p.y - p.jumpDy) : { x: p.x, y: p.y - p.jumpDy };
         p.dx = at.x; p.dy = at.y;
+        // 地面位置（不含跳躍）：名牌釘在這裡的腳下，要跟畫面同一套座標
+        const g = render ? render.toDraw(p.x, p.y) : { x: p.x, y: p.y };
+        p.gx = g.x; p.gy = g.y;
         if (sp) blit(dots, sp, at.x, at.y, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
@@ -225,8 +256,13 @@ function composePlaza(core, occupants, step, opts = {}) {
     //    天氣**不在這裡**：做過「依天氣把角色調色」，實際看了拿掉 —— 16x16 的點陣圖
     //    顏色本來就少，一染就分不出誰是誰。天氣整層都在前端疊，不動角色本身。
     const cells  = dotsToCells(dots, bw);
-    const labels = buildLabels(placed, core, opts.me, owner, field);
+    // 名牌在**畫出來的**格子上排（有 render 時是細格），尺寸也用畫布的
+    const labels = buildLabels(placed, core, opts.me, owner, render ? { w: bw, h: bh } : field);
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱
+    // opts.textLabels === false：名牌不塞進格子，改回傳位置讓前端用真的字型畫（見 nameTags）
+    if (opts.textLabels === false) {
+        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me) };
+    }
     return { lines: renderWithLabels(cells, labels), placed, labels };
 }
 
@@ -245,8 +281,10 @@ function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
     for (const p of placed) {
         if (!p.code) continue;
         const wide = vis(p.code);
+        // gx/gy = 畫出來的地面位置（composePlaza 給的）；直接呼叫的測試沒有，退回走路座標
+        const px = p.gx != null ? p.gx : p.x, py = p.gy != null ? p.gy : p.y;
         const col0 = Math.max(0, Math.min(field.w - wide,
-                     p.x + Math.floor((W.SPRITE - wide) / 2)));
+                     px + Math.floor((W.SPRITE - wide) / 2)));
 
         // 名牌**一律標在腳下**（固定位置，不會忽上忽下）。腳下是慣例 ——
         // PvP 的名牌就在腳下，玩家對這個位置有既有預期。
@@ -258,7 +296,7 @@ function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
         //   3. 一律頭上 → 幾乎不會被遮擋（擋住我的人必定 y 比我大，構不到我頭頂
         //      那一列），顯示率 97~100%，但不合慣例。
         //   4. 一律腳下 + 場地底部保留一列（本版）→ 位置固定又合慣例。
-        const row = Math.floor((p.y + W.SPRITE) / 2);
+        const row = Math.floor((py + W.SPRITE) / 2);
         if (row < 0 || row > lastRow) continue;
 
         // 遮擋逐「字」判斷，不是整條名牌一起消失。切在字的邊界上，不會出現半個字。
@@ -274,7 +312,7 @@ function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
             const w = vis(ch);
             if (!occluded(owner, row, cx, w, p.z)) {
                 if (!rows.has(row)) rows.set(row, []);
-                rows.get(row).push({ col: cx, text: ch, wide: w, me: p.code === me, z: p.z, code: p.code });
+                rows.get(row).push({ col: cx, text: ch, wide: w, me: p.code === me, z: p.z, code: p.code, color: p.color || null });
             }
             cx += w;
         }
@@ -308,6 +346,33 @@ function occluded(owner, row, col, wide, z) {
     return false;
 }
 
+// 名牌改由前端畫（廣場用）：格子只有 6x12 px，把字塞進格子裡，中文會被壓成細長條、
+// 字跟字黏在一起，小寫英文也擠不下 —— 回報過。改成回傳「名牌該畫在哪」，前端用
+// 正常字型、置中畫在腳下。遮擋規則不變：buildLabels 判出來整條都被擋住的就不畫
+// （有任何一個字露出來就整條畫，不會出現半個名字）。
+// x = 角色中心、y = 腳底（都是畫出來的 dot 座標）。
+const NAME_DEFAULT_COLOR = '#ebebf5';
+function nameTags(placed, labels, me) {
+    const seen = new Set();
+    for (const list of labels.values()) for (const it of list) seen.add(it.code);
+    return placed.filter(p => p.code && seen.has(p.code)).map(p => ({
+        text: p.code, me: p.code === me, key: p.key,   // key：前端用來對上這個人說的話（對話泡泡）
+        // 所有人看到的顏色一律相同：有選就用選的，沒選就是同一個預設色。
+        // 以前沒選時「自己黃、別人白」—— 結果自己看到的跟別人看到的不一樣（回報過）。
+        color: p.color || NAME_DEFAULT_COLOR,
+        x: p.gx + W.SPRITE / 2, y: p.gy + W.SPRITE,
+        sleeping: !!p.sleeping, top: p.gy,          // 睡著時前端在頭上畫 z
+        battling: !!p.battle,                         // 對戰中：前端在頭上畫 ⚔
+    }));
+}
+
+// 名牌顏色：玩家自選的（#rrggbb）優先；沒選就照舊 —— 自己亮黃、別人白。
+function labelColor(it) {
+    const m = it.color && /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(it.color);
+    if (m) return `[38;2;${parseInt(m[1], 16)};${parseInt(m[2], 16)};${parseInt(m[3], 16)}m`;
+    return it.me ? ME_COLOR : WHITE;
+}
+
 function renderWithLabels(cells, labels) {
     const lines = [];
     for (let r = 0; r < cells.length; r++) {
@@ -317,7 +382,7 @@ function renderWithLabels(cells, labels) {
         while (x < row.length) {
             const it = lab[li];
             if (it && it.col === x) {
-                line += (it.me ? ME_COLOR : WHITE) + it.text + R;
+                line += labelColor(it) + it.text + R;
                 x += it.wide; li++;
                 continue;
             }
@@ -518,9 +583,10 @@ module.exports = {
     PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD, SPRITE: W.SPRITE,
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,
-    composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
+    composePlaza, buildLabels, renderWithLabels, nameTags, NAME_DEFAULT_COLOR, cellToAnsi, occluded, NPCS,
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
     YARD_RENDER, yardToDraw, yardFromDraw,
+    PLAZA_RENDER, plazaToDraw, PLAZA_LIVE_FIELD, composePlazaLive,
     yardZones: W.yardZones, zoneAnchor: W.zoneAnchor, ZONE_MARGIN: W.ZONE_MARGIN,
     yardLayoutNames: W.yardLayoutNames, YARD_LAYOUT_DEFAULT: W.YARD_LAYOUT_DEFAULT,
     YARD_LAYOUTS_FILE, loadYardLayouts, yardLayoutsFor, yardZonesFor,

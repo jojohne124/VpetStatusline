@@ -121,7 +121,10 @@ const UI_FORMS = [
     { label: '📊 隱藏統計', action: 'stats',     fields: [], dev: true },
 ];
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
-const STEP_MS        = 1000;
+// 節奏參數只有一份，在 core（見那邊的說明）。daemon 若從 repo 跑、載到的卻是還沒有這個
+// export 的舊安裝版 core，就退回舊 core 的 1000 —— 一定要跟**實際載入的那份 core** 一致，
+// 不然這裡的 commit 跟 decideAgumon 會對「表演播到第幾拍」各說各話。
+const STEP_MS        = core.STEP_MS || 1000;
 
 function tryLoadArt(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; } }
 
@@ -331,7 +334,7 @@ let tick = 0;
 const yardCaches = new Map();
 
 
-// 院子的拍子與家裡的不同（750ms vs 1000ms），而且不依賴 daemon 的 tick 計數 ——
+// 院子的拍子由 plaza-walk 自己定（目前與家裡同為 750ms，但兩者是分開的參數），而且不依賴 daemon 的 tick 計數 ——
 // 用牆鐘算，重開 daemon 也接得上，日後接共用廣場時同一條式子還要加上 serverNow 校正。
 const plazaStep = () => require('../shared/plaza-walk.js').stepAt(Date.now());
 

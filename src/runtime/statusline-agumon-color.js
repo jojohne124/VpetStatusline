@@ -4,7 +4,7 @@
 const fs   = require('fs');
 const path = require('path');
 const {
-    STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH,
+    STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH, STEP_MS,
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution, resetStageStats,
     recordAlbumIfChanged,
@@ -105,9 +105,8 @@ process.stdin.on('end', () => {
         }
 
         // ── 進化生命週期 ────────────────────────────────────────────
-        // STEP_MS 必須跟 agumon-core 一致（1000ms = 1 step/sec），否則 step 對不上會
-        // 讓 decideAgumon 內的殘留清理把 evoStartStep 重設掉
-        const STEP_MS = 1000;
+        // STEP_MS 一律讀 core 那一份（節奏參數只有一個）。對不上的話 step 會跟 decideAgumon
+        // 不一致，它內部的殘留清理會把 evoStartStep 重設掉。
         const step = Math.floor(now / STEP_MS);
         // 1. commit：表演結束 → 切換 characterId（必須在 loadCharacter 之前，否則
         //    commit 那一步會用舊 charDef 載入 art，render 出舊角色走路 1 幀）

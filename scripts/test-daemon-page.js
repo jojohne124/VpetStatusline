@@ -839,7 +839,7 @@ setTimeout(async () => {
             // 真的起一個廣場伺服器 + 一個指向它的 daemon（隔離的 state 目錄）
             const fs2 = require('fs'), os2 = require('os');
             const PS = require('../src/daemon/plaza-server.js');
-            const ps = PS.createPlazaServer({ graceMs: 500 });
+            const ps = PS.createPlazaServer({ graceMs: 500, battleMs: 4000 });
             await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
             const SD = fs2.mkdtempSync(path.join(os2.tmpdir(), 'vpet-plaza-'));
             fs2.writeFileSync(path.join(SD, 'pvp.json'), JSON.stringify({ code: '測試員' }));
@@ -917,6 +917,41 @@ setTimeout(async () => {
                 ok(/id="chatlog"/.test(html) && /id="chatin"/.test(html), '頁面沒有聊天框');
                 ok(/function drawBubbles/.test(js) && /drawBubbles\(p\.tags, p\.chat, p\.serverNow\)/.test(js), '沒有畫對話泡泡');
                 ok(/document\.createTextNode\('：'\+m\.text\)/.test(js), '聊天內容不是用純文字放進頁面（別人打的字會被當成 HTML）');
+
+                // 對戰：另一個玩家（這裡直接用 client）邀請 daemon 這邊 → 頁面看到邀請 → 接受 →
+                // daemon 在前線開演、/plaza 帶出演出畫面 → 演完不留痕跡（不計戰績、心情不變）
+                {
+                    const PC = require('../src/daemon/plaza-client.js');
+                    const rival = PC.create({ url: 'http://127.0.0.1:' + ps.server.address().port });
+                    ok((await rival.join({ name: '對手', char: 'gabumon', stage: 'Child', card: { power: 10, train: 0, str: 10 } })).ok, '對手進不了廣場');
+                    const meId = ps.roster().find(m => m.name !== '對手').id;
+                    // 心情先設成非 0：打完心情會被歸 0，原本就是 0 的話「有沒有還原」測不出來（踩過，假綠）
+                    { const st0 = stateFile(); st0.mood = 2; fs2.writeFileSync(path.join(SD, 'daemon-state.json'), JSON.stringify(st0)); }
+                    await wait(1600);
+                    const before2 = stateFile();
+                    ok(before2.mood === 2, '測試前置：心情沒設成功（' + before2.mood + '）');
+                    ok((await rival.invite(meId)).ok, '對手邀請失敗');
+                    let inv = null;
+                    for (let i = 0; i < 30 && !inv; i++) { inv = JSON.parse(await getOn(P4, '/plaza')).invite; if (!inv) await wait(100); }
+                    ok(inv && inv.kind === 'in' && inv.name === '對手' && inv.inviteId, '頁面沒看到對戰邀請：' + JSON.stringify(inv));
+                    ok((await cmd('plazaAnswer', { inviteId: inv.inviteId, accept: '1' })).ok, '接受邀請失敗');
+                    let shown = null;
+                    for (let i = 0; i < 60 && !shown; i++) { const q = JSON.parse(await getOn(P4, '/plaza')); if (q.battle) shown = q; else await wait(100); }
+                    ok(shown && Array.isArray(shown.battle.lines) && shown.battle.lines.length > 0 && shown.battle.opp === '對手',
+                       '接受之後沒有開演前線的戰鬥（/plaza 沒帶演出畫面）');
+                    ok(shown && shown.tags.every(t => t.battling), '對戰中的兩隻頭上沒有 ⚔ 的資料');
+                    ok(/function renderBattle/.test(js) && /id="battlebox"/.test(html), '頁面沒有對戰的疊層');
+                    // 演完（約 15 秒）
+                    let done = false;
+                    for (let i = 0; i < 260 && !done; i++) { const q = JSON.parse(await getOn(P4, '/plaza')); if (shown && !q.battle) done = true; else await wait(100); }
+                    ok(done, '對戰演出一直沒結束');
+                    await wait(1600);
+                    const after2 = stateFile();
+                    ok((after2.battleTotalCount || 0) === (before2.battleTotalCount || 0), '廣場對戰被算進戰績了');
+                    ok(after2.mood === before2.mood, `廣場對戰動到了心情（${before2.mood} → ${after2.mood}）`);
+                    ok(after2.lastBattleEnemy === before2.lastBattleEnemy, '廣場對戰改了「上一場的敵人」');
+                    await rival.leave();
+                }
 
                 // 名牌保留大小寫（以前一律轉大寫）
                 const lc = await cmd('plazaRename', { name: 'kai' });

@@ -350,7 +350,91 @@ async function main() {
     const re = await e.join(prof('E1'));
     ok(!re.ok && re.error === C.UNREACHABLE, '主機沒開時的錯誤訊息不對：' + JSON.stringify(re));
 
+    await battleTests();
+
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
+}
+
+// ── 3. 對戰（規格 §八）──────────────────────────────────────────────
+// 自己一台伺服器：邀請 300ms 逾時、對戰 500ms 結束，骰子固定（dice 可換）
+async function battleTests() {
+    console.log('— 對戰 —');
+    let dice = 0;
+    const ps = S.createPlazaServer({ inviteMs: 300, battleMs: 500, rand: () => dice });
+    await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
+    const url = 'http://127.0.0.1:' + ps.server.address().port;
+    const got = {};   // tag -> { battles:[], closed:[] }
+    const mk = (tag) => {
+        got[tag] = { battles: [], closed: [] };
+        return C.create({ url, retryMs: 600,
+            onBattle: (b) => got[tag].battles.push(b), onInviteClose: (c) => got[tag].closed.push(c) });
+    };
+    const prof = (name, str) => ({ name, char: 'agumon', stage: 'Child', card: { power: 10, train: 0, str } });
+    const A = mk('A'), B = mk('B'), Cc = mk('C');
+    await A.join(prof('甲', 50)); await B.join(prof('乙', 50)); await Cc.join(prof('丙', 50));
+    await until(() => A.roster().length === 3 && B.roster().length === 3 && Cc.roster().length === 3);
+    const id = (c) => c.me().id;
+
+    ok(!(await A.invite(id(A))).ok, '可以邀請自己');
+    ok(!(await A.invite('nobody')).ok, '可以邀請不在場的人');
+
+    // 拒絕
+    const i1 = await A.invite(id(B));
+    ok(i1.ok && A.outgoing() && A.outgoing().toName === '乙', '邀請失敗或發起方沒記住：' + JSON.stringify(i1));
+    ok(await until(() => B.incoming() && B.incoming().fromName === '甲'), '對方沒收到邀請');
+    ok(!(await Cc.invite(id(B))).ok, '對方已經有邀請，還能再邀他');
+    ok(!(await A.invite(id(Cc))).ok, '自己已經有一個邀請，還能再邀別人');
+    ok((await B.answer(B.incoming().inviteId, false)).ok, '拒絕失敗');
+    ok(await until(() => got.A.closed.some(c => c.mine && c.reason === 'declined')), '發起方沒收到「被拒絕」');
+    ok(!A.outgoing() && !B.incoming(), '拒絕之後邀請沒清掉');
+    ok(await until(() => Cc.chat().some(m => m.sys && /乙 拒絕了 甲/.test(m.text))), '拒絕沒有系統訊息');
+
+    // 逾時
+    await A.invite(id(B));
+    ok(await until(() => got.A.closed.some(c => c.reason === 'timeout'), 2000), '邀請沒有逾時');
+    ok(!B.incoming(), '逾時之後被邀請的那邊還掛著邀請');
+
+    // 邀請中對方離場
+    const D = mk('D'); await D.join(prof('丁', 50));
+    await until(() => A.roster().length === 4);
+    await A.invite(id(D)); await D.leave();
+    ok(await until(() => got.A.closed.some(c => c.reason === 'left')), '對方離場，邀請沒有作廢');
+
+    // 接受 → 開打：勝負由伺服器擲，兩邊收到同一個結果；旁觀者不開演
+    await B.move({ mode: 'manual' });       // 乙用手動，打完要回到手動
+    dice = 0;                               // 戰力相同 → 甲勝率 50%，骰 0 → 甲贏
+    await A.invite(id(B));
+    await until(() => B.incoming());
+    ok((await B.answer(B.incoming().inviteId, true)).ok, '接受失敗');
+    ok(await until(() => got.A.battles.length === 1 && got.B.battles.length === 1), '雙方沒有都收到開打');
+    ok(got.A.battles[0].win === true && got.B.battles[0].win === false, '勝負不一致（應該甲贏、乙輸）');
+    ok(got.A.battles[0].opp.name === '乙' && got.B.battles[0].opp.name === '甲', '對手資料不對');
+    ok(got.C.battles.length === 0, '旁觀的人也開演了');
+    ok(await until(() => { const m = Cc.roster().find(x => x.id === id(A)); return m && m.battle; }), '旁觀的人不知道甲在對戰（不會有 ⚔）');
+    const fa = Cc.roster().find(x => x.id === id(A)).walk;
+    ok(fa.mode === 'manual' && fa.vx === 0 && fa.vy === 0, '對戰中沒有停在原地');
+    ok(!(await B.move({ vx: 1, vy: 0 })).ok, '對戰中還能移動');
+    ok(await until(() => Cc.chat().some(m => m.sys && /甲 對 乙 開打/.test(m.text))), '開打沒有系統訊息');
+    // 打完：恢復原本的模式（甲自動、乙手動），旁觀者看到 ⚔ 消失，聊天說誰贏
+    ok(await until(() => { const m = Cc.roster().find(x => x.id === id(A)); return m && !m.battle; }, 2000), '對戰沒有結束');
+    const ma = Cc.roster().find(x => x.id === id(A)), mb = Cc.roster().find(x => x.id === id(B));
+    ok(ma.mode === 'auto' && ma.walk.mode !== 'manual', '甲打完沒有回到自動散步');
+    ok(mb.mode === 'manual' && mb.walk.mode === 'manual', '乙打完沒有回到手動');
+    ok(await until(() => Cc.chat().some(m => m.sys && /甲 贏了/.test(m.text))), '沒有宣布誰贏');
+
+    // 勝率：戰力差 40 → 甲 90%。骰 0.85 甲贏、0.95 乙贏（夾在 5~95%）
+    const E = mk('E'), F2 = mk('F');
+    await E.join(prof('戊', 90)); await F2.join(prof('己', 50));
+    await until(() => E.roster().length >= 5 && F2.roster().length >= 5);
+    for (const [d, eWins] of [[0.85, true], [0.95, false]]) {
+        dice = d;
+        await E.invite(id(F2)); await until(() => F2.incoming());
+        await F2.answer(F2.incoming().inviteId, true);
+        await until(() => got.E.battles.length && got.E.battles.at(-1).at && got.E.battles.length === (eWins ? 1 : 2));
+        ok(got.E.battles.at(-1).win === eWins, `戰力 90 對 50、骰 ${d}：戊應該${eWins ? '贏' : '輸'}`);
+        await until(() => { const m = E.roster().find(x => x.id === id(E)); return m && !m.battle; }, 2000);
+    }
+    await ps.close();
 }
 main().catch((e) => { console.log('  ✗ 例外：' + e.stack); process.exit(1); });

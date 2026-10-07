@@ -23,12 +23,17 @@ function create(opts = {}) {
     const base    = new URL(opts.url || process.env.VPET_PLAZA_URL || DEFAULT_URL);
     const retryMs = opts.retryMs ?? RETRY_MS;
     const onLost  = opts.onLost || (() => {});
+    // 對戰：我是其中一方時呼叫（daemon 據此開演前線的戰鬥）；邀請結束時也通知（給頁面顯示原因）
+    const onBattle      = opts.onBattle      || (() => {});
+    const onInviteClose = opts.onInviteClose || (() => {});
     const log     = opts.log    || (() => {});
 
     let me = null;              // { id, name, ... }
     let members = new Map();    // id -> { id, name, char, stage, walk }
     let chat = [];              // 最近的聊天（伺服器保留 50 則，進場／重連時整份給）
     const CHAT_KEEP = 50;
+    let incoming = null;        // 別人邀我：{ inviteId, from, fromName, expiresAt }
+    let outgoing = null;        // 我邀別人：{ inviteId, to, toName, expiresAt }
     let skew = 0;               // serverNow - localNow
     let stream = null;          // 目前的 SSE 回應（http.IncomingMessage）
     let streamReq = null;
@@ -77,7 +82,7 @@ function create(opts = {}) {
     }
     function cleanup() {
         gen++;
-        me = null; members = new Map(); chat = []; lostSince = null;
+        me = null; members = new Map(); chat = []; lostSince = null; incoming = null; outgoing = null;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
         if (streamReq) { try { streamReq.destroy(); } catch (e) {} }
         stream = null; streamReq = null;
@@ -103,6 +108,23 @@ function create(opts = {}) {
         } else if (event === 'profile' && d.id) {
             if (members.has(d.id)) Object.assign(members.get(d.id), { name: d.name, color: d.color });
             if (d.id === me.id) Object.assign(me, { name: d.name, color: d.color });
+        } else if (event === 'member' && d.id) {
+            // 成員狀態整份換掉（走法、自動／手動、是否對戰中）
+            const { serverNow, ...m } = d; void serverNow;
+            members.set(d.id, m);
+        } else if (event === 'invite' && d.inviteId) {
+            incoming = { inviteId: d.inviteId, from: d.from, fromName: d.fromName, expiresAt: d.expiresAt };
+        } else if (event === 'invite-closed' && d.inviteId) {
+            const mine = outgoing && outgoing.inviteId === d.inviteId;
+            if (incoming && incoming.inviteId === d.inviteId) incoming = null;
+            if (mine) outgoing = null;
+            onInviteClose({ inviteId: d.inviteId, reason: d.reason, mine });
+        } else if (event === 'battle' && d.battleId) {
+            if (d.a && d.b && (d.a.id === me.id || d.b.id === me.id)) {
+                const opp = d.a.id === me.id ? d.b : d.a;
+                outgoing = null; incoming = null;
+                onBattle({ battleId: d.battleId, opp, win: d.winner === me.id, at: d.at });
+            }
         } else if (event === 'walk' && d.id && members.has(d.id)) {
             members.get(d.id).walk = d.walk;
         } else if (event === 'kicked') {
@@ -202,6 +224,25 @@ function create(opts = {}) {
         return { ok: true, seq: r.body.seq };
     }
 
+    // 邀請對戰／回覆邀請
+    async function invite(to) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/invite', { id: me.id, to });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        const t = members.get(to);
+        outgoing = { inviteId: r.body.inviteId, to, toName: t ? t.name : '?', expiresAt: r.body.expiresAt };
+        return { ok: true, inviteId: r.body.inviteId };
+    }
+    async function answer(inviteId, accept) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/answer', { id: me.id, inviteId, accept: !!accept });
+        if (incoming && incoming.inviteId === inviteId) incoming = null;
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        return { ok: true };
+    }
+
     async function leave() {
         if (!me) return { ok: true };
         const id = me.id;
@@ -211,7 +252,8 @@ function create(opts = {}) {
     }
 
     return {
-        join, leave, rename, update, move, say, active,
+        join, leave, rename, update, move, say, invite, answer, active,
+        incoming: () => incoming, outgoing: () => outgoing,
         chat: () => chat.slice(),
         me: () => me,
         roster: () => [...members.values()],

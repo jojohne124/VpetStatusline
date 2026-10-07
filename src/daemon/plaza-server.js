@@ -30,6 +30,11 @@ const BODY_LIMIT   = 4096;
 const CHAT_KEEP    = 50;        // 保留最近幾則（進場時一併給）
 const CHAT_MAX     = 100;       // 一則幾個字
 const CHAT_GAP_MS  = 1000;      // 每人每秒最多 1 則
+// 對戰（規格 §八）
+const INVITE_MS    = 30000;     // 邀請多久沒回就當作拒絕
+// 對戰演出多長：前線的戰鬥最長 21 拍（cut-in 版）x 750ms ≈ 15.8 秒，再加上「下一拍才開演」
+// 與 daemon 輪詢的延遲。這段期間兩隻停在原地、旁觀的人看到頭上的 ⚔。
+const BATTLE_MS    = 18000;
 const FIELD        = W.PLAZA_LIVE_FIELD;   // 廣場的走路場地（大小比照營地畫面，見 plaza-walk）
 
 // 輸入一律不信任。名牌沿用 `vpet code` 的規則（statusline-cheat 的 validId），
@@ -47,6 +52,9 @@ function createPlazaServer(opts = {}) {
     const pingMs  = opts.pingMs  ?? PING_MS;
     const now     = opts.now     || Date.now;
     const log     = opts.log     || (() => {});
+    const inviteMs = opts.inviteMs ?? INVITE_MS;
+    const battleMs = opts.battleMs ?? BATTLE_MS;
+    const rand     = opts.rand     || Math.random;   // 測試可以固定勝負
 
     const members = new Map();   // id -> { id, name, char, stage, card, walk, stream, lostAt, chatAt }
     const chat = [];             // 最近 CHAT_KEEP 則：{ seq, at, from, name, color, text } 或 { seq, at, sys:true, text }
@@ -60,7 +68,10 @@ function createPlazaServer(opts = {}) {
     }
     const sys = (text) => pushChat({ sys: true, text });
 
-    const pub = (m) => ({ id: m.id, name: m.name, color: m.color, char: m.char, stage: m.stage, walk: m.walk });
+    // mode：自動／手動（對戰中 walk 會被暫時改成原地不動，所以模式要另外記）
+    // battle：正在對戰（旁觀的人在頭上畫 ⚔）
+    const pub = (m) => ({ id: m.id, name: m.name, color: m.color, char: m.char, stage: m.stage, walk: m.walk,
+                          mode: m.mode || 'auto', battle: !!m.battle });
     const roster = () => [...members.values()].map(pub);
 
     function send(m, event, data) {
@@ -76,6 +87,8 @@ function createPlazaServer(opts = {}) {
         if (!m) return;
         members.delete(id);
         if (m.stream) { try { m.stream.end(); } catch (e) {} m.stream = null; }
+        // 邀請中的人走了 → 邀請作廢（對戰中的那場照常演完，另一邊不受影響）
+        for (const inv of [...invites.values()]) if (inv.from === id || inv.to === id) closeInvite(inv, 'left');
         broadcast('leave', { id, reason });
         // 同名取代＝同一個人換了一台 daemon 進來，不是真的離開，不報
         if (reason !== 'replaced') sys(`${m.name} 離開了`);
@@ -96,7 +109,9 @@ function createPlazaServer(opts = {}) {
             return { status: 409, body: { ok: false, error: `廣場人太多了（${cap} 人），晚點再來` } };
         }
         const c = body.card || {};
+        // str = 對戰用的戰力（daemon 端算好：min(基礎 + 訓練值, 階級上限)，跟幽靈對戰同一套）
         const card = { power: numOr(c.power, 0), train: numOr(c.train, 0) };
+        card.str = numOr(c.str, card.power + card.train);
         const id   = crypto.randomBytes(8).toString('hex');
         const seed = crypto.randomBytes(4).readUInt32BE(0) >>> 1;
         // 跟 daemon 端 plaza.js 的 PLAZA_LIVE_FIELD 是同一塊，兩邊必須一致
@@ -105,7 +120,7 @@ function createPlazaServer(opts = {}) {
         // lostAt = now：join 之後要在 graceMs 內接上 SSE，不然一樣當作離場
         // （join 成功但 daemon 當場死掉的情況，不能留一隻幽靈在場上）。
         const color = validColor(body.color) ? body.color.toLowerCase() : null;
-        const m = { id, name, color, char, stage, card, walk, stream: null, lostAt: now() };
+        const m = { id, name, color, char, stage, card, walk, mode: 'auto', battle: null, stream: null, lostAt: now() };
         members.set(id, m);
         broadcast('enter', pub(m), id);
         sys(`${name} 進入廣場`);
@@ -148,6 +163,7 @@ function createPlazaServer(opts = {}) {
         const { id } = body || {};
         const m = members.get(id);
         if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (m.battle) return { status: 409, body: { ok: false, error: '對戰中，打完才能動' } };
         const t = now();
         const cur = W.walkPos(m.walk, t, null, FIELD);
         const facingOf = (vx, prev) => (vx < 0 ? 'left' : vx > 0 ? 'right' : prev);
@@ -167,8 +183,96 @@ function createPlazaServer(opts = {}) {
                      vx: body.vx, vy: body.vy, at: t };
         }
         m.walk = walk;
-        broadcast('walk', { id, walk });
+        m.mode = walk.mode === 'manual' ? 'manual' : 'auto';
+        broadcast('member', pub(m));
         return { status: 200, body: { ok: true, walk } };
+    }
+
+    // ── 對戰（規格 §八）────────────────────────────────────────────────
+    // 邀請 → 對方同意 → 伺服器決定勝負並廣播 → 兩邊各自播前線的戰鬥演出（疊在廣場上）。
+    // 勝負由伺服器擲：兩台的 state 不一定同步，各算各的會出現「兩邊都贏」。
+    const invites = new Map();   // inviteId -> { inviteId, from, to, at, timer }
+    const battleTimers = new Set();
+    const busyIn = (id) => [...invites.values()].some(v => v.from === id || v.to === id);
+    function closeInvite(inv, reason) {
+        if (!invites.has(inv.inviteId)) return;
+        invites.delete(inv.inviteId);
+        clearTimeout(inv.timer);
+        for (const who of [inv.from, inv.to]) {
+            const m = members.get(who);
+            if (m) send(m, 'invite-closed', { inviteId: inv.inviteId, reason });
+        }
+        const A = members.get(inv.from), B = members.get(inv.to);
+        if (A && B && reason === 'declined') sys(`${B.name} 拒絕了 ${A.name} 的對戰邀請`);
+        if (A && B && reason === 'timeout')  sys(`${B.name} 沒有回應 ${A.name} 的對戰邀請`);
+    }
+    function invite(body) {
+        const { id, to } = body || {};
+        const A = members.get(id), B = members.get(to);
+        if (!A) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (!B) return { status: 404, body: { ok: false, error: '對方已經不在廣場了' } };
+        if (A.id === B.id) return { status: 400, body: { ok: false, error: '不能跟自己對戰' } };
+        if (A.battle || busyIn(A.id)) return { status: 409, body: { ok: false, error: '你已經有一場邀請或對戰了' } };
+        if (B.battle || busyIn(B.id)) return { status: 409, body: { ok: false, error: `${B.name} 正在對戰或有別的邀請` } };
+        const inv = { inviteId: crypto.randomBytes(6).toString('hex'), from: A.id, to: B.id, at: now() };
+        inv.timer = setTimeout(() => closeInvite(inv, 'timeout'), inviteMs);
+        if (inv.timer.unref) inv.timer.unref();
+        invites.set(inv.inviteId, inv);
+        send(B, 'invite', { inviteId: inv.inviteId, from: A.id, fromName: A.name, expiresAt: inv.at + inviteMs });
+        sys(`${A.name} 邀請 ${B.name} 對戰`);
+        return { status: 200, body: { ok: true, inviteId: inv.inviteId, expiresAt: inv.at + inviteMs } };
+    }
+    function answer(body) {
+        const { id, inviteId, accept } = body || {};
+        const inv = invites.get(inviteId);
+        if (!inv || inv.to !== id) return { status: 404, body: { ok: false, error: '邀請已經失效了' } };
+        if (!accept) { closeInvite(inv, 'declined'); return { status: 200, body: { ok: true } }; }
+        const A = members.get(inv.from), B = members.get(inv.to);
+        invites.delete(inviteId); clearTimeout(inv.timer);
+        if (!A || !B) return { status: 404, body: { ok: false, error: '對方已經不在廣場了' } };
+        startBattle(A, B);
+        return { status: 200, body: { ok: true } };
+    }
+    // A 的勝率 = 50 + (A 戰力 - B 戰力) %，夾在 5~95%（跟幽靈對戰、前線同一條公式，見 core.winProbFromStr）
+    function winProbA(A, B) {
+        return Math.max(0.05, Math.min(0.95, (50 + (A.card.str - B.card.str)) / 100));
+    }
+    function startBattle(A, B) {
+        const t = now();
+        const battleId = crypto.randomBytes(6).toString('hex');
+        const winner = rand() < winProbA(A, B) ? A.id : B.id;
+        // 兩隻停在原地（用手動模式的「停著」表示，大家算出來的位置一致）。
+        // 原本的模式記在 m.mode，打完照它恢復。
+        for (const m of [A, B]) {
+            const cur = W.walkPos(m.walk, t, null, FIELD);
+            m.walk = { mode: 'manual', x: cur.x, y: cur.y, facing: cur.facing, vx: 0, vy: 0, at: t };
+            m.battle = battleId;
+            broadcast('member', pub(m));
+        }
+        const fighter = (m) => ({ id: m.id, name: m.name, char: m.char });
+        broadcast('battle', { battleId, a: fighter(A), b: fighter(B), winner, at: t });
+        sys(`${A.name} 對 ${B.name} 開打！`);
+        log(`對戰：${A.name} vs ${B.name} → ${winner === A.id ? A.name : B.name} 勝`);
+        const timer = setTimeout(() => { battleTimers.delete(timer); endBattle(battleId, [A.id, B.id], winner); }, battleMs);
+        if (timer.unref) timer.unref();
+        battleTimers.add(timer);
+    }
+    function endBattle(battleId, ids, winner) {
+        const t = now();
+        for (const id of ids) {
+            const m = members.get(id);
+            if (!m || m.battle !== battleId) continue;
+            const cur = W.walkPos(m.walk, t, null, FIELD);
+            m.walk = m.mode === 'manual'
+                ? { mode: 'manual', x: cur.x, y: cur.y, facing: cur.facing, vx: 0, vy: 0, at: t }
+                : { seed: crypto.randomBytes(4).readUInt32BE(0) >>> 1, joinStep: W.stepAt(t),
+                    origin: { x: cur.x, y: cur.y, facing: cur.facing }, anchor: null };
+            m.battle = null;
+            broadcast('member', pub(m));
+        }
+        broadcast('battle-end', { battleId, winner });
+        const w = members.get(winner);
+        if (w) sys(`${w.name} 贏了！`);
     }
 
     // 發言。字數、頻率都在這裡擋 —— 不信任 client。
@@ -228,6 +332,12 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'POST' && u.pathname === '/chat') {
             return readBody(req, (j) => { const r = say(j); reply(res, r.status, r.body); });
         }
+        if (req.method === 'POST' && u.pathname === '/invite') {
+            return readBody(req, (j) => { const r = invite(j); reply(res, r.status, r.body); });
+        }
+        if (req.method === 'POST' && u.pathname === '/answer') {
+            return readBody(req, (j) => { const r = answer(j); reply(res, r.status, r.body); });
+        }
         if (req.method === 'POST' && u.pathname === '/move') {
             return readBody(req, (j) => { const r = move(j); reply(res, r.status, r.body); });
         }
@@ -250,6 +360,8 @@ function createPlazaServer(opts = {}) {
 
     function close() {
         clearInterval(reaper); clearInterval(pinger);
+        for (const inv of invites.values()) clearTimeout(inv.timer);
+        for (const t of battleTimers) clearTimeout(t);
         for (const m of members.values()) { if (m.stream) { try { m.stream.end(); } catch (e) {} } }
         members.clear();
         return new Promise((r) => server.close(() => r()));

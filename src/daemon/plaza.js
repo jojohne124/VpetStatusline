@@ -362,6 +362,7 @@ function nameTags(placed, labels, me) {
         color: p.color || NAME_DEFAULT_COLOR,
         x: p.gx + W.SPRITE / 2, y: p.gy + W.SPRITE,
         sleeping: !!p.sleeping, top: p.gy,          // 睡著時前端在頭上畫 z
+        battling: !!p.battle,                         // 對戰中：前端在頭上畫 ⚔
     }));
 }
 

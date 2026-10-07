@@ -236,8 +236,34 @@ function renderTick(i, st, now) {
         }
     }
 
+    // 廣場對戰：伺服器已經決定好對手與勝負，這裡把它變成一場前線的戰鬥（演出沿用前線那套），
+    // 頁面把演出疊在廣場上。直接設 st 的旗標而不是寫 force 檔 —— 隔離模式不讀 force，
+    // 而且這場戰鬥是 daemon 自己發起的，不該經過「指令通道」。
+    // 不計戰績（battleNoCount）；心情、上一場敵人在收尾時還原，打完不留任何痕跡。
+    if (inPlaza && plazaBattle && plazaBattle.pending) {
+        if (Date.now() - plazaBattle.got > PLAZA_BATTLE_STALE_MS) plazaBattle = null;
+        else if (!(st.battleStartStep >= 0) && !(st.evoStartStep >= 0) && !(st.dropStartStep >= 0)) {
+            plazaBattle.snap = { mood: st.mood, lastBattleEnemy: st.lastBattleEnemy };
+            st._forceBattle = true;
+            st._forceBattleWin = !!plazaBattle.win;
+            st._forceBattleEnemy = plazaBattle.opp.char;
+            st._pvpOppLabel = plazaBattle.opp.name;
+            st._pvpMeLabel = plazaClient.me() ? plazaClient.me().name : null;
+            st._battleNoCount = true;
+            plazaBattle.pending = false;
+        }
+    }
     const trainBefore = st.trainingBonus;
     const result = decideAgumon(i, st, now, charDef, { allowBattle: true });
+    if (plazaBattle && !plazaBattle.pending) {
+        if (result.kind === 'battle') plazaBattle.seen = true;
+        else if (plazaBattle.seen || Date.now() - plazaBattle.got > PLAZA_BATTLE_STALE_MS) {
+            const sn = plazaBattle.snap || {};
+            if (sn.mood === undefined) delete st.mood; else st.mood = sn.mood;
+            if (sn.lastBattleEnemy === undefined) delete st.lastBattleEnemy; else st.lastBattleEnemy = sn.lastBattleEnemy;
+            plazaBattle = null;
+        }
+    }
     if (inPlaza) {
         // hook 照常寫（那是 Claude Code 的脈搏，不該擋），但這段期間的訊息不加訓練值、
         // 不武裝自動戰鬥。武裝要「標成已開過」而不是只清掉 pending —— 不然一回前線，
@@ -370,8 +396,19 @@ let plazaNotice = null;   // { text, at }：頁面顯示一次就好
 const plazaCaches = new Map();
 const plazaClient = PlazaClient.create({
     log: (m) => console.log('   🏛 ' + m),
-    onLost: (reason) => { plazaNotice = { text: reason + '，已回到前線。', at: Date.now() }; plazaCaches.clear(); },
+    onLost: (reason) => { plazaNotice = { text: reason + '，已回到前線。', at: Date.now() }; plazaCaches.clear(); plazaBattle = null; },
+    // 我是對戰的一方 → 下一拍在前線開演（見 renderTick 的「廣場對戰」）
+    onBattle: (b) => { plazaBattle = { ...b, pending: true, seen: false, got: Date.now() }; },
+    onInviteClose: (c) => {
+        const why = { declined: '對方拒絕了對戰邀請', timeout: '對方沒有回應對戰邀請', left: '對方離開了廣場，邀請取消' }[c.reason];
+        if (c.mine && why) plazaNotice = { text: why, at: Date.now() };
+    },
 });
+// 廣場對戰（規格 §八）：{ opp:{id,name,char}, win, pending, seen, snap }
+//   pending：還沒開演（下一拍 renderTick 會把它變成一場前線戰鬥）
+//   seen   ：已經看到 kind === 'battle'（之後不是 battle 了 = 演完，收尾）
+let plazaBattle = null;
+const PLAZA_BATTLE_STALE_MS = 40000;   // 保險：卡住（例如正在進化而一直開不了打）就放棄
 // 與 CLI 的 INSTALL_ROOT/state/pvp.json 是同一份（正式環境 STATE_DIR 就是那裡）；
 // 用 STATE_DIR 是為了吃 AGUMON_STATE_DIR —— 測試不能讀寫使用者真正的名牌。
 const PVP_FILE = path.join(STATE_DIR, 'pvp.json');
@@ -403,8 +440,11 @@ async function plazaJoin() {
     let stage = 'Child', power = 0;
     try { stage = getCharacterStage(char) || stage; } catch (e) {}
     try { power = core.getCharacterPower(char) || 0; } catch (e) {}
+    // 對戰用的戰力：跟前線、幽靈對戰同一套 = min(基礎 + 訓練值, 階級上限)
+    let str = power + (st.trainingBonus || 0);
+    try { str = Math.min(core.getBasePower(st, char) + (st.trainingBonus || 0), core.getTierCap(stage)); } catch (e) {}
     const r = await plazaClient.join({ name, color: readProfile().color, char, stage,
-                                       card: { power, train: st.trainingBonus || 0 } });
+                                       card: { power, train: st.trainingBonus || 0, str } });
     if (!r.ok) return { ok: false, error: r.error };
     plazaNotice = null; plazaCaches.clear();
     return { ok: true, action: 'plazaJoin', output: '進入廣場（' + plazaClient.url() + '）' };
@@ -830,6 +870,14 @@ function applyCommand(action, args = {}) {
         if (args.mode !== 'auto' && args.mode !== 'manual') return { ok: false, error: '模式只有 auto / manual' };
         return plazaClient.move({ mode: args.mode }).then(r => (r.ok ? { ok: true, action } : r));
     }
+    if (action === 'plazaInvite') {
+        if (!args.to) return { ok: false, error: '要指定邀請誰' };
+        return plazaClient.invite(args.to).then(r => (r.ok ? { ok: true, action, output: '已送出對戰邀請' } : r));
+    }
+    if (action === 'plazaAnswer') {
+        if (!args.inviteId) return { ok: false, error: '沒有邀請' };
+        return plazaClient.answer(args.inviteId, args.accept === '1').then(r => (r.ok ? { ok: true, action } : r));
+    }
     if (action === 'plazaChat') {
         if (!args.text) return { ok: false, error: '沒有內容' };
         return plazaClient.say(args.text).then(r => (r.ok ? { ok: true, action } : r));
@@ -1092,6 +1140,14 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #chatlog .who{font-weight:600}
   #chatin{width:300px !important}
   #plazabar input[type=color]{width:34px;height:24px;padding:1px;vertical-align:middle;cursor:pointer}
+  /* 廣場對戰：疊在廣場上的一層（壓暗 + 中間是前線的戰鬥畫面），不換畫面 */
+  #battlebox{position:absolute;inset:0;z-index:4;display:none;align-items:center;justify-content:center;
+             background:rgba(0,0,0,.6);transition:opacity .4s}
+  #battlebox canvas{image-rendering:pixelated;max-width:none;border:1px solid #444c56;border-radius:4px;
+                    background:rgb(30,30,30)}
+  #plazainvite{display:none;margin-top:6px;padding:6px 8px;border:1px solid #a371f7;border-radius:6px;
+               background:#1b1530;font-size:12px;color:#e9dcff;max-width:398px}
+  #plazainvite button{margin-left:6px}
   #ctx{position:fixed;z-index:50;display:none;min-width:150px;background:#161b22;
        border:1px solid #30363d;border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
   #ctx .hd{padding:4px 8px;font-size:12px;color:#c9d1d9;border-bottom:1px solid #30363d;margin-bottom:4px}
@@ -1104,7 +1160,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1130,7 +1186,7 @@ ${IS_RELEASE ? '' : `
     </div>
     <div id="plazabar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <button id="plazamode" title="自動：隨機散步／手動：WASD 或方向鍵移動">🚶 自動</button>
-      <span id="plazainfo">–</span>
+      <div id="plazainvite"></div>
       <div class="form" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
         <label class="k" title="名牌顏色">顏色 <input type="color" id="plazacolor" value="${plaza.NAME_DEFAULT_COLOR}"></label>
@@ -1209,8 +1265,8 @@ function parseAnsi(line){
   }
   return cells;
 }
-function draw(petLines){
-  const cv=document.getElementById('pet'),ctx=cv.getContext('2d');
+function draw(petLines, target){
+  const cv=target||document.getElementById('pet'),ctx=cv.getContext('2d');
   ctx.clearRect(0,0,cv.width,cv.height);
   if(!petLines){return;}
   const rows=petLines.map(parseAnsi);
@@ -1261,7 +1317,7 @@ function draw(petLines){
     }
   }
   // dev：走動範圍。畫在最後 → 蓋在角色上面，被框住的是誰一眼看得出來。
-  if(view==='yard'&&showZones) drawZones(ctx);
+  if(!target&&view==='yard'&&showZones) drawZones(ctx);
 }
 // dev「走動範圍」：把每隻的可走範圍與定位點畫出來。純顯示，不影響任何計算。
 // 存在的理由是分區看不見 —— 角色為什麼不往那邊走，不畫出來只能用猜的。
@@ -1792,7 +1848,6 @@ async function pollPlaza(){
   if(!p.ok){ document.getElementById('err').textContent='⚠️ '+p.error; return; }
   plazaNoticeCheck(p.notice);
   if(!p.active){ setView('home'); return; }
-  document.getElementById('plazainfo').textContent='廣場 '+p.names.length+' 人　'+p.names.join('　');
   plazaMode=p.mode||'auto';
   document.getElementById('plazamode').textContent = plazaMode==='manual' ? '🎮 手動（WASD）' : '🚶 自動';
   // 名牌輸入框：沒在打字時才跟著伺服器的名字走，不然會把正在輸入的字蓋掉
@@ -1807,11 +1862,73 @@ async function pollPlaza(){
   document.getElementById('tick').textContent='#'+p.step;
   document.getElementById('err').textContent='';
   draw(p.lines);
+  lastPlazaTags=p.tags||[]; lastPlazaMe=p.me;
   drawNameTags(p.tags);
   drawBubbles(p.tags, p.chat, p.serverNow);
   renderChat(p.chat);
+  renderInvite(p.invite);
+  renderBattle(p.battle);
   syncWx();
 }
+// ── 對戰 ──
+// 點別人的 vpet → 選單「⚔ 邀請對戰」。命中判定用伺服器給的名牌資料（x = 中心、top～y = 身體）。
+let lastPlazaTags=[], lastPlazaMe=null;
+function plazaHit(ev){
+  const {dx,dy}=evDot(ev);
+  for(let i=lastPlazaTags.length-1;i>=0;i--){
+    const t=lastPlazaTags[i];
+    if(dx>=t.x-8&&dx<t.x+8&&dy>=t.top&&dy<t.y) return t;
+  }
+  return null;
+}
+function plazaClick(ev){
+  const t=plazaHit(ev);
+  if(!t||t.text===lastPlazaMe) return;
+  ev.stopPropagation();                       // 不然 document 的 click 會馬上把選單關掉
+  const el=document.getElementById('ctx');
+  el.innerHTML='';
+  const hd=document.createElement('div'); hd.className='hd'; hd.textContent=t.text; el.append(hd);
+  const b=document.createElement('button');
+  b.textContent=t.battling ? '⚔ 對戰中…' : '⚔ 邀請對戰';
+  b.disabled=!!t.battling;
+  b.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2)}).then(()=>poll()); });
+  el.append(b);
+  el.style.display='block';
+  el.style.left=Math.min(ev.clientX, innerWidth-el.offsetWidth-8)+'px';
+  el.style.top =Math.min(ev.clientY, innerHeight-el.offsetHeight-8)+'px';
+}
+document.getElementById('pet').addEventListener('click',ev=>{ if(view==='plaza') plazaClick(ev); });
+// 邀請列：別人邀我 → 接受／拒絕；我邀別人 → 等回覆。內容沒變就不重建（不然按鈕每 250ms 換一顆，點不到）
+let inviteShown='';
+function renderInvite(inv){
+  const box=document.getElementById('plazainvite');
+  const key=inv ? inv.kind+'|'+(inv.inviteId||'')+'|'+inv.name : '';
+  if(!inv){ box.style.display='none'; inviteShown=''; return; }
+  box.style.display='block';
+  if(key!==inviteShown){
+    inviteShown=key; box.textContent='';
+    const msg=document.createElement('span'); msg.id='invitemsg'; box.append(msg);
+    if(inv.kind==='in'){
+      const yes=document.createElement('button'); yes.textContent='⚔ 接受';
+      const no=document.createElement('button'); no.textContent='拒絕';
+      yes.addEventListener('click',()=>sendCmd('plazaAnswer',{inviteId:inv.inviteId,accept:'1'}).then(()=>poll()));
+      no.addEventListener('click',()=>sendCmd('plazaAnswer',{inviteId:inv.inviteId,accept:'0'}).then(()=>poll()));
+      box.append(yes,no);
+    }
+  }
+  document.getElementById('invitemsg').textContent = inv.kind==='in'
+    ? inv.name+' 邀請你對戰（'+inv.secs+' 秒）'
+    : '已邀請 '+inv.name+' 對戰，等待回覆…（'+inv.secs+' 秒）';
+}
+// 我的對戰演出：前線的戰鬥畫面，用前線的格子大小（8px）畫在疊層上，廣場在後面照常進行
+function renderBattle(b){
+  const box=document.getElementById('battlebox');
+  if(!b||!b.lines){ box.style.display='none'; return; }
+  box.style.display='flex';
+  const cw=CW, ch=CH; CW=HOME_CW; CH=HOME_CH;
+  try{ draw(b.lines, document.getElementById('battlecv')); } finally { CW=cw; CH=ch; }
+}
+
 // ── 聊天室 ──
 // 只有最後一則變了才重畫（每 250ms 重建一次會把使用者正在選取的文字洗掉）。
 // 原本就捲在最底下才跟著捲到底；往上翻舊訊息時不要被拉回去。
@@ -1896,6 +2013,11 @@ function drawNameTags(tags){
     const y=Math.min(cv.height-13, t.y*DH);
     g.strokeText(t.text,x,y);
     g.fillStyle=t.color; g.fillText(t.text,x,y);
+    // 對戰中：頭上 ⚔（旁觀的人才知道那兩隻為什麼停住）
+    if(t.battling){
+      const bx=t.x*DW, by=Math.max(2,t.top*DH-16);
+      g.strokeText('⚔',bx,by); g.fillStyle='#f0883e'; g.fillText('⚔',bx,by);
+    }
     // 手動模式放太久睡著了：頭上冒 z（跟家裡睡覺的 Zzz 同一個意思）
     if(t.sleeping){
       const zx=t.x*DW+10, zy=Math.max(2,t.top*DH-12);
@@ -1986,7 +2108,7 @@ async function sendCmd(action,args){
     const MOOD={happy:'摸摸 ♥',wake:'把牠叫醒了',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
-    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat');
+    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat'||action==='plazaAnswer');
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -2377,6 +2499,7 @@ const server = http.createServer((req, res) => {
                 const list = plazaClient.roster();
                 const occ = list.map(m => ({
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
+                    battle: !!m.battle,
                 }));
                 const step = plazaClient.step();
                 // 場地與畫法比照營地（69x54 細格、角色 16 細格），原住民先不放。
@@ -2385,7 +2508,18 @@ const server = http.createServer((req, res) => {
                     { caches: plazaCaches, me: me.name, nowMs: Date.now() + plazaClient.skew() });
                 const mine = list.find(m => m.id === me.id);
                 body = { ok: true, active: true, step, me: me.name, notice: plazaNotice,
-                         mode: mine && mine.walk && mine.walk.mode === 'manual' ? 'manual' : 'auto',
+                         mode: mine && mine.mode === 'manual' ? 'manual' : 'auto',
+                         // 對戰邀請：別人邀我（要回覆）／我邀別人（等回覆）
+                         invite: (() => {
+                             const inc = plazaClient.incoming(), out = plazaClient.outgoing();
+                             const left = (e) => Math.max(0, Math.round((e - (Date.now() + plazaClient.skew())) / 1000));
+                             if (inc) return { kind: 'in', inviteId: inc.inviteId, name: inc.fromName, secs: left(inc.expiresAt) };
+                             if (out) return { kind: 'out', name: out.toName, secs: left(out.expiresAt) };
+                             return null;
+                         })(),
+                         // 我的對戰演出（前線的戰鬥畫面，頁面疊在廣場上）
+                         battle: plazaBattle && latest.kind === 'battle'
+                             ? { lines: latest.petLines, opp: plazaBattle.opp.name } : null,
                          cols: plaza.PLAZA_RENDER.w, rows: plaza.PLAZA_RENDER.h / 2,
                          myColor: me.color || null,
                          // 天氣比照營地：用這台 daemon 抓到的（內網大家在同一個城市，各抓各的一樣）

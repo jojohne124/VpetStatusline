@@ -89,7 +89,7 @@ console.log('— 來源解析 —');
 
     const w = SRC.view(raw, cfg);
     ok(w.sky === WX.SKY.RAIN && w.cold === true, '原始觀測應判定成雨＋寒流');
-    eq(w.city, '台北', '城市應沿用設定');
+    eq(w.city, SRC.DEFAULTS.city, '城市應沿用設定');
 
     // 回應形狀跑掉（API 改版、被 proxy 換成錯誤頁）也不能 throw
     ok(SRC.view(SRC.parse({}), cfg).sky === WX.SKY.CLEAR, '空回應應退回晴天');
@@ -136,7 +136,7 @@ console.log('— 離線行為 —');
     eq(src.get(), w, '關掉連線時 get() 的內容不該變動');
     ok(src.raw().at === 0, '關掉連線時不該有任何抓取發生');
     eq(src.cfg.city, '離線', 'weather.json 應覆寫預設值');
-    ok(SRC.loadConfig(fsp.join(dir, 'nope')).city === '台北', '沒有設定檔應退回台北');
+    ok(SRC.loadConfig(fsp.join(dir, 'nope')).city === '五股', '沒有設定檔應退回五股（預設地點）');
     fs.rmSync(dir, { recursive: true, force: true });
 }
 

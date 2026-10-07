@@ -130,6 +130,17 @@ console.log('— 廣場畫面 —');
             { key: 'b', code: 'BB', char: 'agumon', seed: 2, joinStep: 0, origin: { x: 10, y: 9, facing: 'left' } },
         ], 0, {});
         ok(!hide.tags.some(t => t.text === 'AA'), '被前排擋住的名牌還是畫出來了');
+        // 部分重疊：後排 AA 的名牌還在，但前排 BB 的身體蓋住的 dot，owner 記的是 BB（z 較大）——
+        // 前端靠這個把 AA 名牌被蓋住的那段挖掉
+        const part = P.composePlazaLive(core, [
+            { key: 'a', code: 'AA', char: 'agumon', seed: 1, joinStep: 0, origin: { x: 10, y: 10, facing: 'left' } },
+            { key: 'b', code: 'BB', char: 'agumon', seed: 2, joinStep: 0, origin: { x: 18, y: 14, facing: 'left' } },
+        ], 0, {});
+        const ta = part.tags.find(t => t.text === 'AA'), tb = part.tags.find(t => t.text === 'BB');
+        ok(ta && tb && tb.z > ta.z, '前排（y 大）的 z 沒有比較大');
+        const footRow = part.owner[ta.y] || [];
+        ok(footRow.some((z, x) => z === tb.z && Math.abs(x - ta.x) < 10),
+           'AA 名牌那一列，owner 沒記到 BB 的身體（前端挖不掉被擋的部分）');
         ok(out.lines.length === R.h / 2, `廣場列數 ${out.lines.length}，應為 ${R.h / 2}`);
         ok(out.placed.length === 2, `場上應該只有 2 隻（原住民要藏起來），實際 ${out.placed.length}`);
         const codes = new Set([...out.labels.values()].flat().map(l => l.code));

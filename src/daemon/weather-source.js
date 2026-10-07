@@ -4,14 +4,14 @@
  *
  * ⚠️ 這是 daemon **第一個對外的連線**（在此之前只有 localhost）。所以規則寫死：
  *   1. 只打 Open-Meteo 一個網址，免 API key、免註冊、不需要帳號。
- *   2. **不做 IP 定位。** 座標寫在設定檔，預設台北。為了猜位置而把 IP 送去第三方，
+ *   2. **不做 IP 定位。** 座標寫在設定檔，預設五股。為了猜位置而把 IP 送去第三方，
  *      為了一個天氣效果不值得。
  *   3. 抓不到就沉默退回晴天。天氣是裝飾，絕不能因為公司擋 proxy 或斷網就讓營地開不起來。
  *   4. 30 分鐘才抓一次，而且是背景抓 —— /yard 這條路徑永遠不等網路。
  *
  * 設定檔：<INSTALL_ROOT>/weather.json
- *   { "lat": 25.038, "lon": 121.565, "city": "台北", "coldBelowC": 12, "enabled": true }
- * 檔案不存在就用預設值（台北）；"enabled": false 可以整個關掉連線。
+ *   { "lat": 25.083, "lon": 121.438, "city": "五股", "coldBelowC": 12, "enabled": true }
+ * 檔案不存在就用預設值（五股）；"enabled": false 可以整個關掉連線。
  */
 const fs   = require('fs');
 const path = require('path');
@@ -21,7 +21,8 @@ const REFRESH_MS = 30 * 60 * 1000;   // 30 分鐘。天氣不會每分鐘變，�
 const TIMEOUT_MS = 5000;
 const RETRY_MS   = 5 * 60 * 1000;    // 失敗後多久才重試（不要一直重打）
 
-const DEFAULTS = { lat: 25.038, lon: 121.565, city: '台北', coldBelowC: WX.COLD_C, enabled: true };
+// 預設五股（2026-10-07 由台北改）：營地與廣場預設都看這裡的天氣，同事之間看到的一樣
+const DEFAULTS = { lat: 25.083, lon: 121.438, city: '五股', coldBelowC: WX.COLD_C, enabled: true };
 
 function loadConfig(installRoot) {
     const f = path.join(installRoot, 'weather.json');

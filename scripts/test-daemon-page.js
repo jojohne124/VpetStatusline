@@ -84,7 +84,7 @@ function renderProbe(js, html, daemonSrc) {
         value: '', textContent: '', innerHTML: '',
         getContext: () => ctx2d(),
         getBoundingClientRect: () => ({ left: 0, top: 0, width: 416, height: 320 }),
-        addEventListener() {}, appendChild() {}, querySelectorAll: () => [],
+        addEventListener() {}, appendChild() {}, append() {}, contains: () => false, querySelectorAll: () => [],
     });
     let raf = null;
     const g = {
@@ -870,6 +870,10 @@ setTimeout(async () => {
                 ok(/small\s*=\s*\(v==='yard'\s*\|\|\s*v==='plaza'\)/.test(js),
                    '廣場畫面沒有用營地那套小一號的格子（前端 CW/CH）');
                 ok(p1.names.length === 1, '廣場上出現了不是玩家的東西：' + p1.names.join(','));
+                // 名牌要跟角色有一樣的前後關係：/plaza 帶「每個 dot 是誰畫的」，名牌帶 z
+                ok(Array.isArray(p1.owner) && p1.owner.length === p1.rows * 2 && p1.owner.every(r => r.length === p1.cols),
+                   '/plaza 沒帶 owner（名牌不知道哪裡被前面的角色擋住）');
+                ok(p1.tags.every(t => typeof t.z === 'number'), '名牌沒有 z（不知道誰在前面）');
 
                 // 名牌隨時可改：網頁改（走 CLI 存檔再同步）、終端機 vpet code 改（daemon 自己發現）
                 const rn = await cmd('plazaRename', { name: '改名員' });
@@ -891,7 +895,7 @@ setTimeout(async () => {
                     colored = (JSON.parse(await getOn(P4, '/plaza')).tags || []).some(t => t.color === '#12ab34');
                     if (!colored) await wait(400);
                 }
-                ok(/function drawNameTags/.test(js) && /drawNameTags\(p\.tags\)/.test(js), '前端沒有畫名牌');
+                ok(/function drawNameTags/.test(js) && /drawNameTags\(p\.tags, p\.owner\)/.test(js), '前端沒有畫名牌');
                 // 自動／手動（WASD）
                 ok((await cmd('plazaMode', { mode: 'manual' })).ok, '切手動失敗');
                 ok(JSON.parse(await getOn(P4, '/plaza')).mode === 'manual', '/plaza 沒說現在是手動（按鈕文字跟 WASD 都會不對）');
@@ -915,6 +919,8 @@ setTimeout(async () => {
                 ok(got && typeof got.serverNow === 'number' && got.tags.every(t => typeof t.key === 'string'),
                    '/plaza 缺 serverNow 或名牌沒有 key（對話泡泡對不上是誰說的）');
                 ok(/id="chatlog"/.test(html) && /id="chatin"/.test(html), '頁面沒有聊天框');
+                ok(/id="chatemoji"/.test(html) && /id="emojipick"/.test(html) && js.includes('const EMOJIS=['), '聊天室沒有表情符號面板');
+                ok(js.includes('ci.value.slice(0,a)+e+ci.value.slice(z)'), '表情符號不是插在游標位置');
                 ok(/function drawBubbles/.test(js) && /drawBubbles\(p\.tags, p\.chat, p\.serverNow\)/.test(js), '沒有畫對話泡泡');
                 ok(/document\.createTextNode\('：'\+m\.text\)/.test(js), '聊天內容不是用純文字放進頁面（別人打的字會被當成 HTML）');
 
@@ -940,6 +946,12 @@ setTimeout(async () => {
                     ok(shown && Array.isArray(shown.battle.lines) && shown.battle.lines.length > 0 && shown.battle.opp === '對手',
                        '接受之後沒有開演前線的戰鬥（/plaza 沒帶演出畫面）');
                     ok(shown && shown.tags.every(t => t.battling), '對戰中的兩隻頭上沒有 ⚔ 的資料');
+                    // 名字不塞在 8px 的格子裡（細長、置中會偏）：演出畫面去掉 core 的名牌列，名字另外送、前端置中畫
+                    ok(shown && shown.battle.lines.length === 8, '對戰演出還帶著 core 的名牌列（' + (shown && shown.battle.lines.length) + ' 列）');
+                    const bn = shown && shown.battle.names;
+                    ok(bn && bn.length === 2 && bn[0].col === 8 && bn[1].col === 44 && bn[1].text === '對手',
+                       '對戰的名字沒有對準兩隻角色的中心：' + JSON.stringify(bn));
+                    ok(/drawTagText\(g, n\.text, n\.col\*HOME_CW/.test(js), '對戰的名字沒有用正常字型畫');
                     ok(/function renderBattle/.test(js) && /id="battlebox"/.test(html), '頁面沒有對戰的疊層');
                     // 演完（約 15 秒）
                     let done = false;

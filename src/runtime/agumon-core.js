@@ -10,7 +10,16 @@ const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
 const ANCHOR_GAP  = 4;
-const STEP_MS     = 1000;
+// 一拍多長 —— 整個 vpet 的**節奏參數**。所有表演（走路、戰鬥 19 拍、進化 12 拍、卡片、
+// 空降、表情…）都用「拍」定義，改這個數字就是整體加快或放慢，各表演的相對節奏不變。
+//
+// 以前是 1000，那是遷就 Claude Code statusLine.refreshInterval（最快 1 秒）的妥協，
+// 實際看起來太慢。現在跟營地（shared/plaza-walk.js）同步成 750。
+// ⚠️ 只有這一份：statusline 與 daemon 都從這裡讀（不要在別處另寫一個 1000）。
+//    兩邊的 step 對不上，進化 commit 與 decideAgumon 會對「表演播到第幾拍」各說各話。
+// statusline 仍然一秒才刷新一次：那邊的表演每次 render 最多前進一拍（frame throttle），
+// 拍子比刷新快的結果是 statusline 版播得比較慢，但每一幀都會播到，不會跳。
+const STEP_MS     = 750;
 const BATTLE_DELAY_MS = 5000;   // prompt 後思考超過這秒數 → 自動觸發戰鬥（取代無效的 thinking 字串偵測）
 const IDLE_MS     = 600000;
 // 自然 idle 睡（不含 vpet sleep 的強制睡）。抽成函式是因為 daemon 也要問同一件事 ——
@@ -1119,7 +1128,7 @@ function decideEvoFrame(elapsed, oldF, newF, pos) {
 // ── 狀態卡（Card）─────────────────────────────────────────────────
 // 5 拍：elapsed 0 = fade-in dim，1-3 = 全亮，4 = fade-out dim，>=5 隱藏
 const CARD_LENGTH = 5;
-const TREE_LENGTH = 6;   // 進化歷程顯示拍數（約 6 秒）：0 fade-in、1-4 全亮、5 fade-out
+const TREE_LENGTH = 6;   // 進化歷程顯示拍數（6 拍 × STEP_MS）：0 fade-in、1-4 全亮、5 fade-out
 const CARD_SCENE_WIDTH = 52;  // 對齊 BATTLE_SCENE_WIDTH，足以蓋住整個走路範圍
 
 // ── 戰鬥（Battle）─────────────────────────────────────────────────
@@ -1684,7 +1693,7 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
     }
 
     // ── Battle 表演（高優先級；但 ROAR 在它前面播完才啟動）─────────
-    // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS 750ms
+    // Frame throttle: 每次 render 最多前進 1 拍。Claude refresh 1s vs STEP_MS（750ms）
     // 取樣 aliasing 會跳幀；shownElapsed 保證每拍都被渲染（代價：render 稀疏時 wallclock 拉長）。
     if (allowBattle) {
         const useCutIn = st.battleVersion === 2;
@@ -2493,6 +2502,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 }
 
 module.exports = {
+    STEP_MS,   // 節奏參數：statusline 與 daemon 都讀這一份
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     IDLE_MS, isIdleSleeping,
     ANCHOR_GAP,

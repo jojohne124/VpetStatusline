@@ -787,6 +787,28 @@ console.log('— dot/cell 轉換 —');
     ok(JSON.stringify(back) === JSON.stringify(rows), 'cell → dot → cell 來回不等於原值');
 }
 
+console.log('— 節奏參數（一拍多長）—');
+{
+    // 一拍是整個 vpet 的節奏參數，只定義在 core 一處。以前 1000ms 是遷就 statusline
+    // 刷新的妥協；現在家裡與營地刻意同步成 750ms。
+    if (!core) { skip++; console.log('  ⚠ 沒有 core，節奏那幾條跳過'); }
+    else {
+        ok(core.STEP_MS === 750,
+           `core 的 STEP_MS 是 ${core.STEP_MS}（應為 750）—— undefined 的話是安裝版 core 太舊，先 npm run install-runtime`);
+        ok(core.STEP_MS === W.STEP_MS,
+           `家裡（${core.STEP_MS}）與營地（${W.STEP_MS}）的拍子不同步 —— 真要分開的話把這條一起改掉`);
+    }
+    // 不能有第二份：statusline 與 daemon 都要讀 core 那一份。另寫一個數字的話，兩邊的 step
+    // 對不上，進化 commit 與 decideAgumon 會對「表演播到第幾拍」各說各話。
+    const fs = require('fs'), path = require('path');
+    const rd = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+    const sl = rd('src/runtime/statusline-agumon-color.js'), dm = rd('src/daemon/daemon.js');
+    ok(!/const\s+STEP_MS\s*=\s*\d/.test(sl) && /STEP_MS,[\s\S]*?\}\s*=\s*require\('\.\/agumon-core'\)/.test(sl),
+       'statusline 自己寫死了 STEP_MS（應從 core 取）');
+    ok(/const STEP_MS\s*=\s*core\.STEP_MS/.test(dm) && !/const\s+STEP_MS\s*=\s*\d/.test(dm),
+       'daemon 自己寫死了 STEP_MS（應從 core 取）');
+}
+
 console.log('— 營地畫小一號（走路照舊、只換畫的格子）—');
 {
     const R = P.YARD_RENDER, F = W.YARD_FIELD, S = W.SPRITE;

@@ -57,14 +57,16 @@ console.log('— 摸摸與不爽 —');
 }
 
 // ── 3. 戰鬥表演結束歸零（同時確認勝率照常計入）───────────────────────
-// decideAgumon 由 now 自行算 step（STEP_MS=1000），所以要餵遞增的 now。
+// decideAgumon 由 now 自行算 step（用 core 的 STEP_MS），所以要餵遞增的 now。
 console.log('— 戰鬥結束歸零 —');
 {
     let charDef = null;
     try { charDef = core.loadCharacter('greymon').charDef; } catch (e) {}
     if (!charDef) { skip++; console.log('  – 讀不到資產，跳過'); }
     else {
-        const STEP_MS = 1000;
+        // 讀 core 自己那份：寫死的話，節奏參數一改，這裡每次跳的就不是剛好一拍
+        // （舊的安裝版 core 沒有這個 export，那時就是 1000）
+        const STEP_MS = core.STEP_MS || 1000;
         const step0 = Math.floor(Date.now() / STEP_MS);
         const st = { characterId: 'greymon', mood: 1, battleStartStep: step0,
                      battleEnemy: 'kabuterimon', battleWin: true,

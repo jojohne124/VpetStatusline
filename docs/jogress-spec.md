@@ -1,6 +1,8 @@
 # 合體進化（Jogress）規格書 — 第一期
 
-> 狀態：**未動工**（這份是規格）。對應討論：2026-09-07。
+> 狀態：**第 1、2 期已實作**（引擎＋CLI＋可達性＋daemon 按鈕；測試在 `scripts/test-jogress.js`、
+> `scripts/test-daemon-page.js`）。第 3 期（專屬動畫）未動工。
+> 對應討論：2026-09-07；實作時對規格的修正見文末〈實作時的修正〉。
 > 關聯：[營地規格書](ranch-spec.md) —— 配對的另一方來自營地，提交也沿用 `applyRanchOp`。
 > 命名：識別碼一律 `jogress`（ジョグレス）。顯示文字用「合體進化」。
 
@@ -48,8 +50,9 @@ jogress 是「**前線**變、營地那隻消失」，方向相反；混在一�
 ⚠️ **對稱組一定要用 `pair` 簡寫**，不要手寫兩筆。這個 repo 已經因為「同樣的東西存兩份」
 漏改過一次（進化 commit 兩份，害相位重對齊漏了一邊）。兩筆並存時總有一天只改一筆。
 
-⚠️ 同一組 `(front, camp)` 只能出現一次。載入時偵測重複並 `log()` 指出是哪一組，
-取先出現的那筆 —— 靜靜地用後蓋前會讓「改了沒生效」變成無頭案件。
+⚠️ 同一組 `(front, camp)` 只能出現一次。載入時偵測重複、取先出現的那筆 ——
+靜靜地用後蓋前會讓「改了沒生效」變成無頭案件。重複清單由載入函式**回傳**，
+由 `vpet jogress` 印出來（core 不能印，見〈實作時的修正〉）。
 
 ## 引擎（`agumon-core.js`）
 
@@ -86,9 +89,8 @@ force.ranchTriggerTs = Date.now()
 1. 從 `ranch.pets` 移除那一筆 → `saveRanch`
 2. 現役走**正常進化**路徑（設與 `force.evolveTarget` 相同的內部旗標）→ 動畫照播
 3. `recordAlbumChar(to)`
-4. `evoHistory` 接上 `to` —— 同 `applySpecialEvo` 的理由，不接的話 `updateEvoHistory`
-   會判定血緣斷點、把 `vpet tree` 的格數清成一顆
-5. 記一筆 `jogressFrom = { char, ranchId, at }`。**預設要記**：卡片／右鍵日後能講
+4. ~~`evoHistory` 接上 `to`~~ → 改成 `updateEvoHistory` 認得合體（見〈實作時的修正〉）
+5. 記一筆 `jogressFrom = { front, camp, ranchId, to, at }`。**預設要記**：卡片／右鍵日後能講
    「由 Angewomon ＋ LadyDevimon 而來」，不留的話玩家過幾天只會覺得那隻不見了
 
 失敗回傳（訊息都要能讓人自己修正，不要只說失敗）：
@@ -172,8 +174,8 @@ force.ranchTriggerTs = Date.now()
 
 | 階段 | 內容 |
 |---|---|
-| 1 | `characters/jogress.json` ＋ 引擎 ＋ CLI ＋ 測試 |
-| 2 | daemon 醒目按鈕 ＋ 確認文案 ＋ `/state` |
+| 1 ✅ | `characters/jogress.json` ＋ 引擎 ＋ CLI ＋ 測試 ＋ 可達性（圖鑑／路線編輯器） |
+| 2 ✅ | daemon 醒目按鈕 ＋ 確認文案 ＋ `/state`／`/yard` 的候選 ＋ 多組時的下拉 |
 | 3 | 專屬動畫（兩隻同時入鏡 → shared sprite 要加新幀） |
 
 ## 部署清單（漏了會**靜靜**失效）
@@ -183,3 +185,76 @@ force.ranchTriggerTs = Date.now()
 - 兩處任一漏掉的症狀都一樣：規則讀不到 → 候選永遠是空的 → **按鈕永遠不出現，零錯誤訊息**。
   `scripts/test-release-build.js` 會從 install.js 反推出貨清單，漏第二處會被抓到；
   漏第一處要靠 `test-doctor.js` 那類接線檢查補一條。
+
+## 實作時的修正（第 1 期）
+
+規格照寫會出錯、實作時改掉的地方。
+
+### 1. 營地那隻刪了、進化卻沒發生（最嚴重）
+
+規格的流程是「刪營地那隻 → 走正常進化路徑」。但正常進化要等動畫播完才 commit，
+而動畫有逾時保護：statusline 模式下沒人操作二十幾秒就逾時，`onExpired` 清掉
+`evoNextCharId`，進化不會發生。結果是**營地少一隻、前線沒變 —— 一隻寵物憑空消失**。
+
+改法：合體時多記一個持久的 `st.jogressTo`。`settleJogress` 每拍在 `applyForceFlags`
+最前面跑：沒有進化在播、也沒有排著要播，角色卻還不是 `jogressTo` → 直接落地
+（同正常 commit 的清理）。正常播完的情況只是把記號收掉。
+
+它排在 `applyForceFlags` **最前面**有兩個理由：force 檔不存在時那個函式會提早
+return（同營地老化）；同一拍若有 keep/swap，得先讓合體落地，否則收進營地的會是
+一隻「欠著一次進化」的快照。
+
+### 2. 提早寫 evoHistory 會被洗掉
+
+規格寫「`evoHistory` 接上 `to`」。但動畫 12 拍才 commit，這段期間現役還是 front，
+下一拍 `updateEvoHistory` 看到尾巴（to）≠ 現役（front）就判成斷點、整條重設。
+改成讓 `updateEvoHistory` 認得 `isJogressStep(上一隻, 這一隻)`，什麼都不提早寫。
+
+### 3. 「拿在手上」要擋兩次
+
+拿著的狀態只存在 daemon 記憶體（`yard-touch.js` 的 `heldIds()`），由 daemon 經
+`applyForceFlags(…, { heldIds })` 傳進 core。列候選時擋一次還不夠：CLI 看不到拿著，
+使用者也可能按下合體**之後**才去抓那隻 —— `applyRanchOp` 執行那一刻再擋一次
+（`reason: 'held'`）。statusline 當家時沒有「拿著」這回事，這條自然不成立。
+
+### 4. 凍結要看 force，不是 st
+
+`st._freezeEvolve` 在 `applyForceFlags` 裡比 `applyRanchOp` **晚**才從 force 重讀，
+這一拍拿到的是上一拍的值。所以 `applyRanchOp` 直接看 `force.freezeEvolve`。
+
+### 5. 營地寫入失敗就不能進化
+
+`saveRanch` 回 false 時回 `reason: 'writefail'`、不排進化。否則營地那隻還在、前線又
+變了，等於憑空多出一隻。
+
+### 6. core 不能 `log()`
+
+core 跑在 statusline 裡，stdout 就是狀態列本身，印一行就插進狀態列。組合表的展開
+（含重複偵測）放在 `shared/evo-rules.js` 的 `expandJogress`，重複清單用回傳的，
+由 CLI 印。圖鑑、路線編輯器也用同一個函式，三邊不會分叉。
+
+### 7. 順手修掉的既有問題：daemon 第一拍一律失敗
+
+daemon 的第一次 `doTick()` 是同步呼叫的，比檔案後段的 `const`（`BASE_COLS` 等）早，
+當家模式的第一拍一律撞 TDZ。`doTick` 有 try/catch 所以沒人發現 —— 但失敗點在
+`applyForceFlags` 之後、存檔之前：營地寫了、state 沒寫。啟動那一秒若剛好有
+**swap** 或合體排著，被換進來／被消耗的那隻就遺失了（swap 是既有的洞，不是合體才有）。
+改成 `setImmediate(doTick)`。
+
+### 規格沒寫、實作補上的失敗 reason
+
+| reason | 情況 |
+|---|---|
+| `held` | 那隻正被 daemon 長壓拿在手上 |
+| `writefail` | 營地寫不進去（不進化） |
+
+## 實作時的決定（第 2 期）
+
+- **候選看 `color-state.json`，跟 CLI 同一份。** 隔離模式下 daemon 自己的 `daemon-state.json`
+  只是顯示用的分身，拿它算會出現「按鈕亮著，按下去 CLI 說不成立」。
+- **按鈕只在前線，不是規格寫的 `scope: 'both'`。** 進化演出在前線，在營地按下去只會看到營地少一隻，
+  牠變身的那一刻看不到（使用者定案）。所以 `/yard` 不帶候選，也不需要「送出後切回前線」。
+- **沒有候選時整顆不出現，不是灰掉。** 灰掉的鈕會讓人一直想點點看為什麼。
+- **測試不送 `/cmd jogress`。** 那會 spawn CLI，而 CLI 的 state／force 路徑寫死在安裝目錄、
+  不吃 `AGUMON_STATE_DIR`，會讀寫使用者真正的存檔。候選清單用當家 daemon＋暫存目錄驗，
+  執行流程第 1 期的端對端已驗過。

@@ -120,6 +120,13 @@ function loadSpecialRules() {
     } catch (e) { return []; }
 }
 
+// 合體進化組合（展開過的 [{front, camp, to}]）。編輯器**不畫**這種邊 —— 來源是兩隻，
+// 畫上去圖就不是樹了 —— 但「可取得」要把它算進來，否則只能合體拿到的角色永遠被歸到不可取得。
+function loadJogressPairs() {
+    try { return RULES.expandJogress(JSON.parse(fs.readFileSync(path.join(CHARS_ROOT, 'jogress.json'), 'utf8'))).pairs; }
+    catch (e) { return []; }
+}
+
 // ── 建圖：給前端 ───────────────────────────────────────────────────────────
 function buildGraph() {
     const cfgs = loadConfigs();
@@ -168,7 +175,8 @@ function buildGraph() {
             });
         }
     }
-    return { nodes, edges, tagOrder: loadTagOrder(), specialRules: loadSpecialRules() };
+    return { nodes, edges, tagOrder: loadTagOrder(), specialRules: loadSpecialRules(),
+             jogress: loadJogressPairs() };
 }
 
 // ── 驗證：補建議 pct + 死路 ─────────────────────────────────────────────────

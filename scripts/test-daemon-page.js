@@ -60,7 +60,7 @@ const done = (code) => { try { child.kill(); } catch (e) {} process.exit(code); 
 // 讀到 undefined 丟例外，而例外發生在雲畫完之後，「雷雨」看起來就跟陰天一模一樣。
 //
 // 所以這裡把頁面的 script 真的跑起來，用假的 canvas 記錄畫了什麼。
-function renderProbe(js) {
+function renderProbe(js, html, daemonSrc) {
     const vm = require('vm');
     const calls = [];
     const args = [];
@@ -103,9 +103,12 @@ function renderProbe(js) {
     const epilogue = ';globalThis.__p={sky:(s,c,n)=>{wxState.sky=s;wxState.cold=!!c;wxState.night=!!n;wxParts=null;},'
                    + 'view:(v)=>{view=v;},'
                    // 拎起／放下的上下位移在 drag 這個模組層變數裡，從外面碰不到 -> 開個把手
-                   + 'hold:(d)=>{drag=d;},lift:()=>liftNow(),'
+                   + 'hold:(d)=>{drag=d;},lift:()=>liftNow(),handoff:(y)=>dragHandoff(y),getDrag:()=>drag,'
                    + 'failMsg:(r,a)=>failMsg(r,a),'
-                   + 'ranchFull:()=>ranchFull(),'
+                   + 'ranchFull:()=>ranchFull(),yardBlocked:()=>yardBlocked(),'
+                   + 'dot:{sv:(v)=>setView(v),cw:()=>CW,ch:()=>CH},'
+                   + 'jg:{sync:(j)=>syncJogress(j),opts:()=>jgOptions(),picked:()=>jgPicked(),'
+                   +     'text:(o)=>jogressConfirmText(o),when:WHEN,apply:()=>applyWhen()},'
                    + 'setYard:(y)=>{lastYard=y;},setState:(x)=>{lastState=x;},'
                    // dev 走動範圍：把框真的畫一次，才驗得到幾何（框畫在哪、多大）
                    + 'drawZones:(z,ctx)=>{zoneBoxes=z;showZones=true;drawZones(ctx);},'
@@ -220,6 +223,55 @@ function renderProbe(js) {
     ok(Math.abs(top.shadow - start.shadow) < 0.001,
        `影子跟著身體一起浮起來了（${start.shadow} -> ${top.shadow}）—— 那只是整隻平移`);
 
+    // ── 交接：同一隻在畫面上永遠只畫一份（回報過「拎起／放下會閃爍」）──────
+    // 伺服器那張會略過拿著的那隻；前端手上另外畫一份。兩份都有 = 一瞬間兩隻，
+    // 兩份都沒有 = 一瞬間消失。換手要等伺服器的新畫面。
+    {
+        const HO = g.__p.handoff, GD = g.__p.getDrag;
+        ok(typeof HO === 'function' && typeof GD === 'function', 'dragHandoff 沒有露出來，這節等於沒測到');
+        if (typeof HO === 'function') {
+            // 拿起：伺服器那張裡牠還在地上 → 手上那份先別畫
+            const w = frameAt({ ...mkDrag('lift', 0), wait: true });
+            ok(w.body === null && w.shadow === null,
+               '伺服器的畫面裡牠還在地上，手上卻又畫了一份（一瞬間兩隻）');
+            // 起點故意給 5 秒前：等交接的期間時間照走，沒重設的話第一幀就已經浮到頂了
+            g.__p.hold({ ...mkDrag('lift', 5000), wait: true });
+            HO({ pets: [{ id: 'x' }] });
+            ok(GD() && GD().wait === true, '伺服器那張還有牠，就開始畫手上那份了');
+            HO({ pets: [{ id: 'other' }] });
+            ok(GD() && GD().wait === false, '伺服器那張已經沒有牠了，手上那份還不畫（會消失一下）');
+            ok(GD() && Date.now() - GD().t0 < 1000,
+               '開始畫的時候沒有重設浮起動畫的起點（第一幀就已經浮到半空，看起來像瞬移）');
+
+            // 放下：落地之後要繼續停在地上畫，直到伺服器那張把牠畫回來
+            const landed = { ...mkDrag('landed', 99999, 2.5) };
+            const lf = frameAt(landed);
+            ok(lf.body !== null, '落地之後就不畫了 —— 伺服器的畫面還沒畫回來，這段期間牠會消失');
+            // start = 剛拿起的第一幀（還沒開始浮）= 地面高度
+            ok(lf.body === start.body, `落地等交接的那份不在地面上（${lf.body} vs 地面 ${start.body}）`);
+            g.__p.hold(landed);
+            HO({ pets: [{ id: 'other' }] });
+            ok(GD() === landed, '伺服器那張還沒畫回來就收掉手上那份了（會消失一下）');
+            HO({ pets: [{ id: 'x' }] });
+            ok(GD() === null, '伺服器那張已經畫回來了，手上那份還沒收（一瞬間兩隻）');
+        }
+        // 換手要跟新畫面的 draw() 在同一個 task：dragHandoff 之後、draw(y.lines) 之前不能有 await
+        const py = (js.match(/async function pollYard\(\)\{[\s\S]*?\n\}/) || [''])[0];
+        // 找的是**呼叫**（帶大括號那句）—— dragHandoff 那行的註解裡就寫著 draw(y.lines)，
+        // 只找字串的話會找到註解，中間插什麼都測不到（驗過，是假綠）
+        const ih = py.indexOf('dragHandoff(y);'), idr = py.indexOf('{ draw(y.lines); }', ih);
+        // 去掉註解再看（那行的註解本身就寫著「中間不能有 await」）
+        ok(ih > 0 && idr > ih && !/\bawait\b/.test(py.slice(ih, idr).replace(/\/\/[^\n]*/g, '')),
+           'pollYard 的換手跟畫新畫面不在同一個 task 裡 —— 中間會有一幀兩邊對不上');
+        // 落地時不能直接收掉（舊版就是這樣閃的）
+        // 看「dropAt 之後、保險計時器之前」這一段：舊版就是在這裡 drag=null
+        const mu = (js.match(/d\.phase='landed';[\s\S]*?\}, FALL_MS\);/) || [''])[0];
+        const iDrop = mu.indexOf('dropAt(d.id,d.x,d.y)'), iSafe = mu.indexOf('setTimeout(', iDrop);
+        ok(iDrop > 0 && iSafe > iDrop && !/drag\s*=\s*null/.test(mu.slice(iDrop, iSafe)),
+           '落地的那一刻就把手上那份收掉了 —— 伺服器的畫面要兩趟來回才畫回來，中間會消失');
+        g.__p.hold(null);
+    }
+
     // ── dev 走動範圍：框要框住**身體**，不是只框左上角 ──────────────
     // 可走範圍講的是左上角能站到哪，框只畫那個範圍的話會縮在該區左上角，
     // 跟角色實際走的地方對不起來（回報過「實線都在左上，應是 bug」）。
@@ -263,6 +315,101 @@ function renderProbe(js) {
     // ── 營地滿了要在按下去之前就知道 ────────────────────────────────
     // 回報過「按收進營地先被問『確定嗎？』，按了確定才說營地已滿」。
     // 人數前端本來就有（院子分頁的 /yard、家裡分頁的 /state），只是以前沒拿來用。
+    // ── 進化表演中不能切去營地 ──────────────────────────────────────
+    console.log('— 進化中不能去營地 —');
+    {
+        const YB = g.__p.yardBlocked;
+        ok(typeof YB === 'function', 'yardBlocked 沒有露出來，這節等於沒測到');
+        if (typeof YB === 'function') {
+            g.__p.setState({ kind: 'evo' });
+            const why = YB();
+            ok(typeof why === 'string' && why.length > 0, '進化表演中切去營地沒有被擋下');
+            ok(/進化/.test(why || ''), '擋下來卻沒講是因為進化（使用者會以為按鈕壞了）：' + why);
+            // 其它時候不能誤擋 —— 走路、睡覺、戰鬥都照常能去
+            for (const k of ['single', 'sleep', 'battle', 'card', 'drop'])  {
+                g.__p.setState({ kind: k });
+                ok(YB() === null, `${k} 的時候也被擋了（只有進化該擋）`);
+            }
+            // 剛開頁面還沒拿到 /state：不知道就別擋
+            g.__p.setState(null);
+            ok(YB() === null, '還沒拿到 /state 就擋了 —— 剛開頁面會切不過去');
+        }
+        // 只擋「去營地」，不擋「回前線」：人在營地時才開始進化的話要能回來看
+        const toggle = (js.match(/if\(b\.dataset\.cmd==='yard'\)\{[\s\S]*?setView\(view==='yard'\?'home':'yard'\);/) || [''])[0];
+        ok(/if\(view!=='yard'\)\{[\s\S]*yardBlocked\(\)/.test(toggle),
+           '營地鈕的防呆沒有限定在「從前線出發」—— 人在營地時會被困住回不來');
+    }
+
+    // ── 合體進化的按鈕（第 2 期）──────────────────────────────────
+    console.log('— 合體進化按鈕 —');
+    {
+        const J = g.__p.jg;
+        ok(J && typeof J.sync === 'function', '合體的前端函式沒有露出來，這節等於沒測到');
+        if (J) {
+            const one = { id: 'lady1', num: 2, camp: 'ladydevimon', campName: 'LadyDevimon',
+                          to: 'mastemon', toName: 'Mastemon' };
+            const two = { ...one, id: 'lady2', num: 4 };
+            J.sync(null);
+            ok(J.when.jogress() === false, '沒有候選時按鈕卻要露臉');
+            J.sync({ frontName: 'Angewomon', options: [] });
+            ok(J.when.jogress() === false, '候選是空的時按鈕卻要露臉（應該整顆不出現，不是灰掉）');
+            J.sync({ frontName: 'Angewomon', options: [one] });
+            ok(J.when.jogress() === true, '有候選時按鈕沒有露臉');
+            ok(J.when.jogressMulti() === false, '只有一組時不需要下拉');
+            ok(J.picked() && J.picked().id === 'lady1', '只有一組時應該直接用它');
+            // 確認文案（規格決策 3）：哪一隻、救不回來、前線會變成誰
+            const t = J.text(one);
+            for (const [k, why] of [['#2', '營地編號'], ['LadyDevimon', '營地那隻是誰'], ['永久', '永久'],
+                                    ['救不回來', '救不回來'], ['Angewomon', '前線那隻是誰'], ['Mastemon', '會變成誰']])
+                ok(t.includes(k), `確認文案沒講${why}：${t}`);
+            ok(/前線/.test(t), '確認文案沒講清楚影響的是**前線**那隻（在營地畫面按的人會搞混）');
+            J.sync({ frontName: 'Angewomon', options: [one, two] });
+            ok(J.when.jogressMulti() === true, '營地有兩隻能合體時沒有下拉可選（只做第一組＝擲骰子）');
+
+            // applyWhen 真的有去藏／露（探針預設的 querySelectorAll 回空陣列，不換掉的話這裡永遠測不到）
+            const els = [
+                { dataset: { when: 'jogress', scope: 'both' }, style: {} },
+                { dataset: { when: 'jogressMulti', scope: 'both' }, style: {} },
+                { dataset: { when: 'jogress', scope: 'home' }, style: {} },   // 探針現在在 yard 畫面
+            ];
+            const qsa = g.document.querySelectorAll;
+            g.document.querySelectorAll = (sel) => sel === '[data-when]' ? els : [];
+            try {
+                J.sync({ frontName: 'Angewomon', options: [one] });
+                ok(els[0].style.display === '', '有候選時合體鈕沒有被露出來');
+                ok(els[1].style.display === 'none', '只有一組時下拉沒有被藏起來');
+                ok(els[2].style.display === 'none', '不屬於這個畫面的鈕被 data-when 露出來了（scope 被蓋掉）');
+                J.sync(null);
+                ok(els[0].style.display === 'none' && els[1].style.display === 'none', '沒有候選時沒有藏起來');
+            } finally { g.document.querySelectorAll = qsa; }
+            J.sync(null);
+        }
+        // setView 會把所有 [data-scope] 重設顯示 —— applyWhen 必須在它**之後**，不然切畫面時合體鈕會冒出來
+        {
+            const sv = (js.match(/function setView\(v\)\{[\s\S]*?\n\}/) || [''])[0];
+            const iScope = sv.indexOf("querySelectorAll('[data-scope]')"), iWhen = sv.indexOf('applyWhen()');
+            ok(iScope > 0 && iWhen > iScope, 'setView 沒有在重設 data-scope 之後套 applyWhen（切畫面時沒候選的合體鈕會冒出來）');
+        }
+        {
+        }
+        // 按鈕的定義與白名單
+        const btnDef = (daemonSrc.match(/\['jogress',[^\]]*\]/) || [''])[0];
+        ok(/when: 'jogress'/.test(btnDef) && /accent: true/.test(btnDef),
+           '合體鈕的定義不對（要 when/accent）：' + btnDef);
+        // 只在前線：進化演出在前線，在營地按只會看到營地少一隻，變身那一刻看不到
+        ok(/scope: 'home'/.test(btnDef), '合體鈕不是只在前線出現：' + btnDef);
+        ok(/id="jgsel"[^>]*data-scope="home"/.test(html), '選合體對象的下拉不是只在前線出現');
+        ok(!/dev: true/.test(btnDef), '合體鈕被標成 dev —— 它是玩家功能，release 會看不到');
+        const devOnly = (daemonSrc.match(/const DEV_ONLY\s*=\s*new Set\(\[([^\]]*)\]/) || [])[1] || '';
+        ok(devOnly && !/jogress/.test(devOnly), '合體被放進 DEV_ONLY —— release 版網頁按了會被伺服器擋掉');
+        ok(/jogress:\s*\(a\) => a\.which \? \['jogress', a\.which, 'yes'\] : null/.test(daemonSrc),
+           '/cmd 的白名單沒有合體（或沒補 yes —— CLI 會吊在等確認）');
+        const ib = html.indexOf('data-cmd="jogress"'), ic = html.indexOf('data-cmd="card"');
+        ok(ib > 0 && ic > 0 && ib < ic, '合體鈕沒有放在按鈕列最前面');
+        ok(/data-cmd="jogress"[^>]*data-when="jogress"/.test(html), '送出的頁面上合體鈕沒有 data-when（會一直露臉）');
+        ok(/id="jgsel"[^>]*data-when="jogressMulti"/.test(html), '頁面上沒有選合體對象的下拉');
+    }
+
     console.log('— 營地滿了先擋 —');
     const RF = g.__p.ranchFull;
     ok(typeof RF === 'function', 'ranchFull 沒有露出來，這節等於沒測到');
@@ -310,6 +457,21 @@ function renderProbe(js) {
         // 兩個都沒有才退回動作名 —— 這是舊版**唯一**會走到的分支
         ok(F({ ok: false }, 'keep') === '失敗：keep', '什麼都沒有時應該退回動作名');
         ok(F({ ok: false, output: '   ' }, 'keep') === '失敗：keep', '全空白的輸出應該視同沒有');
+    }
+
+    // ── 營地畫小一號 ────────────────────────────────────────────────
+    // ⚠️ 放在最後：setView 會改 view，前面那些測試依賴探針一開始設的 yard 畫面。
+    console.log('— 營地 dot 畫小一號 —');
+    {
+        const D = g.__p.dot;
+        ok(D && typeof D.sv === 'function', 'setView／CW 沒有露出來，這節等於沒測到');
+        if (D) {
+            D.sv('yard');
+            ok(D.cw() === 6 && D.ch() === 12, `營地的 dot 大小不對（要 6x12，得到 ${D.cw()}x${D.ch()}）`);
+            ok(D.ch() === 2 * D.cw(), '營地的 dot 不是正方形（CH 必須是 2×CW）');
+            D.sv('home');
+            ok(D.cw() === 8 && D.ch() === 16, `回前線之後 dot 大小沒換回來（得到 ${D.cw()}x${D.ch()}）—— 前線會跟著縮小`);
+        }
     }
 }
 
@@ -366,7 +528,7 @@ setTimeout(async () => {
         ok(!/IDLE_MS\s*=/.test(daemonSrc), 'daemon 自己定了一份 IDLE_MS（規則應該只有 core 一份）');
 
         console.log('— 前端實跑（天氣）—');
-        renderProbe(js);
+        renderProbe(js, html, daemonSrc);
 
         console.log('— 端點 —');
         const st = JSON.parse(await get('/state'));
@@ -376,6 +538,10 @@ setTimeout(async () => {
         ok(y.ok === true, '/yard 回應失敗');
         ok(typeof y.cols === 'number' && typeof y.rows === 'number',
            '/yard 沒有回傳場地尺寸（空營地時畫布會塌成家裡的大小）');
+        // 營地畫小一號：前端 6px 一格，場地實際大小要跟原本（52x40 x 8px）差不多 ——
+        // 要縮的是角色，不是場地
+        ok(Math.abs(y.cols * 6 - 416) <= 6 && Math.abs(y.rows * 12 - 320) <= 6,
+           `營地畫面的實際大小變了（${y.cols * 6}x${y.rows * 12}px，原本 416x320）`);
 
         console.log('— 日夜由伺服器說了算 —');
         {
@@ -536,6 +702,82 @@ setTimeout(async () => {
         ok(onlyCold.weather && onlyCold.weather.cold === true, '?w=cold 應保留真實天空並加上寒流');
         const rev = JSON.parse(await get('/yard?w=' + encodeURIComponent('cold+rain')));
         ok(rev.weather && rev.weather.sky === 'rain' && rev.weather.cold === true, '參數順序不該有影響');
+        console.log('— 合體候選（真的 daemon，暫存 state）—');
+        {
+            // 當家模式 + AGUMON_STATE_DIR：/state 的候選清單是從真的 core 算出來的，
+            // 拿在手上、凍結這兩條 gate 要在這裡才驗得到（只有 daemon 知道誰被拿著）。
+            // ⚠️ 這裡**絕對不送** /cmd jogress：那會 spawn CLI，而 CLI 的 state／force 路徑
+            //    寫死在安裝目錄，不吃 AGUMON_STATE_DIR —— 會去讀寫使用者真正的存檔。
+            const os = require('os'), fs2 = require('fs');
+            const dir = fs2.mkdtempSync(path.join(os.tmpdir(), 'vpet-jgui-'));
+            const W = (f, o) => fs2.writeFileSync(path.join(dir, f), JSON.stringify(o));
+            W('color-state.json', { characterId: 'angewomon', evoHistory: ['gatomon', 'angewomon'] });
+            W('ranch.json', { v: 1, pets: [
+                { id: 'other', keptAt: Date.now(), state: { characterId: 'agumon' } },
+                { id: 'lady1', keptAt: Date.now(), state: { characterId: 'ladydevimon' } }] });
+            const PORT3 = PORT + 2;
+            const kid = spawn(process.execPath,
+                [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--authoritative'],
+                { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT3), AGUMON_STATE_DIR: dir },
+                  stdio: 'ignore' });
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const jg = async () => (JSON.parse(await getOn(PORT3, '/state')).jogress) || null;
+            try {
+                let up = false;
+                for (let i = 0; i < 100 && !up; i++) {
+                    try { await getOn(PORT3, '/state'); up = true; } catch (e) { await sleep(100); }
+                }
+                ok(up, '第三個 daemon 起不來，這節等於沒測到');
+                if (up) {
+                    await sleep(1200);   // 等一拍：候選是 doTick 算的
+                    let j = await jg();
+                    // 安裝版 core 若還是舊的（沒有 jogressCandidates）會回 null —— 那是要先 install，不是頁面壞了
+                    ok(j && Array.isArray(j.options), '/state 沒有帶合體候選（安裝版 core 是舊的？先 npm run install-runtime）');
+                    if (j && Array.isArray(j.options)) {
+                        ok(j.options.length === 1 && j.options[0].id === 'lady1' && j.options[0].to === 'mastemon',
+                           '候選不對：' + JSON.stringify(j.options));
+                        const o = j.options[0] || {};
+                        ok(o.num === 2, `營地編號要跟 vpet camp 一致（第 2 隻），得到 ${o.num}`);
+                        ok(o.campName && o.toName && j.frontName, '候選缺顯示名（確認文案要用）：' + JSON.stringify(j));
+
+                        // 拿在手上 → 那隻不能是候選（否則畫面上被抓著的寵物會突然消失）
+                        const before = ((JSON.parse(await getOn(PORT3, '/yard')).pets) || []).find(q => q.id === 'lady1');
+                        const g = JSON.parse(await post(PORT3, '/cmd', { action: 'yardGrab', args: { which: 'lady1' } }));
+                        ok(g.ok === true, '抓不起來：' + (g.error || ''));
+                        // 拿起來的起點要是**畫出來**的位置 —— 前端從這裡開始跟著游標畫，
+                        // 給成走路格子的座標的話，一抓起來牠就往左上跳一截
+                        ok(before && Math.abs(g.x - before.x) <= 2 && Math.abs(g.y - before.y) <= 2,
+                           '拿起來的起點跟畫面上的位置對不上：grab ' + JSON.stringify({ x: g.x, y: g.y })
+                           + ' vs 畫面 ' + JSON.stringify(before && { x: before.x, y: before.y }));
+                        await sleep(1200);
+                        j = await jg();
+                        ok(j && j.options.length === 0, '正被拿在手上的那隻還在候選裡');
+                        await post(PORT3, '/cmd', { action: 'yardDrop', args: { which: 'lady1', x: '20', y: '10', facing: 'right' } });
+                        // 放在哪就要出現在哪（前端送的是畫出來的細格座標，伺服器要換回走路的格子）。
+                        // 換算錯的話放下去會「跳」到別處 —— 縮放比 4/3，差一點就是好幾格。
+                        {
+                            const yy = JSON.parse(await getOn(PORT3, '/yard'));
+                            const p = (yy.pets || []).find(q => q.id === 'lady1');
+                            ok(p && Math.abs(p.x - 20) <= 2 && Math.abs(p.y - 10) <= 2,
+                               '放下的位置跟畫出來的位置對不上：' + JSON.stringify(p && { x: p.x, y: p.y }) + '（放在 20,10）');
+                        }
+                        await sleep(1200);
+                        j = await jg();
+                        ok(j && j.options.length === 1, '放下之後沒有回到候選');
+
+                        // 凍結 → 沒有候選
+                        W('force-char.json', { freezeEvolve: true });
+                        await sleep(1200);
+                        j = await jg();
+                        ok(j && j.options.length === 0, '進化凍結中還列出合體候選');
+                    }
+                }
+            } finally {
+                try { kid.kill(); } catch (e) {}
+                try { fs2.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+            }
+        }
+
         console.log('— 留空的指定戰鬥不該沿用上次 —');
         {
             // force.json 是**累積**的。指定過一次敵人之後，「留空＝隨機」若只寫

@@ -226,7 +226,8 @@ function obtainableSet() {
   const nodes = G.nodes.filter(n => im.has(n.id)).map(n => ({ id: n.id, stage: n.stage }));
   const edges = G.edges.filter(e => im.has(e.from) && im.has(e.to));
   const starters = G.nodes.filter(n => n.starter && im.has(n.id)).map(n => n.id);
-  return EVO_RULES.reachableFrom({ nodes, edges }, starters, G.specialRules || []);
+  // 合體進化（G.jogress）：雙親都可取得，合體結果才可取得
+  return EVO_RULES.reachableFrom({ nodes, edges }, starters, G.specialRules || [], G.jogress || []);
 }
 
 function computeLayout() {

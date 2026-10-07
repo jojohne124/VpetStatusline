@@ -78,7 +78,14 @@ const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server',
 // scope：這顆鈕在哪個畫面出現。'home' = 只在前線、'both' = 兩邊都有。
 // 前線的鈕多半是對「現役那一隻」下指令（卡片、進化樹、睡覺…），在營地畫面按了
 // 只會影響一隻根本沒顯示在畫面上的桌寵 —— 那比按鈕消失更難懂。
+// when：第三個維度 —— 條件成立才露臉（見前端的 WHEN）。目前只有合體進化用：
+//       沒有成立的組合時整顆不出現，而不是灰掉 —— 灰掉的鈕會讓人一直想點點看為什麼。
+// accent：醒目色。合體是少見、而且做了就回不去的事，要讓人一眼看到「現在可以了」。
 const UI_BUTTONS = [
+    // 合體進化（docs/jogress-spec.md 第 2 期）。玩家功能：不是 dev、不進 DEV_ONLY。
+    // 文字由前端依候選換成「🧬 合體進化 → Mastemon」。
+    // 只在前線：進化演出在前線，在營地按下去只會看到營地少一隻，牠變身的那一刻看不到。
+    ['jogress', '🧬 合體進化', { scope: 'home', when: 'jogress', accent: true }],
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
     ['album',  '📖 圖鑑', { scope: 'both' }],
@@ -159,11 +166,17 @@ function buildInput(usage) {
 // 表演分派：忠實複製 statusline-agumon-color.js 的 decide→compose 流程，
 // 但拿掉 cheat/force、pids/watchdog（daemon 是常駐單行程，不需要那套孤兒防護）。
 // 回傳 { kind, petLines(ANSI array|null) }。狀態列不在這演（daemon 有自己的 token 面板）。
+// yardTouch 在檔案後段才 const 宣告。第一拍已經延後到模組載完才跑（見 doTick 底下），
+// 這裡再包一層是保險：有人把 doTick 改回同步呼叫時，壞的是「這一拍看不到誰被拿著」，
+// 而不是整拍失敗。剛啟動時也不可能有誰被拿著。
+function heldYardIds() { try { return yardTouch.heldIds(); } catch (e) { return null; } }
+
 function renderTick(i, st, now) {
     const step = Math.floor(now / STEP_MS);
 
     // 0. 當家模式：讀 force-char.json 套 vpet 指令（與 statusLine 共用同一份核心邏輯）
-    if (AUTHORITATIVE) applyForceFlags(st, FORCE_FILE);
+    // heldIds：合體進化不能拿「正被長壓抓著」的那隻（只有 daemon 知道誰被抓著）
+    if (AUTHORITATIVE) applyForceFlags(st, FORCE_FILE, undefined, { heldIds: heldYardIds() });
 
     // 1. 進化 commit（必須在 loadCharacter 之前）
     if (st.evoStartStep != null && st.evoStartStep >= 0) {
@@ -362,6 +375,33 @@ function weatherFor(q) {
 let startedAt = Date.now();
 let latest = { tick: 0, kind: 'init', petLines: null, usage: null, at: startedAt, err: null };
 
+// 現在成立的合體組合，給前端決定按鈕露不露臉、確認文案要寫誰。
+// 看的是 color-state.json —— 跟 CLI 同一份。隔離模式下 daemon 自己的 daemon-state.json
+// 只是顯示用的分身，拿它算的話會出現「按鈕亮著，按下去 CLI 說不成立」。
+// 凍結看 force（同 CLI）；拿在手上的那隻不列（只有 daemon 知道誰被拿著）。
+// 回 null = 算不出來（舊的安裝版 core 沒有這組函式）→ 前端當成沒有候選。
+const COLOR_STATE_FILE = path.join(STATE_DIR, 'color-state.json');
+function jogressInfo(ranch, st) {
+    try {
+        if (typeof core.jogressCandidates !== 'function') return null;
+        const real = AUTHORITATIVE ? st : loadState(COLOR_STATE_FILE);
+        if (!real || !real.characterId) return null;
+        let frozen = false;
+        try { frozen = !!JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8')).freezeEvolve; } catch (e) {}
+        const held = heldYardIds();
+        const list = core.jogressCandidates(real, ranch, { frozen, heldIds: held || undefined });
+        const name = (id) => { try { return core.getDisplayName(id); } catch (e) { return id; } };
+        const pets = ranch.pets || [];
+        return {
+            front: real.characterId, frontName: name(real.characterId),
+            options: list.map(c => ({
+                id: c.petId, num: pets.findIndex(p => p.id === c.petId) + 1,
+                camp: c.camp, campName: name(c.camp), to: c.to, toName: name(c.to),
+            })),
+        };
+    } catch (e) { return null; }
+}
+
 function doTick() {
     const now = Date.now();
     try {
@@ -381,13 +421,17 @@ function doTick() {
         if (AUTHORITATIVE) { try { fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ ts: now, pid: process.pid })); } catch (e) {} }
         // 營地人數也帶出去：「收進營地」這顆鈕在兩個分頁都有，但只有院子分頁會打 /yard。
         // 沒有這一份的話，家裡分頁沒辦法在按下去之前就知道滿了。
-        let ranchInfo = null;
-        try { ranchInfo = { kept: (core.loadRanch().pets || []).length, cap: core.ranchCap() }; }
-        catch (e) {}
+        let ranchInfo = null, jogress = null;
+        try {
+            const ranchNow = core.loadRanch();
+            ranchInfo = { kept: (ranchNow.pets || []).length, cap: core.ranchCap() };
+            jogress = jogressInfo(ranchNow, st);
+        } catch (e) {}
         latest = {
             tick: ++tick,
             at: now,
             ranch: ranchInfo,
+            jogress,
             kind: out.kind,
             cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
@@ -413,7 +457,12 @@ function doTick() {
     }
 }
 
-doTick();
+// ⚠️ 第一拍一定要等模組整個載完才跑（setImmediate），不能在這裡同步呼叫。
+//    renderTick 會碰到很多在檔案**後段**才 const 宣告的東西（BASE_COLS、yardTouch…），
+//    同步呼叫就撞 TDZ。doTick 有 try/catch 所以不會當掉，只是當家模式的第一拍
+//    **一律失敗** —— 而且失敗在 applyForceFlags 之後、存檔之前：營地已經寫了、state 沒寫。
+//    啟動那一秒若剛好有 swap / 合體排著，被換進來的那隻就從營地消失了。
+setImmediate(doTick);
 setInterval(doTick, STEP_MS);   // ← 獨立時鐘：跟 Claude Code 有沒有呼叫指令無關
 
 // 跨行程收屍：平常是每個新啟動的 statusline 在做，但 daemon-only 安裝根本沒部署
@@ -594,6 +643,8 @@ const CLI_ACTIONS = {
     keep:        ()  => ['keep'],
     swap:        (a) => a.which ? ['swap', a.which] : null,
     release:     (a) => a.which ? ['release', a.which, 'yes'] : null,
+    // 合體進化：which 是營地 id（營地可能有兩隻同角色，名稱不唯一）。補 yes 的理由同上。
+    jogress:     (a) => a.which ? ['jogress', a.which, 'yes'] : null,
 };
 
 // ── 走動範圍編輯器（dev）─────────────────────────────────────────────
@@ -657,7 +708,9 @@ function applyCommand(action, args = {}) {
         if (!sp) return { ok: false, error: '這隻不在營地裡' };
         if (!yardTouch.grab(args.which)) return { ok: false, error: '已經拿在手上了' };
         // 兩張待機幀交給前端輪替 —— 拿在手上也要繼續呼吸，不是定格
-        return { ok: true, action: 'yardGrab', frames: sp.frames, x: sp.x, y: sp.y, facing: sp.facing };
+        // 前端在細格裡拖（營地畫小一號）—— 起點換成畫出來的位置
+        const at = plaza.yardToDraw(sp.x, sp.y);
+        return { ok: true, action: 'yardGrab', frames: sp.frames, x: at.x, y: at.y, facing: sp.facing };
     }
 
     // 放開。落點成為新的起點，那隻從那裡開始走一條全新的鏈（見 plaza-walk 的 origin）。
@@ -670,12 +723,17 @@ function applyCommand(action, args = {}) {
         const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : NaN; };
         const x = num(args.x), y = num(args.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, error: '落點座標不合法' };
-        const cx = PW.clamp(x, F.minX, F.maxX);
-        const cy = PW.clamp(y, F.minY, F.maxY);
+        // 前端送來的是畫出來的位置（細格），走路在粗格上算 —— 換回來再夾
+        const back = plaza.yardFromDraw(x, y);
+        const cx = PW.clamp(back.x, F.minX, F.maxX);
+        const cy = PW.clamp(back.y, F.minY, F.maxY);
         if (!yardTouch.drop(args.which, cx, cy, args.facing)) {
             return { ok: false, error: '這隻沒有被拿著' };
         }
-        return { ok: true, action: 'yardDrop', x: cx, y: cy };
+        // 回**畫出來**的位置（細格）：前端手上那份要先對齊到這一格，再交棒給伺服器的畫面，
+        // 不然交接那一刻會看到牠往旁邊挪一格（細格不是每一格都對得到走路的格子）。
+        const at = plaza.yardToDraw(cx, cy);
+        return { ok: true, action: 'yardDrop', x: at.x, y: at.y };
     }
 
     // 快路徑：純粹寫一個旗標的指令直接寫 force，省掉 140ms 的行程開銷。
@@ -834,6 +892,11 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #controls{display:flex;margin-top:10px;gap:6px;flex-wrap:wrap;max-width:480px}
   #controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
   #controls button:hover{background:#30363d;border-color:#8b949e}
+  /* 醒目鈕（合體進化）：少見、而且做了就回不去，要讓人一眼看到「現在可以了」 */
+  #controls button.accent{background:#3b1f6b;border-color:#a371f7;color:#e9dcff;font-weight:600}
+  #controls button.accent:hover{background:#4c2889;border-color:#c8a6ff}
+  #jgsel{background:#161b22;color:#c9d1d9;border:1px solid #a371f7;border-radius:6px;
+         font:inherit;font-size:12px;padding:3px 4px}
   /* 提示字 3 秒後淡出；min-height 保留讓版面不會跳動 */
   #cmdmsg{margin-top:6px;min-height:16px;color:#3fb950;font-size:12px;opacity:0;transition:opacity .5s}
   /* 進階區：要填參數的指令。預設收起，避免主畫面被塞爆 */
@@ -870,8 +933,9 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
+      <select id="jgsel" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
     </div>
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <span id="yardinfo">–</span>
@@ -921,7 +985,15 @@ ${IS_RELEASE ? '' : `
   </div>
 </div>
 <script>
-const CW=${CW}, CH=${CH};   // 由伺服器端同一組常數帶入（見 daemon.js 頂部）
+// 一個 dot 畫多大。前線由伺服器端同一組常數帶入（見 daemon.js 頂部）。
+// 營地畫小一號（6px 而不是 8px）：4 隻擠在同一塊場地上，角色 128px 太占位置。
+// 場地與走動範圍的 dot 數都沒變，所以整個營地畫面等比例縮成 75% —— 這一步只改
+// 「畫多大」，要真的變寬敞得另外把 YARD_FIELD 加大（那會動到存好的走動範圍）。
+// 隨畫面切換（setView）；所有換算 dot↔px 的地方（命中判定、拎起、範圍框）都讀這兩個，
+// 所以只要切換的時機對，其餘一行都不用改。CH 必須維持 2×CW，dot 才是正方形。
+const HOME_CW=${CW}, HOME_CH=${CH};
+const YARD_CW=6, YARD_CH=12;
+let CW=HOME_CW, CH=HOME_CH;
 // 寒風的點陣（天狐獸的子彈，依顏色分好組）。伺服器端抽好再內嵌，見 loadWindArt。
 const WIND_ART=${JSON.stringify(WIND_ART)};
 // 風往哪邊吹：+1 = 由左至右，-1 = 由右至左。
@@ -1041,6 +1113,9 @@ let lastFetch=Date.now();
 let view = 'home';
 function setView(v){
   view = v;
+  // 要在 poll() 之前換：下一次畫的就是這個畫面的大小
+  CW = (v==='yard') ? YARD_CW : HOME_CW;
+  CH = (v==='yard') ? YARD_CH : HOME_CH;
   document.body.classList.toggle('yard', v==='yard');
   document.querySelectorAll('[data-scope]').forEach(el=>{
     el.style.display = (el.dataset.scope==='both' || el.dataset.scope===v) ? '' : 'none';
@@ -1051,6 +1126,7 @@ function setView(v){
     // 營地這邊按了是回到現役那隻。用「前線」指現役、「營地」指收藏，不會混。
     b.textContent = (v==='yard') ? '⚔ 前線' : '⛺ 營地';
   });
+  applyWhen();
   hudTick();
   poll();
 }
@@ -1120,7 +1196,7 @@ let wxBoltNext=0, wxBoltAt=0;
 // 拿在手上的那隻。dots 是 [ [r,g,b]|null x16 ] x16，一個 dot = CW 寬 x CH/2 高，
 // 跟伺服器合成用的是同一套座標，所以放開時的落點不用換算。
 function drawHeld(g){
-  if(!drag||!drag.frames) return;
+  if(!drag||!drag.frames||drag.wait) return;   // wait：伺服器那張裡牠還在地上，先別畫第二份
   // 待機動畫跟著**伺服器的拍子**走（lastYard.step 的奇偶），不是自己另外計時 ——
   // 這樣手上那隻跟場上其他人是同一個呼吸節奏，而不是各跳各的。
   const st=(lastYard&&lastYard.step)||0;
@@ -1300,6 +1376,7 @@ async function pollYard(){
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   lastYard=y;
+  dragHandoff(y);   // 要跟下面的 draw(y.lines) 在同一個 task 裡（中間不能有 await）
   zoneBoxes = y.zones || null;
   if(y.sprite) yardSprite = y.sprite;
   // 下拉的選項跟著隻數換（2 隻與 3 隻能選的切法不同）。只在清單真的變了時重建，
@@ -1342,6 +1419,69 @@ async function pollYard(){
 }
 
 let lastState=null;   // 最後一次 /state（家裡分頁靠它知道營地滿了沒）
+
+// ── 合體進化（docs/jogress-spec.md 第 2 期）──
+// 候選來自伺服器的 /state。按鈕只在前線（進化演出在前線），所以營地的 /yard 不帶。
+// 前端不自己判定成不成立 —— 那是 core.jogressCandidates 的事，各寫一份就會出現
+// 「按鈕亮著但 CLI 說不成立」。
+let lastJogress=null;
+function jgOptions(){ return (lastJogress && Array.isArray(lastJogress.options)) ? lastJogress.options : []; }
+// 下拉選中的那一組；只有一組時就是它
+function jgPicked(){
+  const o=jgOptions(); if(!o.length) return null;
+  const sel=document.getElementById('jgsel');
+  return (o.length>1 && sel && sel.value) ? (o.find(x=>x.id===sel.value)||o[0]) : o[0];
+}
+// 確認文案（規格決策 3）：要講是**哪一隻**、而且救不回來、前線會變成誰。
+// 營地那隻不在畫面上（按鈕在前線），所以編號與名字一定要寫出來。
+function jogressConfirmText(o){
+  const front=(lastJogress && lastJogress.frontName) || '現役';
+  return '合體進化會永久消耗營地的 #'+o.num+' '+o.campName+'（救不回來），'
+       + '前線的 '+front+' 會變成 '+o.toName+'。確定嗎？';
+}
+// data-when 的條件。不成立 = 整顆不出現（不是灰掉：灰掉的鈕會讓人一直想點點看為什麼）。
+const WHEN={
+  jogress:      ()=>jgOptions().length>0,
+  jogressMulti: ()=>jgOptions().length>1,   // 不止一組才需要選
+};
+function applyWhen(){
+  document.querySelectorAll('[data-when]').forEach(el=>{
+    const sc=el.dataset.scope;
+    const inScope=!sc || sc==='both' || sc===view;
+    const f=WHEN[el.dataset.when];
+    el.style.display=(inScope && f && f()) ? '' : 'none';
+  });
+}
+// 候選變了 → 換按鈕文字、重建下拉。下拉只在清單真的變了才重建，
+// 不然每 500ms 重建一次會把使用者正在展開的選單關掉（同切法下拉的做法）。
+function syncJogress(j){
+  lastJogress=j||null;
+  const o=jgOptions();
+  const targets=[...new Set(o.map(x=>x.toName))];
+  document.querySelectorAll('[data-cmd="jogress"]').forEach(b=>{
+    b.textContent = targets.length===1 ? '🧬 合體進化 → '+targets[0] : '🧬 合體進化';
+  });
+  const sel=document.getElementById('jgsel');
+  if(sel){
+    const want=o.map(x=>x.id+':'+x.to).join('|');
+    if(sel.dataset.opts!==want){
+      sel.dataset.opts=want; const keep=sel.value;
+      sel.innerHTML=o.map(x=>'<option value="'+x.id+'">#'+x.num+' '+x.campName+' → '+x.toName+'</option>').join('');
+      if(o.some(x=>x.id===keep)) sel.value=keep;
+    }
+  }
+  applyWhen();
+}
+
+// 能不能從前線切去營地。回 null = 可以；回字串 = 不行，字串就是要給使用者看的理由。
+// 進化表演中不給切：牠正在變身，這是要看的那一刻 —— 切走回來就錯過了，而合體進化時
+// 營地那隻已經被消耗，切過去只會看到「少一隻」，讀起來像東西不見了。
+// 只擋「去營地」，不擋「回前線」：人在營地時才開始進化的話，要能回來看牠變身。
+// 用的是家裡分頁每 500ms 拿到的 /state —— 人在前線時它就是最新的。
+function yardBlocked(){
+  if(lastState && lastState.kind==='evo') return '進化表演中，等牠變完再去營地。';
+  return null;
+}
 
 // 營地滿了沒。院子分頁的 /yard 比較新，優先用它；家裡分頁退回 /state。
 // 回 null = 還不知道（剛開頁面），那就別擋，讓指令照送、由 CLI 那道去擋。
@@ -1425,6 +1565,7 @@ async function poll(){
   try{
     const s=await (await fetch('/state',{cache:'no-store'})).json();
     lastState=s;
+    syncJogress(s.jogress);
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
@@ -1495,7 +1636,7 @@ async function sendCmd(action,args){
     // 失敗時也要顯示 —— 「找不到角色」那種訊息正是使用者需要看到的
     if(!quiet) showOutput(r.output || r.error || '');
     // 營地操作是「排入 force、下一拍才生效」，所以要等一拍再刷，否則看到的還是舊名單
-    if(['keep','swap','release'].includes(action)) setTimeout(poll, 1300);
+    if(['keep','swap','release','jogress'].includes(action)) setTimeout(poll, 1300);
     // 摸摸馬上刷一次，不然要等下一次輪詢（最多 500ms）才看到牠跳起來，
     // 點下去到有反應之間那半秒會讓人以為沒點到。
     if(action==='yardPet') poll();
@@ -1504,7 +1645,14 @@ async function sendCmd(action,args){
 }
 document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
   // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
-  if(b.dataset.cmd==='yard'){ setView(view==='yard'?'home':'yard'); return; }
+  if(b.dataset.cmd==='yard'){
+    if(view!=='yard'){
+      const why=yardBlocked();
+      if(why){ flashCmdMsg(why,'#d29922'); return; }
+    }
+    setView(view==='yard'?'home':'yard');
+    return;
+  }
   const cmd=b.dataset.cmd;
       // 滿了就直接說，不要先問「確定嗎？」再告訴使用者做不到。
       // 人數前端本來就有（/yard 的 kept/cap、或 /state 的 ranch），只是以前沒拿來用。
@@ -1516,6 +1664,13 @@ document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('cli
           return;
         }
       }
+  if(cmd==='jogress'){
+    const o=jgPicked();
+    if(!o){ flashCmdMsg('現在沒有成立的合體組合。','#d29922'); return; }
+    if(!confirm(jogressConfirmText(o))) return;
+    sendCmd('jogress',{which:o.id});
+    return;
+  }
   const c=b.dataset.confirm;
   if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
   sendCmd(cmd);
@@ -1578,16 +1733,31 @@ const MOVE_TOL=1.5;       // dot。按著微微晃動不該被當成想拖曳
 const LIFT_DOTS=2.5;      // 離地多高
 const LIFT_MS=140;        // 抬起來（ease-out：一開始快，到頂變慢）
 const FALL_MS=180;        // 落下（ease-in：像重力，越掉越快）
-let drag=null;            // { id, frames, ox, oy, x, y, phase, t0, liftFrom }
+// phase：lift（拿著）→ fall（放手、落下中）→ landed（落地了，等伺服器的畫面把牠畫回去）
+// wait：剛拿起來，伺服器的畫面裡牠還在地上 —— 這段期間手上那份先不畫（見 dragHandoff）
+let drag=null;            // { id, frames, ox, oy, x, y, phase, t0, liftFrom, wait }
 let press=null, pressTimer=null;
 
 // 現在離地多少 dot（負值 = 往上）。時間走牆鐘，不跟 rAF 的時戳混用。
 function liftNow(){
-  if(!drag) return 0;
+  if(!drag || drag.phase==='landed') return 0;
   const e=Date.now()-drag.t0;
   if(drag.phase==='fall'){ const p=Math.min(1,e/FALL_MS); return drag.liftFrom*(1-p*p); }
   const p=Math.min(1,e/LIFT_MS);
   return -LIFT_DOTS*(1-(1-p)*(1-p));
+}
+
+// 拎起／放下的交接。畫面上有兩份東西：伺服器合成的那張（拿著的那隻會被略過），
+// 和前端手上畫的那份。兩份同時有牠 = 一瞬間兩隻；兩份都沒有 = 一瞬間消失 —— 回報的「閃爍」
+// 就是這兩種。所以交接一律以**伺服器的畫面**為準，在收到新的一張時才換手：
+//   拿起：伺服器那張已經沒有牠了 → 手上那份才開始畫（浮起動畫從這一刻起算）
+//   放下：伺服器那張已經把牠畫回來了 → 才收掉手上那份
+// 換手跟新畫面的 draw() 在同一個 task 裡，下一次重繪之前兩邊就都換好了。
+function dragHandoff(y){
+  if(!drag) return;
+  const onField=((y&&y.pets)||[]).some(p=>p.id===drag.id);
+  if(drag.wait && !onField){ drag.wait=false; drag.t0=Date.now(); }
+  else if(drag.phase==='landed' && onField){ drag=null; }
 }
 
 function cancelPress(){ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} press=null; }
@@ -1605,7 +1775,7 @@ async function startDrag(hit, at){
   if(aborted){ dropAt(hit.id, r.x, r.y); return; }   // 立刻放回原位
   // 抓取點相對身體的偏移要留著，不然拿起來的瞬間會跳成「以身體左上角對準游標」
   drag={ id:hit.id, frames:r.frames, ox:at.dx-r.x, oy:at.dy-r.y, x:r.x, y:r.y,
-         phase:'lift', t0:Date.now(), liftFrom:0 };
+         phase:'lift', t0:Date.now(), liftFrom:0, wait:true };
   press=null; pressTimer=null;
   poll();   // 立刻刷一次，把伺服器那張裡的分身換掉（否則最多要等一次輪詢）
 }
@@ -1617,7 +1787,11 @@ function dropAt(id, x, y){
   const W=(lastYard&&lastYard.cols)||52, H=((lastYard&&lastYard.rows)||20)*2;
   const cx=Math.max(0,Math.min(W-S, Math.round(x)));
   const cy=Math.max(0,Math.min(H-S, Math.round(y)));
-  return sendCmd('yardDrop',{which:id,x:String(cx),y:String(cy)}).then(()=>poll());
+  return sendCmd('yardDrop',{which:id,x:String(cx),y:String(cy)}).then(r=>{
+    // 手上那份對齊到伺服器實際落的那一格，交接時才不會挪一下
+    if(r && r.ok && drag && drag.id===id && Number.isFinite(r.x)){ drag.x=r.x; drag.y=r.y; }
+    poll();
+  });
 }
 
 document.getElementById('pet').addEventListener('mousedown',ev=>{
@@ -1631,7 +1805,7 @@ document.getElementById('pet').addEventListener('mousedown',ev=>{
 
 window.addEventListener('mousemove',ev=>{
   if(drag){
-    if(drag.phase==='fall') return;                // 已經放手了，落點固定
+    if(drag.phase!=='lift') return;                // 已經放手了，落點固定
     const d=evDot(ev); drag.x=d.dx-drag.ox; drag.y=d.dy-drag.oy; return;
   }
   if(!press) return;
@@ -1642,12 +1816,21 @@ window.addEventListener('mousemove',ev=>{
 
 window.addEventListener('mouseup',ev=>{
   if(drag){
-    if(drag.phase==='fall') return;                // 已經在落下了，別重複觸發
+    if(drag.phase!=='lift') return;                // 已經在落下了，別重複觸發
     // 落下期間伺服器那邊仍然是 held（合成時被略過），所以畫面上只有這一份；
     // 落地之後才送 yardDrop 交回去 —— 中途交回去會看到牠瞬間出現在地上。
     drag.liftFrom=liftNow(); drag.phase='fall'; drag.t0=Date.now();
     const d=drag;
-    setTimeout(()=>{ if(drag===d){ dropAt(d.id,d.x,d.y); drag=null; } }, FALL_MS);
+    setTimeout(()=>{
+      if(drag!==d) return;
+      // ⚠️ 落地了也**不能**馬上收掉手上這份：伺服器的畫面要等 yardDrop 和下一次 /yard
+      //    兩趟來回才會把牠畫回去，中間那段兩邊都沒有牠 = 消失一下。停在地上繼續畫，
+      //    由 dragHandoff 看到伺服器畫回來了才收。
+      d.phase='landed';
+      dropAt(d.id,d.x,d.y);
+      // 保險：放下失敗（伺服器那邊早就不是拿著了）就永遠等不到畫回來 —— 不能一直掛在畫面上
+      setTimeout(()=>{ if(drag===d) drag=null; }, 2000);
+    }, FALL_MS);
     return;
   }
   // 長壓已經觸發、但 yardGrab 還沒回來 → 標記成取消（見 startDrag 的 aborted）。
@@ -1730,11 +1913,14 @@ const server = http.createServer((req, res) => {
             //    合成走的是前者、payload 走後者的話，角色照新切法走、框卻畫舊的，
             //    看起來就像「存了沒生效」。踩過一次 —— 兩個來源就是會漂移。
             const zoneInfo = plaza.yardLayoutsFor(core, (ranch.pets || []).length);
-            const zones = plaza.yardZonesFor(core, (ranch.pets || []).length, zoneLayout).map(z => ({
-                minX: z.minX, maxX: z.maxX, minY: z.minY, maxY: z.maxY,
-                anchor: plaza.zoneAnchor(z),
-            }));
-            body = { ok: true, step, cols: F.w, rows: F.h / 2, sprite: plaza.SPRITE, zones,
+            // 前端活在「細格」裡（營地畫小一號，見 plaza.js 的 YARD_RENDER）：
+            // 尺寸、每隻的位置、範圍框一律換算成畫出來的座標再送。
+            const D = plaza.yardToDraw, R = plaza.YARD_RENDER;
+            const zones = plaza.yardZonesFor(core, (ranch.pets || []).length, zoneLayout).map(z => {
+                const lo = D(z.minX, z.minY), hi = D(z.maxX, z.maxY), an = plaza.zoneAnchor(z), a = D(an.x, an.y);
+                return { minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, anchor: { x: a.x, y: a.y } };
+            });
+            body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones,
                      weather: { ...wx, ...WX.describe(wx) },
                      cap: core.ranchCap(),
                      // dev 下拉要知道這個隻數有哪些切法可挑、現在是哪一個
@@ -1746,7 +1932,7 @@ const server = http.createServer((req, res) => {
                      // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
                      pets: out ? out.placed.map(p => ({
                          id: p.ranchId, name: p.name, char: p.char, zoneIdx: p.zoneIdx,
-                         x: p.x, y: p.y - (p.jumpDy || 0), ...info(p.ranchId),
+                         x: p.dx, y: p.dy, ...info(p.ranchId),
                      })) : [] };
         } catch (e) {
             body = { ok: false, error: e.message };

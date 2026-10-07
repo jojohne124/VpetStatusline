@@ -787,5 +787,51 @@ console.log('— dot/cell 轉換 —');
     ok(JSON.stringify(back) === JSON.stringify(rows), 'cell → dot → cell 來回不等於原值');
 }
 
+console.log('— 營地畫小一號（走路照舊、只換畫的格子）—');
+{
+    const R = P.YARD_RENDER, F = W.YARD_FIELD, S = W.SPRITE;
+    // 場地實際大小不變：細格 × 6px ≈ 粗格 × 8px（差不到半格）
+    ok(Math.abs(R.w * 6 - F.w * 8) <= 6 && Math.abs(R.h * 6 - F.h * 8) <= 6,
+       `營地畫面的實際大小變了（${R.w * 6}x${R.h * 6}px，原本 ${F.w * 8}x${F.h * 8}px）—— 要縮的是角色不是場地`);
+    ok(R.h % 2 === 0, '細格的高度要是偶數（一個 cell 上下兩個 dot）');
+
+    // 每一個可走的位置都要：畫得進畫面、而且換回來剛好是同一格
+    // （放下的落點走 yardFromDraw，換錯一格的話放下去會「自己跳一下」）
+    let outside = 0, drift = 0;
+    let minL = Infinity, minR = Infinity, minT = Infinity, minB = Infinity;
+    for (let x = F.minX; x <= F.maxX; x++) for (let y = F.minY; y <= F.maxY; y++) {
+        const d = P.yardToDraw(x, y);
+        if (d.x < 0 || d.y < 0 || d.x + S > R.w || d.y + S > R.h) outside++;
+        const b = P.yardFromDraw(d.x, d.y);
+        if (b.x !== x || b.y !== y) drift++;
+        minL = Math.min(minL, d.x); minR = Math.min(minR, R.w - (d.x + S));
+        minT = Math.min(minT, d.y); minB = Math.min(minB, R.h - (d.y + S));
+    }
+    ok(outside === 0, `${outside} 個可走位置畫出來會超出畫面`);
+    ok(drift === 0, `${drift} 個位置換到畫面再換回來對不上 —— 放下時會自己跳一格`);
+    // 角色在原本的落腳處裡水平置中：左右留白差不超過 1 格。
+    // 不置中的話整群會往左偏（可走範圍是用粗格的 16 扣的，細格只用掉 16）。
+    ok(Math.abs(minL - minR) <= 1, `左右留白不對稱（左 ${minL}、右 ${minR}）—— 角色會整群往一邊偏`);
+    // 腳貼底：走到最下面時，腳離畫面下緣不超過 1 格（跟原本一樣踩在同一條地面上）
+    ok(minB <= 1, `走到最下面時腳離下緣還有 ${minB} 格 —— 角色沒有貼地，看起來像浮在半空`);
+
+    // 合成出來的畫面真的是細格的大小，角色真的畫在換算後的位置
+    const fakeCore = {
+        RANCH_FILE: null, loadRanch: () => ({ pets: [] }),
+        getDisplayName: (x) => x, getCharacterStage: () => 'Child',
+    };
+    const ranch = { pets: [{ id: 'r1', keptAt: 0, state: { characterId: 'agumon' } }] };
+    let out = null;
+    try { out = P.composeYard(core || fakeCore, ranch, null, 1000); } catch (e) { out = null; }
+    if (out && out.lines) {
+        ok(out.lines.length === R.h / 2, `營地合成出來的列數不對（${out.lines.length}，應為 ${R.h / 2}）`);
+        const p = out.placed[0];
+        const d = P.yardToDraw(p.x, p.y - (p.jumpDy || 0));
+        ok(p.dx === d.x && p.dy === d.y, `placed 的 dx/dy 不是換算後畫的位置（${p.dx},${p.dy} vs ${d.x},${d.y}）—— 前端點不到牠`);
+    } else {
+        skip++; console.log('  ⚠ 沒有 core 可以合成營地，合成那幾條跳過');
+    }
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));
 process.exit(fail ? 1 : 0);

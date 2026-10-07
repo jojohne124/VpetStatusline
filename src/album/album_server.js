@@ -104,7 +104,13 @@ function pruneUnreachable(all) {
     const edges = [];
     for (const n of Object.values(all))
         for (const nx of n.next) if (all[nx]) edges.push({ from: n.id, to: nx });
-    const reach = RULES.reachableFrom({ nodes, edges }, starters, loadSpecialRules());
+    // 合體進化也是取得途徑：Mastemon 只能靠合體拿到，不算進來的話會被當成純敵人藏起來。
+    // ⚠️ 用 RULES 自己讀，不用 core.loadJogress：這支優先載入的是**安裝版** core，
+    //    沒重新 install 之前那份沒有 loadJogress，呼叫下去整本圖鑑一起壞。
+    let jogress = [];
+    try { jogress = RULES.expandJogress(JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'jogress.json'), 'utf8'))).pairs; }
+    catch (e) {}   // 沒有檔案 = 沒有合體組合
+    const reach = RULES.reachableFrom({ nodes, edges }, starters, loadSpecialRules(), jogress);
     if (!reach) return all;
     const out = {};
     for (const id of Object.keys(all)) if (reach.has(id)) out[id] = all[id];

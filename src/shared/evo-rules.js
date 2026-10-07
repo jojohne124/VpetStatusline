@@ -101,7 +101,11 @@ function findDeadPaths(graph) {
 //
 // starters 是空的就回 null（＝不知道，別過濾）。跟 roster 讀不到時 fail-open 同樣的理由：
 // 資料缺一角不該讓整本圖鑑變空的。
-function reachableFrom(graph, starters, specialRules) {
+//
+// jogress（合體進化）：[{front, camp, to}]，用 expandJogress 展開過的。to 可達 ⇔ front 與 camp
+// **都**可達 —— 兩隻都要養得出來才湊得齊。只有一方可達就不算（那是半條線）。
+// 不吃這個的話，以合體為唯一入口的角色（Mastemon）會被圖鑑當成純敵人藏起來。
+function reachableFrom(graph, starters, specialRules, jogress) {
     if (!Array.isArray(starters) || !starters.length) return null;
     const nodeById = {};
     for (const n of graph.nodes) nodeById[n.id] = n;
@@ -111,6 +115,7 @@ function reachableFrom(graph, starters, specialRules) {
     const seen = new Set();
     const stack = starters.filter(id => nodeById[id]);
     const rules = Array.isArray(specialRules) ? specialRules.slice() : [];
+    const pairs = Array.isArray(jogress) ? jogress.slice() : [];
     let grew = true;
     while (grew) {
         grew = false;
@@ -131,8 +136,53 @@ function reachableFrom(graph, starters, specialRules) {
             rules.splice(i, 1);
             if (!seen.has(r.to)) { stack.push(r.to); grew = true; }
         }
+        // 合體：雙親都已可達才成立。同樣放在每輪結束後 —— 雙親可能要等別條線先走到。
+        for (let i = pairs.length - 1; i >= 0; i--) {
+            const j = pairs[i];
+            if (!j || !j.to || !nodeById[j.to]) { pairs.splice(i, 1); continue; }
+            if (!(seen.has(j.front) && seen.has(j.camp))) continue;
+            pairs.splice(i, 1);
+            if (!seen.has(j.to)) { stack.push(j.to); grew = true; }
+        }
     }
     return seen;
+}
+
+// ── 合體進化（Jogress）的組合表 ────────────────────────────────────────────
+// characters/jogress.json 的原始內容 → { pairs: [{front, camp, to}], dupes: [...] }。
+//
+// 兩種寫法：
+//   { "pair": [x, y], "to": z }        兩個方向同結果，展開成 (x,y) 與 (y,x)
+//   { "front": a, "camp": b, "to": c } 有序單筆（A+B=A1、B+A=B1 那種）
+//
+// 對稱組一定要用 pair 簡寫 —— 手寫兩筆總有一天只改到一筆。
+//
+// 同一組 (front, camp) 出現第二次 → 取先出現的，後面那筆放進 dupes。
+// 靜靜地後蓋前會讓「改了沒生效」變成無頭案件；但這裡是純函數、core 又跑在 statusline
+// 裡（stdout 就是狀態列本身，印一行就插進狀態列），所以只回傳，由 CLI 負責講出來。
+function expandJogress(raw) {
+    const pairs = [], dupes = [], seen = new Set();
+    const id = (x) => (x == null ? '' : String(x).trim().toLowerCase());
+    const add = (front, camp, to) => {
+        front = id(front); camp = id(camp); to = id(to);
+        if (!front || !camp || !to) return;
+        const k = front + '+' + camp;
+        if (seen.has(k)) { dupes.push({ front, camp, to }); return; }
+        seen.add(k);
+        pairs.push({ front, camp, to });
+    };
+    const list = raw && Array.isArray(raw.pairs) ? raw.pairs : [];
+    for (const e of list) {
+        if (!e || !e.to) continue;
+        if (Array.isArray(e.pair) && e.pair.length === 2) {
+            add(e.pair[0], e.pair[1], e.to);
+            // A+A：同一個方向，展開一次就好，不然自己會撞成自己的重複
+            if (id(e.pair[0]) !== id(e.pair[1])) add(e.pair[1], e.pair[0], e.to);
+        } else {
+            add(e.front, e.camp, e.to);
+        }
+    }
+    return { pairs, dupes };
 }
 
 // power → stage band（給新角色推 stage 用）
@@ -148,5 +198,5 @@ function stageForPower(p) {
 module.exports = {
     STAGE_COST, STAGE_MINB, BAND, FC,
     suggestPct, costFor, minBattlesFor,
-    resolvePcts, findDeadPaths, reachableFrom, stageForPower,
+    resolvePcts, findDeadPaths, reachableFrom, expandJogress, stageForPower,
 };

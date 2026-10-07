@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','camp','keep','swap','release'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','camp','keep','swap','release','jogress'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 // 顯示文字叫「營地」，指令沿用 ranch（狀態檔 ranch.json 也是），camp 是等價別名。
 // 在這裡就折成 --ranch，下面所有分支都不用知道有兩個名字。
@@ -53,6 +53,7 @@ function printHelp() {
     console.log('  vpet keep                   現役收進營地 + 抽一隻新的（保留版 reset）');
     console.log('  vpet swap <編號|名稱>       現役收進營地，叫出指定那隻');
     console.log('  vpet release <編號|名稱>    放生營地裡的一隻（永久刪除）');
+    console.log('  vpet jogress [編號|名稱]    合體進化：現役 ＋ 營地的特定一隻（營地那隻會消失）');
     console.log('  vpet sleep / wake           強制睡覺 / 喚醒');
     console.log('  vpet freeze / unfreeze      凍結 / 解除進化（凍結時滿足條件也不自動進化）');
     console.log('  vpet album                  開啟圖鑑（瀏覽器）');
@@ -591,7 +592,7 @@ if (args[0] === '--evolve') {
 // 這裡**只驗參數並寫 force**，實際的狀態搬移由「當家」那一端在下一拍做
 // （core.applyRanchOp）。原因是 color-state.json 是單一寫入者制，CLI 直接改會把
 // 那個保證破壞掉。與 battle / evolve / reset 同一條路。
-const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release'];
+const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release', '--jogress'];
 if (RANCH_CMDS.includes(args[0])) {
     const ranch = core.loadRanch();
     const cap   = core.ranchCap();
@@ -701,6 +702,74 @@ if (RANCH_CMDS.includes(args[0])) {
         force.ranchOp        = { op: 'release', id: pet.id };
         writeForce(force);
         console.log(`✓ 已排入放生：${core.getDisplayName(pet.state.characterId)}（下次 refresh 生效）`);
+        process.exit(0);
+    }
+
+    // ── 合體進化 ── 規格：docs/jogress-spec.md
+    // 這是**玩家功能**，release 版也要能用（不進 blockedCmd）。「現在不成立」是狀態，
+    // 要講清楚缺什麼；跟「此版本未提供此指令」不能共用同一條訊息。
+    if (args[0] === '--jogress') {
+        const st    = core.loadState(STATE_FILE);
+        const force = readForce();
+        const name  = (id) => core.getDisplayName(id);
+        const front = st.characterId;
+        const all   = core.loadJogress();
+        // 組合表寫重複了：core 跑在 statusline 裡不能印字，所以由這裡講出來
+        for (const d of all.dupes)
+            console.log(`⚠ jogress.json 有重複的組合：${d.front} ＋ ${d.camp}（後面那筆 → ${d.to} 被忽略，取先出現的）`);
+        // 凍結看 force：st._freezeEvolve 是當家那端每拍重讀的，這裡拿到的可能是舊的
+        const frozen = !!force.freezeEvolve;
+        const cands  = core.jogressCandidates(st, ranch, { pairs: all.pairs, frozen });
+        const num    = (petId) => pets.findIndex(p => p.id === petId) + 1;
+
+        if (!args[1]) {
+            if (cands.length) {
+                console.log(`可以合體進化（現役 ${name(front)}）：`);
+                for (const c of cands)
+                    console.log(`  #${num(c.petId)}  營地的 ${name(c.camp)}  →  ${name(front)} 變成 ${name(c.to)}`);
+                console.log('');
+                console.log('  vpet jogress <編號>  看確認說明（營地那隻會永久消失）');
+                process.exit(0);
+            }
+            // 沒有成立的 → 講缺什麼，讓人自己知道下一步
+            if (frozen) { console.log('進化凍結中（vpet unfreeze 解除），合體進化也算進化。'); process.exit(1); }
+            const mine = all.pairs.filter(p => p.front === front);
+            if (!mine.length) {
+                console.log(`現役 ${name(front)} 沒有任何合體組合。`);
+            } else {
+                console.log(`現役 ${name(front)} 可以跟這些合體，但營地裡沒有：`);
+                for (const p of mine) console.log(`  ${name(p.camp)}  →  ${name(p.to)}`);
+            }
+            console.log(`營地（${pets.length}/${cap}）：${pets.length ? pets.map(p => name(p.state.characterId)).join('、') : '空的'}`);
+            process.exit(1);
+        }
+
+        const { pet, err } = resolve(args[1]);
+        if (err) { console.log(err); process.exit(1); }
+        const c = cands.find(x => x.petId === pet.id);
+        if (!c) {
+            if (frozen) console.log('進化凍結中（vpet unfreeze 解除），合體進化也算進化。');
+            else console.log(`現役 ${name(front)} ＋ 營地的 ${name(pet.state.characterId)} 沒有這一組合體。`
+                           + '（vpet jogress 可以看現在成立的組合）');
+            process.exit(1);
+        }
+        // 不可逆 → 二次確認。做成「再打一次加 yes」而不是互動提問：這支也會被 daemon
+        // 以 subprocess 呼叫，不能吊在等輸入。文案要講是**哪一隻**、而且救不回來。
+        if (args[2] !== 'yes') {
+            console.log(`合體進化會**永久消耗**營地的 #${num(pet.id)} ${name(c.camp)}（救不回來）：`);
+            console.log(`  ${label(pet)}`);
+            console.log(`前線的 ${name(front)} 會變成 ${name(c.to)}。`);
+            console.log(`確定的話請打：vpet jogress ${args[1]} yes`);
+            process.exit(1);
+        }
+        const f = readForce();
+        f.ranchTriggerTs = Date.now();
+        f.ranchOp        = { op: 'jogress', id: pet.id };
+        // 不能同時排著別的換角色／進化：force.character 會把狀態清空，
+        // evolveTarget 會在同一拍把合體的目標蓋掉
+        delete f.character; delete f.evolveTriggerTs; delete f.evolveTarget;
+        writeForce(f);
+        console.log(`✓ 已排入合體進化：${name(front)} ＋ ${name(c.camp)} → ${name(c.to)}（下次 refresh 生效）`);
         process.exit(0);
     }
 }

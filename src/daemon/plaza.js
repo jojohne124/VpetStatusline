@@ -150,15 +150,41 @@ const NPCS = [
  * @param opts       { caches: Map, bg: dots|null, me: code, npc: bool, field }
  * @returns          { lines, placed, labels }
  */
+// ── 營地畫小一號 ─────────────────────────────────────────────────────
+// 走路、分區、落點全部照舊在 YARD_FIELD（52x40 dot）上算 —— 那些是存檔與決定性走路的
+// 資料，不動。只有「畫」換到一張更細的格子：場地實際大小不變（約 416x320 px），
+// 前端用 6px 一格而不是 8px 來畫，角色的 16 dot 就小一號（128px → 96px）。
+//
+// 角色在自己原本的落腳處（16 個粗格 = 21.3 個細格）裡**水平置中、腳貼底**，
+// 看起來就是「站在同一個位置，人變小了」。不這樣對齊的話，角色會整群往左上偏：
+// 可走範圍是用粗格的 16 扣出來的，換到細格只用掉 16，右邊和下面會空出一條。
+//
+// 前端完全活在「細格」裡（/yard 的 cols/rows、pets 的 x/y、zones），
+// 換算只發生在伺服器的邊界上：yardToDraw（走路 → 畫）與 yardFromDraw（放下的落點 → 走路）。
+const YARD_RENDER = (() => {
+    const s = 8 / 6;
+    const F = W.YARD_FIELD, S = W.SPRITE;
+    const foot = S * s - S;
+    return { s, w: Math.round(F.w * s), h: 2 * Math.round(F.h * s / 2),
+             offX: Math.round(foot / 2), offY: Math.round(foot) };
+})();
+const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.s) + YARD_RENDER.offX,
+                                y: Math.round(y * YARD_RENDER.s) + YARD_RENDER.offY });
+const yardFromDraw = (x, y) => ({ x: Math.round((x - YARD_RENDER.offX) / YARD_RENDER.s),
+                                  y: Math.round((y - YARD_RENDER.offY) / YARD_RENDER.s) });
+
+// opts.render：{ w, h, toDraw(x,y) } —— 畫在另一張格子上（營地用）。沒給就跟走路同一張（廣場）。
 function composePlaza(core, occupants, step, opts = {}) {
     const caches = opts.caches instanceof Map ? opts.caches : new Map();
     const field  = opts.field || W.PLAZA_FIELD;
+    const render = opts.render || null;
+    const bw = render ? render.w : field.w, bh = render ? render.h : field.h;
 
     // 1. 空的 dot 緩衝（或底圖）+ 同尺寸的「這個 dot 是誰的」緩衝
     const dots = [], owner = [];
-    for (let y = 0; y < field.h; y++) {
-        dots.push(new Array(field.w).fill(null));
-        owner.push(new Array(field.w).fill(-1));
+    for (let y = 0; y < bh; y++) {
+        dots.push(new Array(bw).fill(null));
+        owner.push(new Array(bw).fill(-1));
     }
     if (opts.bg) blit(dots, opts.bg, 0, 0);
 
@@ -188,14 +214,17 @@ function composePlaza(core, occupants, step, opts = {}) {
         // 地面位置）。跳起來就切到別人前面、名牌跟著飛，兩個都不對。
         // 貼著上緣時往上頂會超出畫面 -> 夾住，那一下就看不到跳（很少見，可接受）。
         p.jumpDy = p.jump ? Math.min(p.jump, p.y - field.minY) : 0;
-        if (sp) blit(dots, sp, p.x, p.y - p.jumpDy, owner, i);
+        // dx/dy = **畫出來**的位置（細格；含跳躍）。前端的命中判定要用這個。
+        const at = render ? render.toDraw(p.x, p.y - p.jumpDy) : { x: p.x, y: p.y - p.jumpDy };
+        p.dx = at.x; p.dy = at.y;
+        if (sp) blit(dots, sp, at.x, at.y, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
 
     // 4. dot -> cell -> ANSI，名牌另外走文字層（見下）
     //    天氣**不在這裡**：做過「依天氣把角色調色」，實際看了拿掉 —— 16x16 的點陣圖
     //    顏色本來就少，一染就分不出誰是誰。天氣整層都在前端疊，不動角色本身。
-    const cells  = dotsToCells(dots, field.w);
+    const cells  = dotsToCells(dots, bw);
     const labels = buildLabels(placed, core, opts.me, owner, field);
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱
     return { lines: renderWithLabels(cells, labels), placed, labels };
@@ -481,7 +510,8 @@ function yardZonesFor(core, n, layout) {
 function composeYard(core, ranch, activeState, step, opts = {}) {
     const occ = yardOccupants(core, ranch, activeState, opts.react, opts.layout, core);
     if (!occ.length) return null;
-    return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD });
+    return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD,
+                                           render: { w: YARD_RENDER.w, h: YARD_RENDER.h, toDraw: yardToDraw } });
 }
 
 module.exports = {
@@ -490,6 +520,7 @@ module.exports = {
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, cellToAnsi, occluded, NPCS,
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
+    YARD_RENDER, yardToDraw, yardFromDraw,
     yardZones: W.yardZones, zoneAnchor: W.zoneAnchor, ZONE_MARGIN: W.ZONE_MARGIN,
     yardLayoutNames: W.yardLayoutNames, YARD_LAYOUT_DEFAULT: W.YARD_LAYOUT_DEFAULT,
     YARD_LAYOUTS_FILE, loadYardLayouts, yardLayoutsFor, yardZonesFor,

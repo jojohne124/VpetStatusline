@@ -375,9 +375,11 @@ console.log('— 院子 —');
         const out = P.composeYard(core, ranch, { characterId: 'greymon' }, step, { caches: new Map() });
         // 院子與廣場是不同的場地，尺寸各自決定 —— 這裡順便釘住「院子確實比廣場大」，
         // 免得日後有人把 field 參數拿掉又退回共用同一組常數。
-        const F = W.YARD_FIELD;
-        ok(out && out.lines.length === F.h / 2, `院子列數應為 ${F.h / 2}，實際 ${out && out.lines.length}`);
-        ok(out.lines[0].replace(/\[[0-9;]*m/g, '').length === F.w, `院子欄數應為 ${F.w}`);
+        // 院子是「畫小一號」的：走路在 YARD_FIELD 上算，畫在更細的 YARD_RENDER 上（見 plaza.js）。
+        // 合成出來的是畫的那張，所以尺寸要對 YARD_RENDER（它也是從 YARD_FIELD 推出來的）。
+        const F = W.YARD_FIELD, R = P.YARD_RENDER;
+        ok(out && out.lines.length === R.h / 2, `院子列數應為 ${R.h / 2}，實際 ${out && out.lines.length}`);
+        ok(out.lines[0].replace(/\[[0-9;]*m/g, '').length === R.w, `院子欄數應為 ${R.w}`);
         // 寬度對齊家裡的舞台（BASE_COLS = 52）—— 兩個畫面在同一個版位切換，
         // 寬度一樣才不會每按一次按鈕整頁就跳一下。
         ok(F.w === 52, `院子寬度應與前線舞台同寬（52），實際 ${F.w}`);

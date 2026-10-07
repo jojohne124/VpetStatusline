@@ -195,6 +195,21 @@ console.log('— 實裝再分：可取得／不可取得 —');
        `不可取得區的高度沒有撐到最多的那欄（Adult 有 3 隻，區高只有 ${L.divider2Y - L.dividerY}px）`);
 }
 {
+    // 合體進化：Mastemon 那種只能合體拿到的，雙親都可取得時要算可取得 ——
+    // 不然它會永遠卡在「不可取得」，看起來像線沒接好。
+    const N = (id, stage, extra) => ({ ...node(id, stage, true, 10), ...extra });
+    const nodes = [N('s', 'Child', { starter: true }), N('x', 'Perfect'), N('y', 'Perfect'), N('z', 'Ultimate')];
+    const edges = [{ from: 's', to: 'x' }, { from: 's', to: 'y' }];
+    T.setG({ nodes, edges, jogress: [{ front: 'x', camp: 'y', to: 'z' }] });
+    let L = T.computeLayout();
+    ok(L.cols.find(c => c.stage === 'Ultimate').im.some(n => n.id === 'z'),
+       '只能靠合體拿到的角色被分到不可取得（/graph 的 jogress 沒有接上？）');
+    T.setG({ nodes, edges: [edges[0]], jogress: [{ front: 'x', camp: 'y', to: 'z' }] });
+    L = T.computeLayout();
+    ok(L.cols.find(c => c.stage === 'Ultimate').na.some(n => n.id === 'z'),
+       '雙親只有一方可取得時，合體結果不該算可取得');
+}
+{
     // 一隻不可取得的都沒有時，區域仍要留一列：兩條分隔線疊在一起就分不出誰是誰了
     T.setG({ nodes: [node('s', 'Child', true), node('a', 'Adult', true)], edges: [{ from: 's', to: 'a' }] });
     T.get().nodes[0].starter = true;

@@ -228,6 +228,110 @@ function matchRanchRule(rule, pet, now, opts = {}) {
     return true;
 }
 
+// ── 合體進化（Jogress）── 規格：docs/jogress-spec.md ─────────────────────────
+// 前線的 vpet ＋ 營地的特定一隻 → 前線那隻進化成第三隻，營地那隻永久消失。
+//
+// 不併進 special-evolutions.json：那份是「營地裡那隻自己變」，這個是「前線變、營地那隻
+// 消失」，方向相反。混在一份裡，applyRanchAging 的迴圈得同時處理兩種語意。
+const JOGRESS_FILE = path.join(ASSETS_DIR, 'jogress.json');
+
+// 組合表的展開（pair 簡寫、重複偵測）放在 shared/evo-rules.js —— 圖鑑與路線編輯器的
+// 可達性也要吃同一份，三邊各寫一份遲早分叉。
+// ⚠️ 部署樹的相對路徑跟 repo 不一樣：core 裝在 INSTALL_ROOT 根目錄（./shared/），
+//    repo 裡在 src/runtime/（../shared/）。兩個都試；都找不到就當沒有合體規則 ——
+//    寧可少一個功能，也不能讓 statusline 因為 require 失敗整個掛掉。
+let _evoRules;
+function evoRules() {
+    if (_evoRules !== undefined) return _evoRules;
+    _evoRules = null;
+    for (const rel of [['shared'], ['..', 'shared']]) {
+        try { _evoRules = require(path.join(__dirname, ...rel, 'evo-rules.js')); break; }
+        catch (e) {}
+    }
+    return _evoRules;
+}
+
+/** characters/jogress.json → { pairs:[{front,camp,to}], dupes:[...] }。沒有檔案 = 沒有組合。 */
+function loadJogress(file) {
+    const R = evoRules();
+    if (!R || !R.expandJogress) return { pairs: [], dupes: [] };
+    try { return R.expandJogress(JSON.parse(fs.readFileSync(file || JOGRESS_FILE, 'utf8'))); }
+    catch (e) { return { pairs: [], dupes: [] }; }
+}
+
+/**
+ * (前線, 營地) 會合體成誰。不成立回 null。
+ * 目標不在 roster 就不成立 —— 與 checkEvolution 同一條 gate，所以規則可以先寫著等美術。
+ */
+function jogressTarget(front, camp, opts = {}) {
+    if (!front || !camp) return null;
+    const pairs = opts.pairs || loadJogress(opts.jogressFile).pairs;
+    const hit = pairs.find(p => p.front === front && p.camp === camp);
+    if (!hit) return null;
+    const roster = opts.rosterSet || getRosterSet();
+    if (roster && roster.size && !roster.has(hit.to)) return null;
+    return hit.to;
+}
+
+/**
+ * 目前成立的合體組合。CLI 列清單、daemon 決定按鈕露不露臉、applyRanchOp 執行前驗證，
+ * 三邊都問這一個 —— 各寫一份就會出現「按鈕亮著但打指令說不成立」。
+ *
+ * opts.frozen   進化凍結中（預設看 st._freezeEvolve）→ 空清單。freeze 凍的是進化，合體是進化。
+ * opts.heldIds  正被 daemon 長壓拿在手上的營地 id。那隻不是候選 ——
+ *               否則畫面上被抓著的寵物會突然消失，那是 bug 的體感。
+ * 每次現算、不快取：營地那隻可能剛被 swap 出來，候選要跟著變。
+ */
+function jogressCandidates(st, ranch, opts = {}) {
+    const frozen = opts.frozen != null ? !!opts.frozen : !!(st && st._freezeEvolve);
+    if (!st || !st.characterId || frozen) return [];
+    const pairs = opts.pairs || loadJogress(opts.jogressFile).pairs;
+    if (!pairs.length) return [];
+    const held = opts.heldIds || null;
+    const out = [];
+    for (const pet of ((ranch && ranch.pets) || [])) {
+        if (held && held.has(pet.id)) continue;
+        const camp = pet.state && pet.state.characterId;
+        const to = jogressTarget(st.characterId, camp, { ...opts, pairs });
+        if (to) out.push({ petId: pet.id, camp, to });
+    }
+    return out;
+}
+
+/** from → to 是不是某組合體（給 updateEvoHistory 判定血緣不是斷點用） */
+function isJogressStep(from, to, opts = {}) {
+    if (!from || !to) return false;
+    const pairs = opts.pairs || loadJogress(opts.jogressFile).pairs;
+    return pairs.some(p => p.front === from && p.to === to);
+}
+
+/**
+ * 合體進化的保險，每拍跑一次。
+ *
+ * 營地那隻在 applyRanchOp 當下就消耗掉了，進化本身卻要等動畫播完才 commit。
+ * 而動畫有逾時保護：statusline 模式下沒人操作二十幾秒就會逾時、清掉 evoNextCharId，
+ * 進化就不會發生 —— 營地少一隻、前線沒變，**一隻寵物憑空消失**。
+ * 所以這裡檢查：沒有進化在播、也沒有排著要播，角色卻還不是 jogressTo → 直接落地。
+ * 正常播完的情況角色早就是 jogressTo 了，這裡只是把記號收掉。
+ */
+function settleJogress(st, now = Date.now()) {
+    const to = st && st.jogressTo;
+    if (!to) return false;
+    if (st.evoStartStep >= 0 || st._forceEvolve) return false;   // 還在播／還沒開始播
+    if (st.characterId !== to) {
+        const prev = st.characterId;
+        st.characterId = to;
+        // 與兩份正常進化 commit（daemon / statusline）同一套清理
+        if (getCharacterStage(to) === 'Super-Ultimate') st.inheritedPower = computeInheritedPower(st, prev);
+        else delete st.inheritedPower;
+        st.evoNextCharId = null; st.evoShownElapsed = -1;
+        delete st.exprStartStep; delete st.roarStartStep; delete st.lastStepSeen; delete st.happyStartStep;
+        resetStageStats(st, now);
+    }
+    delete st.jogressTo;
+    return true;
+}
+
 // 每隻最多幾毫秒檢查一次。48 小時的判定不需要每秒重算，而這條路徑每拍都會經過。
 const RANCH_AGE_CHECK_MS = 60000;
 
@@ -287,7 +391,9 @@ function applySpecialEvo(snap, to, now) {
 //   { op, ok:true, ... }         成功
 //   { op, ok:false, retry:true } 這一拍不能做，但**指令保留**，下一拍再試
 //   { op, ok:false }             永久失敗，指令已消耗
-function applyRanchOp(st, force, ranchFile, forceFile) {
+//
+// opts（jogress 用）：heldIds = daemon 正拿在手上的營地 id；pairs / rosterSet / jogressFile 給測試注入。
+function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
     const op = force.ranchOp;
     if (!op || !force.ranchTriggerTs || force.ranchTriggerTs === st.lastRanchTriggerTs) return null;
 
@@ -345,6 +451,32 @@ function applyRanchOp(st, force, ranchFile, forceFile) {
         restorePet(st, incoming.state);
         return { op: 'swap', ok: true, to: st.characterId };
     }
+    if (op.op === 'jogress') {
+        const pet = ranch.pets.find(p => p.id === op.id);
+        if (!pet) return { op: 'jogress', ok: false, reason: 'notfound' };   // 多視窗搶同一隻時慢的那個
+        // 凍結看 force 而不是 st._freezeEvolve：後者在這個函式**之後**才從 force 重讀，
+        // 這一拍拿到的會是上一拍的值。
+        if (force.freezeEvolve) return { op: 'jogress', ok: false, reason: 'frozen' };
+        // 列候選時擋過一次，這裡還要再擋：CLI 看不到「拿著」的狀態，
+        // 而且使用者也可能按下合體**之後**才去抓那隻。
+        if (opts.heldIds && opts.heldIds.has(pet.id)) return { op: 'jogress', ok: false, reason: 'held' };
+        const front = st.characterId, camp = pet.state && pet.state.characterId;
+        const to = jogressTarget(front, camp, opts);
+        if (!to) return { op: 'jogress', ok: false, reason: 'notmatch', front, camp };
+
+        ranch.pets.splice(ranch.pets.indexOf(pet), 1);
+        // 營地寫不進去就**不能**進化：營地那隻還在、前線卻變了，等於憑空多出一隻。
+        if (!saveRanch(ranch, ranchFile)) return { op: 'jogress', ok: false, reason: 'writefail' };
+
+        // 現役走正常進化（動畫、resetStageStats、圖鑑都在 commit 那邊）。
+        // jogressTo 是保險：動畫沒播完也要落地，見 settleJogress。
+        st._forceEvolve = to;
+        st.jogressTo    = to;
+        // 卡片／右鍵日後能講「由 Angewomon ＋ LadyDevimon 而來」。不留的話玩家過幾天
+        // 只會覺得那隻不見了。帶 to：之後再進化，顯示端比對 to !== characterId 就知道這段已經過去。
+        st.jogressFrom  = { front, camp, ranchId: pet.id, to, at: Date.now() };
+        return { op: 'jogress', ok: true, front, camp, to };
+    }
     return { op: op.op, ok: false, reason: 'unknown' };
 }
 
@@ -354,7 +486,13 @@ function applyRanchOp(st, force, ranchFile, forceFile) {
 const FORCE_FILE_DEFAULT = path.join(STATE_DIR, 'force-char.json');
 // ranchFile 只有測試會傳 —— 沒有它就只能拿真的 ranch.json 來驗「收進去失敗時
 // 不可以換角色」，那條路徑一跑就會動到使用者的營地。
-function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
+// opts.heldIds：daemon 傳進來的「正被拿在手上」的營地 id（只有它知道，見 yard-touch.js）。
+function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile, opts = {}) {
+    // 合體的保險要排在讀 force 之前，理由同下面的營地老化：force 檔不存在時這個函式會提早
+    // return，而這段跟 force 一點關係都沒有。也要排在 applyRanchOp 之前 —— 同一拍若有
+    // keep/swap，得先讓上一次合體落地，否則收進營地的會是一隻「欠著一次進化」的快照。
+    settleJogress(st);
+
     // 營地的時間類進化跟 force-char.json 一點關係都沒有，所以要在讀那個檔**之前**做。
     // ⚠️ 放在下面的話，force-char.json 不存在時 parse 會 throw、整個函式提早 return，
     //    營地就永遠不會老化 —— 而「這個檔不存在」是很正常的狀態（全新安裝、或從沒下過
@@ -367,7 +505,7 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile) {
 
     // 營地操作必須排在 force.character 之前 —— keep 是「先把現役收起來，再抽新的」，
     // 順序反過來的話收進營地的會是那隻剛抽到的新寵物，舊的直接被下面那段清空。
-    const ranchRes = applyRanchOp(st, force, ranchFile, forceFile);
+    const ranchRes = applyRanchOp(st, force, ranchFile, forceFile, opts);
 
     // keep 是「先把現役收起來，再抽新的」兩件事，而抽新的那件是靠 force.character。
     // ⚠️ 收起來失敗時**絕對不能**換角色 —— 換了就等於現役被新角色蓋掉、
@@ -1249,14 +1387,18 @@ function buildLineageBackward(cur) {
 }
 // 每 tick 在 characterId 定案後呼叫：維護 st.evoHistory。
 // last===cur 直接返回（O(1)）；自然進化 append；斷點(reset/cheat 跳轉)重設；空則補種。
-function updateEvoHistory(st) {
+// opts 只有測試會傳（pairs / jogressFile）—— 不傳就讀安裝版的 jogress.json。
+function updateEvoHistory(st, opts = {}) {
     const cur = st.characterId;
     if (!cur) return;
     const h = Array.isArray(st.evoHistory) ? st.evoHistory : null;
     if (!h || h.length === 0) { st.evoHistory = buildLineageBackward(cur); return; }
     const last = h[h.length - 1];
     if (last === cur) return;
-    if (isEvolutionTarget(last, cur)) h.push(cur);   // 自然進化
+    // 合體也是進化：Angewomon → Mastemon 不在任何 evolvesTo 裡，不認的話會被當成斷點，
+    // vpet tree 只剩一格。不能靠「合體當下先把 to 寫進 evoHistory」—— 動畫 12 拍才 commit，
+    // 這段期間現役還是 front，下一拍這裡就會看到尾巴≠現役而整條重設。
+    if (isEvolutionTarget(last, cur) || isJogressStep(last, cur, opts)) h.push(cur);   // 自然進化 / 合體
     else st.evoHistory = [cur];                       // 斷點 → 重設
 }
 
@@ -2378,6 +2520,7 @@ module.exports = {
     RANCH_FILE, RANCH_CAP, ranchCap, loadRanch, saveRanch, newRanchId,
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
+    JOGRESS_FILE, loadJogress, jogressTarget, jogressCandidates, isJogressStep, settleJogress,
     recordAlbumChar,
     getDisplayName,
     getCharacterTags,

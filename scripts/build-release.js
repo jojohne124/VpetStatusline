@@ -119,7 +119,8 @@ copyRel(path.join('characters', 'roster.json'));
 //   special-evolutions.json 沒了 → 規則型特殊進化（營地時效那類）永遠不會發生
 //   yard-layouts.json 沒了 → 營地走動範圍退回內建切法，編輯器調過的分區不算
 // evo-layout.json 刻意不出貨：那是進化路線編輯器的版面，只有 dev 用得到。
-for (const f of ['special-evolutions.json', 'yard-layouts.json'])
+//   jogress.json 沒了 → 合體進化的候選永遠是空的，零錯誤訊息
+for (const f of ['special-evolutions.json', 'yard-layouts.json', 'jogress.json'])
     if (fs.existsSync(path.join(REPO, 'characters', f))) copyRel(path.join('characters', f));
 const KEEP_CHAR = new Set(['art.json', 'config.json', 'bullet-art.json', 'cutin-art.json']);
 for (const d of fs.readdirSync(path.join(REPO, 'characters'), { withFileTypes: true })) {

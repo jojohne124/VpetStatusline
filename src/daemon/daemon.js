@@ -32,7 +32,8 @@ const PW    = require('../shared/plaza-walk.js');   // 拍子換算（摸摸要�
 const YT    = require('./yard-touch');              // 營地摸摸的狀態機（輪詢間隔也從這裡取）
 const WX    = require('../shared/weather.js');
 const wxSrc = require('./weather-source.js');
-const PlazaClient = require('./plaza-client');     // 廣場（docs/plaza-spec.md）：連內網主機的那一端
+const PlazaClient = require('./plaza-client');
+const PlazaServer = require('./plaza-server');   // 只拿常數（聊天字數上限），不在 daemon 裡起伺服器     // 廣場（docs/plaza-spec.md）：連內網主機的那一端
 
 const {
     STATE_DIR, EVO_LENGTH, MAX_POS,
@@ -829,6 +830,10 @@ function applyCommand(action, args = {}) {
         if (args.mode !== 'auto' && args.mode !== 'manual') return { ok: false, error: '模式只有 auto / manual' };
         return plazaClient.move({ mode: args.mode }).then(r => (r.ok ? { ok: true, action } : r));
     }
+    if (action === 'plazaChat') {
+        if (!args.text) return { ok: false, error: '沒有內容' };
+        return plazaClient.say(args.text).then(r => (r.ok ? { ok: true, action } : r));
+    }
     if (action === 'plazaMove') {
         const vx = Number(args.vx), vy = Number(args.vy);
         return plazaClient.move({ vx, vy }).then(r => (r.ok ? { ok: true, action } : r));
@@ -1079,6 +1084,13 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #plazabar button:hover{background:#30363d;border-color:#8b949e}
   #plazabar input{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
                   padding:3px 7px;font:inherit;font-size:12px;width:120px}
+  /* 聊天室：寬度對齊廣場畫布，舊訊息往上捲 */
+  #chatlog{margin-top:6px;max-width:414px;height:130px;overflow-y:auto;background:#0d1117;
+           border:1px solid #30363d;border-radius:6px;padding:5px 8px;font-size:12px;line-height:1.55;
+           color:#c9d1d9;word-break:break-all;scrollbar-color:#30363d #0d1117}
+  #chatlog .sys{color:#8b949e;font-style:italic}
+  #chatlog .who{font-weight:600}
+  #chatin{width:300px !important}
   #plazabar input[type=color]{width:34px;height:24px;padding:1px;vertical-align:middle;cursor:pointer}
   #ctx{position:fixed;z-index:50;display:none;min-width:150px;background:#161b22;
        border:1px solid #30363d;border-radius:6px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
@@ -1122,6 +1134,10 @@ ${IS_RELEASE ? '' : `
       <div class="form" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
         <label class="k" title="名牌顏色">顏色 <input type="color" id="plazacolor" value="${plaza.NAME_DEFAULT_COLOR}"></label>
+      </div>
+      <div id="chatlog"></div>
+      <div class="form" style="margin-top:4px">
+        <input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
       </div>
     </div>
     <div id="cmdmsg"></div>
@@ -1792,8 +1808,78 @@ async function pollPlaza(){
   document.getElementById('err').textContent='';
   draw(p.lines);
   drawNameTags(p.tags);
+  drawBubbles(p.tags, p.chat, p.serverNow);
+  renderChat(p.chat);
   syncWx();
 }
+// ── 聊天室 ──
+// 只有最後一則變了才重畫（每 250ms 重建一次會把使用者正在選取的文字洗掉）。
+// 原本就捲在最底下才跟著捲到底；往上翻舊訊息時不要被拉回去。
+let chatShown=0;
+function renderChat(list){
+  list=list||[];
+  const last=list.length ? list[list.length-1].seq : 0;
+  if(last===chatShown) return;
+  chatShown=last;
+  const box=document.getElementById('chatlog');
+  const atBottom = box.scrollTop+box.clientHeight >= box.scrollHeight-4;
+  box.textContent='';
+  for(const m of list){
+    const row=document.createElement('div');
+    const t=new Date(m.at), p2=n=>(n<10?'0':'')+n;
+    const hhmm=p2(t.getHours())+':'+p2(t.getMinutes())+' ';
+    if(m.sys){ row.className='sys'; row.textContent=hhmm+m.text; }
+    else {
+      row.append(document.createTextNode(hhmm));
+      const who=document.createElement('span'); who.className='who';
+      who.style.color=m.color||'${plaza.NAME_DEFAULT_COLOR}'; who.textContent=m.name;
+      row.append(who, document.createTextNode('：'+m.text));   // textContent：別人打的字不能當 HTML
+    }
+    box.append(row);
+  }
+  if(atBottom) box.scrollTop=box.scrollHeight;
+}
+// 對話泡泡：說話的人頭上顯示前 BUBBLE_CHARS 個字，BUBBLE_MS 後消失（規格 §七）
+const BUBBLE_MS=5000, BUBBLE_CHARS=12;
+function drawBubbles(tags, list, now){
+  if(!tags||!list||!list.length) return;
+  const cv=document.getElementById('pet'), g=cv.getContext('2d');
+  // 看板在畫布座標裡的範圍（兩者都在 #stage 裡，offset 直接相減）
+  const hud=document.getElementById('hud');
+  const hudRect = hud && hud.offsetWidth ? { x:hud.offsetLeft-cv.offsetLeft, y:hud.offsetTop-cv.offsetTop,
+                                              w:hud.offsetWidth, h:hud.offsetHeight } : null;
+  const DW=CW, DH=CH/2;
+  g.save();
+  g.font='12px "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
+  g.textAlign='center'; g.textBaseline='middle';
+  for(const t of tags){
+    const id=String(t.key||'').slice(2);   // key = 'p:' + 成員 id
+    let msg=null;
+    for(let i=list.length-1;i>=0;i--){ const m=list[i]; if(!m.sys&&m.from===id){ msg=m; break; } }
+    if(!msg || now-msg.at>BUBBLE_MS) continue;
+    const chars=[...msg.text];
+    const txt=chars.length>BUBBLE_CHARS ? chars.slice(0,BUBBLE_CHARS).join('')+'…' : msg.text;
+    const w=g.measureText(txt).width+12, h=18;
+    const cx=Math.max(w/2+1, Math.min(cv.width-w/2-1, t.x*DW));
+    let cy=Math.max(h/2+1, t.top*DH-h/2-6);
+    // 右上角的日期／天氣看板（HTML 疊層）蓋在畫布上面：泡泡撞到它就改放到名牌下面
+    if(hudRect && cx+w/2>hudRect.x && cx-w/2<hudRect.x+hudRect.w && cy-h/2<hudRect.y+hudRect.h && cy+h/2>hudRect.y)
+      cy=Math.min(cv.height-h/2-1, t.y*DH+12+h/2+2);
+    g.fillStyle='rgba(240,240,245,.95)'; g.strokeStyle='rgba(0,0,0,.6)'; g.lineWidth=1;
+    g.beginPath(); g.roundRect(cx-w/2, cy-h/2, w, h, 6); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(cx-4,cy+h/2); g.lineTo(cx,cy+h/2+5); g.lineTo(cx+4,cy+h/2); g.fill();
+    g.fillStyle='#1f2328'; g.fillText(txt,cx,cy+1);
+  }
+  g.restore();
+}
+function chatSubmit(){
+  const ci=document.getElementById('chatin');
+  const v=ci.value.trim(); if(!v) return;
+  sendCmd('plazaChat',{text:v}).then(r=>{ if(r&&r.ok){ ci.value=''; poll(); } });
+}
+document.getElementById('chatsend').addEventListener('click',chatSubmit);
+document.getElementById('chatin').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) chatSubmit(); });
+
 // 名牌：用正常字型畫在腳下置中（伺服器只給位置與顏色）。格子太小，塞進格子會變細長條。
 // 深色描邊讓名字在任何天氣、任何角色顏色上都讀得到。
 function drawNameTags(tags){
@@ -1900,7 +1986,7 @@ async function sendCmd(action,args){
     const MOOD={happy:'摸摸 ♥',wake:'把牠叫醒了',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
-    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode');
+    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat');
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -2304,7 +2390,9 @@ const server = http.createServer((req, res) => {
                          myColor: me.color || null,
                          // 天氣比照營地：用這台 daemon 抓到的（內網大家在同一個城市，各抓各的一樣）
                          weather: (() => { const w = weatherFor(null); return { ...w, ...WX.describe(w) }; })(),
-                         names: list.map(m => m.name), lines: out.lines, tags: out.tags };
+                         names: list.map(m => m.name), lines: out.lines, tags: out.tags,
+                         // 聊天：最近 50 則；serverNow 給前端判斷對話泡泡還要不要顯示（5 秒）
+                         chat: plazaClient.chat(), serverNow: Date.now() + plazaClient.skew() };
             }
         } catch (e) {
             body = { ok: false, error: e.message };

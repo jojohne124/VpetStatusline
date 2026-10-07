@@ -903,6 +903,21 @@ setTimeout(async () => {
                 ok(/addEventListener\('blur'/.test(js), '切走視窗時沒有停下（keyup 收不到，角色會一直走）');
                 ok(/#plazabar button\{background:#21262d/.test(html), '廣場下方的按鈕是瀏覽器預設的白鈕');
 
+                // 聊天：送出去、/plaza 帶回來（含伺服器時間，泡泡要用）、頁面有聊天框與泡泡
+                const ch = await cmd('plazaChat', { text: '哈囉' });
+                ok(ch.ok, '發言失敗：' + JSON.stringify(ch).slice(0, 120));
+                let got = null;
+                for (let i = 0; i < 30 && !got; i++) {
+                    const q = JSON.parse(await getOn(P4, '/plaza'));
+                    if ((q.chat || []).some(m => m.text === '哈囉')) got = q; else await wait(100);
+                }
+                ok(got, '/plaza 沒有帶回聊天');
+                ok(got && typeof got.serverNow === 'number' && got.tags.every(t => typeof t.key === 'string'),
+                   '/plaza 缺 serverNow 或名牌沒有 key（對話泡泡對不上是誰說的）');
+                ok(/id="chatlog"/.test(html) && /id="chatin"/.test(html), '頁面沒有聊天框');
+                ok(/function drawBubbles/.test(js) && /drawBubbles\(p\.tags, p\.chat, p\.serverNow\)/.test(js), '沒有畫對話泡泡');
+                ok(/document\.createTextNode\('：'\+m\.text\)/.test(js), '聊天內容不是用純文字放進頁面（別人打的字會被當成 HTML）');
+
                 // 名牌保留大小寫（以前一律轉大寫）
                 const lc = await cmd('plazaRename', { name: 'kai' });
                 ok(lc.ok && ps.roster().some(m => m.name === 'kai'), '小寫名牌被改成大寫了：' + JSON.stringify(ps.roster().map(m => m.name)));

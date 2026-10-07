@@ -284,6 +284,42 @@ async function main() {
     ok(au.ok && !au.walk.mode && au.walk.origin && au.walk.origin.x === st.walk.x && au.walk.origin.y === st.walk.y,
        '切回自動沒有從停下的地方接著走：' + JSON.stringify(au));
 
+    // ── 聊天 ──
+    {
+        const t0 = plaza.chat.length;
+        const r = await b.say('  大家好   ');
+        ok(r.ok, '發言失敗：' + r.error);
+        ok(await until(() => a2.chat().some(m => m.text === '大家好' && m.name === b.me().name)),
+           '別人沒收到發言（或空白沒收乾淨）');
+        ok(await until(() => b.chat().some(m => m.text === '大家好')), '自己的發言沒有回到自己的聊天紀錄');
+        const fast = await b.say('再一句');
+        ok(!fast.ok && /太快/.test(fast.error || ''), '一秒內連發第二則應該被擋：' + JSON.stringify(fast));
+        await sleep(S.CHAT_GAP_MS + 50);
+        const long = await b.say('字'.repeat(S.CHAT_MAX + 1));
+        ok(!long.ok && /最多/.test(long.error || ''), '超過字數上限應該被擋');
+        ok((await b.say('字'.repeat(S.CHAT_MAX))).ok, '剛好字數上限應該可以送');
+        ok(!(await b.say('   ')).ok, '空白訊息應該被擋');
+        void t0;
+        // 系統訊息：有人進場／離場／改名，聊天裡會說
+        const e = mk('e');
+        ok((await e.join(prof('路人'))).ok, '路人進不來');
+        // 進場的回應就要帶舊聊天（馬上看得到），不能只靠之後串流的 hello 補 ——
+        // 這裡緊接著 join 檢查，那時串流還沒連上
+        const hist = e.chat();
+        ok(await until(() => a2.chat().some(m => m.sys && /路人 進入廣場/.test(m.text))), '有人進場，聊天裡沒說');
+        // 後進場的人拿得到之前的聊天（最近 CHAT_KEEP 則）
+        ok(hist.some(m => m.text === '大家好'), '新進場的人看不到之前的聊天（進場回應沒帶）');
+        await e.rename('路人甲');
+        ok(await until(() => a2.chat().some(m => m.sys && /路人 改名為 路人甲/.test(m.text))), '改名沒有系統訊息');
+        await e.leave();
+        ok(await until(() => a2.chat().some(m => m.sys && /路人甲 離開了/.test(m.text))), '有人離場，聊天裡沒說');
+        // 只留最近 CHAT_KEEP 則
+        for (let i = 0; i < S.CHAT_KEEP + 5; i++) { plaza.members.get(b.me().id).chatAt = 0; await b.say('洗版' + i); }
+        ok(plaza.chat.length === S.CHAT_KEEP, `伺服器留了 ${plaza.chat.length} 則，應該只留 ${S.CHAT_KEEP}`);
+        ok(await until(() => a2.chat().length === S.CHAT_KEEP && a2.chat().at(-1).text === '洗版' + (S.CHAT_KEEP + 4)),
+           `client 的聊天紀錄沒跟上或沒有截在 ${S.CHAT_KEEP} 則（${a2.chat().length}）`);
+    }
+
     // 網路抖一下（串流斷掉）→ 自動重連，人還在場上
     b._dropStream();
     await sleep(400);

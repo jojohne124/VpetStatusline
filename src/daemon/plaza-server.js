@@ -26,6 +26,10 @@ const CAP          = 20;        // 同時在場上限（畫面可讀性決定，
 const GRACE_MS     = 10000;     // 斷線多久沒接回來就算離場
 const PING_MS      = 15000;     // SSE 心跳：讓兩邊都知道連線還活著（也讓中間的設備不要掐掉閒置連線）
 const BODY_LIMIT   = 4096;
+// 聊天（規格 §七）：只存記憶體、不落地；伺服器重開就清空
+const CHAT_KEEP    = 50;        // 保留最近幾則（進場時一併給）
+const CHAT_MAX     = 100;       // 一則幾個字
+const CHAT_GAP_MS  = 1000;      // 每人每秒最多 1 則
 const FIELD        = W.PLAZA_LIVE_FIELD;   // 廣場的走路場地（大小比照營地畫面，見 plaza-walk）
 
 // 輸入一律不信任。名牌沿用 `vpet code` 的規則（statusline-cheat 的 validId），
@@ -44,7 +48,17 @@ function createPlazaServer(opts = {}) {
     const now     = opts.now     || Date.now;
     const log     = opts.log     || (() => {});
 
-    const members = new Map();   // id -> { id, name, char, stage, card, walk, stream, lostAt }
+    const members = new Map();   // id -> { id, name, char, stage, card, walk, stream, lostAt, chatAt }
+    const chat = [];             // 最近 CHAT_KEEP 則：{ seq, at, from, name, color, text } 或 { seq, at, sys:true, text }
+    let chatSeq = 0;
+    function pushChat(entry) {
+        const e = { seq: ++chatSeq, at: now(), ...entry };
+        chat.push(e);
+        if (chat.length > CHAT_KEEP) chat.splice(0, chat.length - CHAT_KEEP);
+        broadcast('chat', e);
+        return e;
+    }
+    const sys = (text) => pushChat({ sys: true, text });
 
     const pub = (m) => ({ id: m.id, name: m.name, color: m.color, char: m.char, stage: m.stage, walk: m.walk });
     const roster = () => [...members.values()].map(pub);
@@ -63,6 +77,8 @@ function createPlazaServer(opts = {}) {
         members.delete(id);
         if (m.stream) { try { m.stream.end(); } catch (e) {} m.stream = null; }
         broadcast('leave', { id, reason });
+        // 同名取代＝同一個人換了一台 daemon 進來，不是真的離開，不報
+        if (reason !== 'replaced') sys(`${m.name} 離開了`);
         log(`離場：${m.name}（${reason}）。在場 ${members.size} 人`);
     }
 
@@ -92,8 +108,9 @@ function createPlazaServer(opts = {}) {
         const m = { id, name, color, char, stage, card, walk, stream: null, lostAt: now() };
         members.set(id, m);
         broadcast('enter', pub(m), id);
+        sys(`${name} 進入廣場`);
         log(`進場：${name}（${char}）。在場 ${members.size} 人`);
-        return { status: 200, body: { ok: true, id, me: pub(m), roster: roster() } };
+        return { status: 200, body: { ok: true, id, me: pub(m), roster: roster(), chat } };
     }
 
     // 改名牌／名牌顏色：在場上隨時可以改（兩個欄位都可省略，只改有給的）。
@@ -113,8 +130,10 @@ function createPlazaServer(opts = {}) {
         }
         const c = color ? color.toLowerCase() : null;
         if (name === m.name && c === m.color) return { status: 200, body: { ok: true } };
+        const old = m.name;
         if (name !== m.name) log(`改名：${m.name} → ${name}`);
         m.name = name; m.color = c;
+        if (name !== old) sys(`${old} 改名為 ${name}`);
         broadcast('profile', { id, name: m.name, color: m.color });
         return { status: 200, body: { ok: true } };
     }
@@ -152,6 +171,21 @@ function createPlazaServer(opts = {}) {
         return { status: 200, body: { ok: true, walk } };
     }
 
+    // 發言。字數、頻率都在這裡擋 —— 不信任 client。
+    function say(body) {
+        const { id } = body || {};
+        const m = members.get(id);
+        if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        const text = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim() : '';
+        if (!text) return { status: 400, body: { ok: false, error: '沒有內容' } };
+        if ([...text].length > CHAT_MAX) return { status: 400, body: { ok: false, error: `一則最多 ${CHAT_MAX} 字` } };
+        const t = now();
+        if (m.chatAt && t - m.chatAt < CHAT_GAP_MS) return { status: 429, body: { ok: false, error: '說太快了，等一下再說' } };
+        m.chatAt = t;
+        const e = pushChat({ from: id, name: m.name, color: m.color, text });
+        return { status: 200, body: { ok: true, seq: e.seq } };
+    }
+
     function openEvents(req, res, id) {
         const m = members.get(id);
         if (!m) {
@@ -165,7 +199,7 @@ function createPlazaServer(opts = {}) {
                              'Connection': 'keep-alive' });
         m.stream = res; m.lostAt = null;
         // 重連時把整份名單再給一次：斷線期間錯過的 enter / leave 就補回來了
-        send(m, 'hello', { roster: roster() });
+        send(m, 'hello', { roster: roster(), chat });   // 斷線期間錯過的聊天也一併補上
         req.on('close', () => {
             if (m.stream === res) { m.stream = null; m.lostAt = now(); }
         });
@@ -190,6 +224,9 @@ function createPlazaServer(opts = {}) {
         }
         if (req.method === 'POST' && u.pathname === '/update') {
             return readBody(req, (j) => { const r = update(j); reply(res, r.status, r.body); });
+        }
+        if (req.method === 'POST' && u.pathname === '/chat') {
+            return readBody(req, (j) => { const r = say(j); reply(res, r.status, r.body); });
         }
         if (req.method === 'POST' && u.pathname === '/move') {
             return readBody(req, (j) => { const r = move(j); reply(res, r.status, r.body); });
@@ -218,10 +255,11 @@ function createPlazaServer(opts = {}) {
         return new Promise((r) => server.close(() => r()));
     }
 
-    return { server, roster, members, close };
+    return { server, roster, members, chat, close };
 }
 
-module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor };
+module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
+                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS };
 
 if (require.main === module) {
     const port = parseInt(process.env.VPET_PLAZA_PORT || String(DEFAULT_PORT), 10);

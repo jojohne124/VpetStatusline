@@ -27,6 +27,8 @@ function create(opts = {}) {
 
     let me = null;              // { id, name, ... }
     let members = new Map();    // id -> { id, name, char, stage, walk }
+    let chat = [];              // 最近的聊天（伺服器保留 50 則，進場／重連時整份給）
+    const CHAT_KEEP = 50;
     let skew = 0;               // serverNow - localNow
     let stream = null;          // 目前的 SSE 回應（http.IncomingMessage）
     let streamReq = null;
@@ -75,7 +77,7 @@ function create(opts = {}) {
     }
     function cleanup() {
         gen++;
-        me = null; members = new Map(); lostSince = null;
+        me = null; members = new Map(); chat = []; lostSince = null;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
         if (streamReq) { try { streamReq.destroy(); } catch (e) {} }
         stream = null; streamReq = null;
@@ -85,10 +87,17 @@ function create(opts = {}) {
         if (d && typeof d.serverNow === 'number') syncClock(d.serverNow);
         if (event === 'hello' && Array.isArray(d.roster)) {
             members = new Map(d.roster.map(m => [m.id, m]));
+            if (Array.isArray(d.chat)) chat = d.chat.slice(-CHAT_KEEP);
             // 自己不在名單裡 = 伺服器已經把我清掉了（例如它重開過）
             if (!members.has(me.id)) lose('已被移出廣場');
         } else if (event === 'enter' && d.id) {
             members.set(d.id, d);
+        } else if (event === 'chat' && d.seq) {
+            // seq 去重：重連時 hello 已經帶了整份，之後若又收到同一則不要重複
+            if (!chat.length || d.seq > chat[chat.length - 1].seq) {
+                chat.push(d);
+                if (chat.length > CHAT_KEEP) chat.splice(0, chat.length - CHAT_KEEP);
+            }
         } else if (event === 'leave' && d.id) {
             members.delete(d.id);
         } else if (event === 'profile' && d.id) {
@@ -153,6 +162,7 @@ function create(opts = {}) {
         cleanup();
         me = { ...r.body.me };
         members = new Map((r.body.roster || []).map(m => [m.id, m]));
+        chat = (r.body.chat || []).slice(-CHAT_KEEP);
         openStream();
         return { ok: true };
     }
@@ -183,6 +193,15 @@ function create(opts = {}) {
         return { ok: true, walk: r.body.walk };
     }
 
+    // 發言。成功不直接塞進 chat —— 等推播回來（自己也收得到），順序才跟別人看到的一樣。
+    async function say(text) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/chat', { id: me.id, text });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        return { ok: true, seq: r.body.seq };
+    }
+
     async function leave() {
         if (!me) return { ok: true };
         const id = me.id;
@@ -192,7 +211,8 @@ function create(opts = {}) {
     }
 
     return {
-        join, leave, rename, update, move, active,
+        join, leave, rename, update, move, say, active,
+        chat: () => chat.slice(),
         me: () => me,
         roster: () => [...members.values()],
         skew: () => skew,

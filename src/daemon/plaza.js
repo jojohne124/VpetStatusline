@@ -356,7 +356,7 @@ function nameTags(placed, labels, me) {
     const seen = new Set();
     for (const list of labels.values()) for (const it of list) seen.add(it.code);
     return placed.filter(p => p.code && seen.has(p.code)).map(p => ({
-        text: p.code, me: p.code === me,
+        text: p.code, me: p.code === me, key: p.key,   // key：前端用來對上這個人說的話（對話泡泡）
         // 所有人看到的顏色一律相同：有選就用選的，沒選就是同一個預設色。
         // 以前沒選時「自己黃、別人白」—— 結果自己看到的跟別人看到的不一樣（回報過）。
         color: p.color || NAME_DEFAULT_COLOR,

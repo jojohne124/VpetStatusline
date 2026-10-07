@@ -261,7 +261,9 @@ function composePlaza(core, occupants, step, opts = {}) {
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱
     // opts.textLabels === false：名牌不塞進格子，改回傳位置讓前端用真的字型畫（見 nameTags）
     if (opts.textLabels === false) {
-        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me) };
+        // owner：每個 dot 是誰畫的（繪製順序 z，-1 = 空）。前端畫名牌時用它把「被站在前面的角色
+        // 蓋住的部分」挖掉 —— 名牌的前後關係才會跟角色一樣（回報過：重疊時後排的名字浮在前排身上）。
+        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me), owner };
     }
     return { lines: renderWithLabels(cells, labels), placed, labels };
 }
@@ -363,6 +365,7 @@ function nameTags(placed, labels, me) {
         x: p.gx + W.SPRITE / 2, y: p.gy + W.SPRITE,
         sleeping: !!p.sleeping, top: p.gy,          // 睡著時前端在頭上畫 z
         battling: !!p.battle,                         // 對戰中：前端在頭上畫 ⚔
+        z: p.z,                                       // 前後順序（大的在前面），配合 owner 決定名牌哪裡被擋
     }));
 }
 

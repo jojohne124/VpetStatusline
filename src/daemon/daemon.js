@@ -404,6 +404,23 @@ const plazaClient = PlazaClient.create({
         if (c.mine && why) plazaNotice = { text: why, at: Date.now() };
     },
 });
+// 對戰演出給頁面的樣子。core 的戰鬥畫面最底下有一列名牌，是塞進 8px 格子的文字 ——
+// 細長、而且只能對齊到整格，置中會偏（回報過）。這裡把那一列拿掉，改送「名字 + 該站在哪一欄的
+// 中心」，前端用正常字型畫。我方固定在左邊 16 格、敵方在右邊 16 格（core 的 BATTLE_ME_LEFT_COL /
+// BATTLE_ENEMY_RIGHT_COL）；結算階段 core 不畫名牌（我方移到中央），這裡也跟著不送。
+function plazaBattleView(list, me) {
+    const H = core.BATTLE_SCENE_HEIGHT || 8, Wd = core.BATTLE_SCENE_WIDTH || 52;
+    const lines = latest.petLines || [];
+    const opp = list.find(m => m.id === plazaBattle.opp.id);
+    const named = lines.length > H;   // core 有加名牌列 = 不是結算階段
+    return {
+        lines: lines.slice(0, H), opp: plazaBattle.opp.name,
+        names: named ? [
+            { text: me.name, color: me.color || plaza.NAME_DEFAULT_COLOR, col: 8 },
+            { text: plazaBattle.opp.name, color: (opp && opp.color) || plaza.NAME_DEFAULT_COLOR, col: Wd - 8 },
+        ] : null,
+    };
+}
 // 廣場對戰（規格 §八）：{ opp:{id,name,char}, win, pending, seen, snap }
 //   pending：還沒開演（下一拍 renderTick 會把它變成一場前線戰鬥）
 //   seen   ：已經看到 kind === 'battle'（之後不是 battle 了 = 演完，收尾）
@@ -1138,7 +1155,14 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
            color:#c9d1d9;word-break:break-all;scrollbar-color:#30363d #0d1117}
   #chatlog .sys{color:#8b949e;font-style:italic}
   #chatlog .who{font-weight:600}
-  #chatin{width:300px !important}
+  #chatin{width:268px !important}
+  /* 表情符號面板：點 😀 開，點選插入到游標位置 */
+  #emojipick{display:none;position:absolute;z-index:40;background:#161b22;border:1px solid #30363d;
+             border-radius:8px;padding:6px;width:272px;box-shadow:0 6px 20px rgba(0,0,0,.5);
+             grid-template-columns:repeat(8,1fr);gap:2px}
+  #emojipick button{background:none !important;border:0 !important;font-size:18px;line-height:1;
+                    padding:4px 0 !important;border-radius:4px;cursor:pointer}
+  #emojipick button:hover{background:#30363d !important}
   #plazabar input[type=color]{width:34px;height:24px;padding:1px;vertical-align:middle;cursor:pointer}
   /* 廣場對戰：疊在廣場上的一層（壓暗 + 中間是前線的戰鬥畫面），不換畫面 */
   #battlebox{position:absolute;inset:0;z-index:4;display:none;align-items:center;justify-content:center;
@@ -1192,8 +1216,9 @@ ${IS_RELEASE ? '' : `
         <label class="k" title="名牌顏色">顏色 <input type="color" id="plazacolor" value="${plaza.NAME_DEFAULT_COLOR}"></label>
       </div>
       <div id="chatlog"></div>
-      <div class="form" style="margin-top:4px">
-        <input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
+      <div class="form" style="margin-top:4px;position:relative">
+        <button id="chatemoji" title="表情符號">😀</button><input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
+        <div id="emojipick"></div>
       </div>
     </div>
     <div id="cmdmsg"></div>
@@ -1863,7 +1888,7 @@ async function pollPlaza(){
   document.getElementById('err').textContent='';
   draw(p.lines);
   lastPlazaTags=p.tags||[]; lastPlazaMe=p.me;
-  drawNameTags(p.tags);
+  drawNameTags(p.tags, p.owner);
   drawBubbles(p.tags, p.chat, p.serverNow);
   renderChat(p.chat);
   renderInvite(p.invite);
@@ -1925,8 +1950,14 @@ function renderBattle(b){
   const box=document.getElementById('battlebox');
   if(!b||!b.lines){ box.style.display='none'; return; }
   box.style.display='flex';
+  const cv=document.getElementById('battlecv');
   const cw=CW, ch=CH; CW=HOME_CW; CH=HOME_CH;
-  try{ draw(b.lines, document.getElementById('battlecv')); } finally { CW=cw; CH=ch; }
+  // 多畫一列空白，留給底下的名字（結算階段沒有名字也照留，畫面高度才不會跳）
+  try{ draw(b.lines.concat(['']), cv); } finally { CW=cw; CH=ch; }
+  if(b.names){
+    const g=cv.getContext('2d');
+    for(const n of b.names) drawTagText(g, n.text, n.col*HOME_CW, b.lines.length*HOME_CH+1, n.color, cv.width);
+  }
 }
 
 // ── 聊天室 ──
@@ -1995,24 +2026,79 @@ function chatSubmit(){
   sendCmd('plazaChat',{text:v}).then(r=>{ if(r&&r.ok){ ci.value=''; poll(); } });
 }
 document.getElementById('chatsend').addEventListener('click',chatSubmit);
+// 表情符號：插到輸入框游標的位置（不是一律接在最後），插完游標停在表情後面、焦點回到輸入框
+const EMOJIS=['😀','😂','🤣','😊','😍','😎','🤔','😴','😭','😡','😱','🥳','👍','👎','👏','🙏',
+              '💪','👋','🙌','🤝','🎉','❤️','💔','🔥','✨','⭐','☀️','🌧️','⚡','❄️','🍜','🍺',
+              '☕','🎮','⚔️','🏆','💤','❓','❗','🐾'];
+(function(){
+  const pick=document.getElementById('emojipick'), btn=document.getElementById('chatemoji'), ci=document.getElementById('chatin');
+  for(const e of EMOJIS){
+    const b=document.createElement('button'); b.textContent=e; b.type='button';
+    b.addEventListener('click',ev=>{
+      ev.stopPropagation();
+      const a=ci.selectionStart??ci.value.length, z=ci.selectionEnd??ci.value.length;
+      const next=ci.value.slice(0,a)+e+ci.value.slice(z);
+      if([...next].length>ci.maxLength) return;      // 超過字數上限就不插
+      ci.value=next; ci.focus(); ci.setSelectionRange(a+e.length, a+e.length);
+    });
+    pick.append(b);
+  }
+  btn.addEventListener('click',ev=>{
+    ev.stopPropagation();
+    const open=pick.style.display==='grid';
+    pick.style.display=open?'none':'grid';
+    if(!open){ pick.style.left=btn.offsetLeft+'px'; pick.style.top=(btn.offsetTop-pick.offsetHeight-6)+'px'; }
+  });
+  document.addEventListener('click',ev=>{ if(!pick.contains(ev.target)) pick.style.display='none'; });
+})();
 document.getElementById('chatin').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) chatSubmit(); });
 
 // 名牌：用正常字型畫在腳下置中（伺服器只給位置與顏色）。格子太小，塞進格子會變細長條。
 // 深色描邊讓名字在任何天氣、任何角色顏色上都讀得到。
-function drawNameTags(tags){
+// 一個名字（粗體、深色描邊），x 為中心。廣場的名牌與對戰演出的名字共用。
+const TAG_FONT='bold 13px "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
+function drawTagText(g, text, cx, y, color, maxW){
+  g.save();
+  g.font=TAG_FONT; g.textAlign='center'; g.textBaseline='top';
+  g.lineJoin='round'; g.lineWidth=3; g.strokeStyle='rgba(0,0,0,.85)';
+  const w=g.measureText(text).width;
+  const x=Math.max(w/2+2, Math.min(maxW-w/2-2, cx));
+  g.strokeText(text,x,y);
+  g.fillStyle=color; g.fillText(text,x,y);
+  g.restore();
+}
+let tagScratch=null;
+function drawNameTags(tags, owner){
   if(!tags||!tags.length) return;
   const cv=document.getElementById('pet'), g=cv.getContext('2d');
   const DW=CW, DH=CH/2;
+  // 後排先畫：名牌之間的前後也跟角色一致
+  tags=tags.slice().sort((a,b)=>(a.z||0)-(b.z||0));
+  if(!tagScratch) tagScratch=document.createElement('canvas');
+  for(const t of tags){
+    const y=Math.min(cv.height-15, t.y*DH);
+    // 先畫在暫存畫布上，再把「站得比我前面（z 較大）的角色畫到的 dot」挖掉，最後貼回去。
+    // 名牌畫在角色圖層之上，不挖的話後排的名字會浮在前排的身上（回報過）。
+    const sc=tagScratch; sc.width=cv.width; sc.height=cv.height;
+    const sg=sc.getContext('2d');
+    drawTagText(sg, t.text, t.x*DW, y, t.color, cv.width);
+    if(owner && t.z!=null){
+      const y0=Math.max(0,Math.floor(y/DH)), y1=Math.min(owner.length-1,Math.ceil((y+15)/DH));
+      for(let dy=y0;dy<=y1;dy++){
+        const row=owner[dy]; if(!row) continue;
+        for(let dx=0;dx<row.length;dx++){
+          const c=row.charCodeAt(dx);
+          if(c!==46 && c-48>t.z) sg.clearRect(dx*DW, dy*DH, DW, DH);
+        }
+      }
+    }
+    g.drawImage(sc,0,0);
+  }
+  // 頭上的記號（⚔、z）不分前後，一律畫在最上面
   g.save();
-  g.font='bold 12px "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
-  g.textAlign='center'; g.textBaseline='top';
+  g.font=TAG_FONT; g.textAlign='center'; g.textBaseline='top';
   g.lineJoin='round'; g.lineWidth=3; g.strokeStyle='rgba(0,0,0,.85)';
   for(const t of tags){
-    const w=g.measureText(t.text).width;
-    const x=Math.max(w/2+1, Math.min(cv.width-w/2-1, t.x*DW));
-    const y=Math.min(cv.height-13, t.y*DH);
-    g.strokeText(t.text,x,y);
-    g.fillStyle=t.color; g.fillText(t.text,x,y);
     // 對戰中：頭上 ⚔（旁觀的人才知道那兩隻為什麼停住）
     if(t.battling){
       const bx=t.x*DW, by=Math.max(2,t.top*DH-16);
@@ -2023,7 +2109,7 @@ function drawNameTags(tags){
       const zx=t.x*DW+10, zy=Math.max(2,t.top*DH-12);
       g.strokeText('z',zx,zy+4); g.fillStyle='#c9d1d9'; g.fillText('z',zx,zy+4);
       g.font='bold 9px sans-serif'; g.strokeText('z',zx+9,zy-2); g.fillText('z',zx+9,zy-2);
-      g.font='bold 12px "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
+      g.font=TAG_FONT;
     }
   }
   g.restore();
@@ -2518,13 +2604,14 @@ const server = http.createServer((req, res) => {
                              return null;
                          })(),
                          // 我的對戰演出（前線的戰鬥畫面，頁面疊在廣場上）
-                         battle: plazaBattle && latest.kind === 'battle'
-                             ? { lines: latest.petLines, opp: plazaBattle.opp.name } : null,
+                         battle: plazaBattle && latest.kind === 'battle' ? plazaBattleView(list, me) : null,
                          cols: plaza.PLAZA_RENDER.w, rows: plaza.PLAZA_RENDER.h / 2,
                          myColor: me.color || null,
                          // 天氣比照營地：用這台 daemon 抓到的（內網大家在同一個城市，各抓各的一樣）
                          weather: (() => { const w = weatherFor(null); return { ...w, ...WX.describe(w) }; })(),
                          names: list.map(m => m.name), lines: out.lines, tags: out.tags,
+                         // owner 一列一個字串：'.' = 沒人，其餘 = '0' + z（20 人以內不會超出可見字元）
+                         owner: out.owner.map(r => r.map(z => (z < 0 ? '.' : String.fromCharCode(48 + z))).join('')),
                          // 聊天：最近 50 則；serverNow 給前端判斷對話泡泡還要不要顯示（5 秒）
                          chat: plazaClient.chat(), serverNow: Date.now() + plazaClient.skew() };
             }

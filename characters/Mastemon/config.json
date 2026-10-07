@@ -1,7 +1,7 @@
 {
   "name": "Mastemon",
   "stage": "Ultimate",
-  "power": 180,
+  "power": 185,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

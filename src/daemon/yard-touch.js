@@ -178,7 +178,17 @@ function create({ windowMs, limit, sulkMs, stepAt,
         return true;
     }
 
-    return { pet, react, grab, drop, touches };
+    /**
+     * 正被拿在手上的 id。合體進化要用：拿著的那隻不能被拿去合體 —— 否則畫面上被抓著的
+     * 寵物會突然消失。逾時的不算（拿的人已經不在了，react() 下一輪就會放回場上）。
+     */
+    function heldIds(now = Date.now()) {
+        const out = new Set();
+        for (const [id, t] of touches) if (t.held && now - t.heldAt <= heldMaxMs) out.add(id);
+        return out;
+    }
+
+    return { pet, react, grab, drop, heldIds, touches };
 }
 
 module.exports = { create, settleHold, newTouch, REACT_MS, JUMP_H, JUMP_MS, JUMP_HOPS, POLL_MS, HELD_MAX_MS };

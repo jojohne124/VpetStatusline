@@ -224,6 +224,12 @@ function installRoster() {
     if (fs.existsSync(specialEvo)) {
         copyFile(specialEvo, path.join(ASSETS_DIR, 'special-evolutions.json'));
     }
+    // 合體進化組合表。同上，是資料。漏帶的症狀：候選永遠是空的 → 按鈕永遠不出現、
+    // vpet jogress 永遠說不成立，**零錯誤訊息**。test-jogress 會檢查這一段在。
+    const jogress = path.join(REPO_ROOT, 'characters', 'jogress.json');
+    if (fs.existsSync(jogress)) {
+        copyFile(jogress, path.join(ASSETS_DIR, 'jogress.json'));
+    }
     // 營地走動範圍的自訂切法（走動範圍編輯器存的）。同樣是資料不是角色附屬檔案。
     // 沒有這個檔不是錯誤 —— 那代表全部用內建切法。
     const yardLayouts = path.join(REPO_ROOT, 'characters', 'yard-layouts.json');

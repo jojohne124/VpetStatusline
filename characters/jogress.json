@@ -1,0 +1,6 @@
+{
+  "_doc": "合體進化（Jogress）組合表。規格：docs/jogress-spec.md。pair = 兩個方向同結果（載入時展開成兩筆）；front/camp = 有序單筆。對稱組一定用 pair，不要手寫兩筆。to 不在 roster 就不生效。",
+  "pairs": [
+    { "pair": ["angewomon", "ladydevimon"], "to": "mastemon" }
+  ]
+}

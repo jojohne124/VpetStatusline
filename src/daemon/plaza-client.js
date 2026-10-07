@@ -11,9 +11,11 @@
 const http = require('http');
 const W    = require('../shared/plaza-walk.js');
 
-// 位址內建，使用者不用設定（規格 §十）。用電腦名稱而不是 IP：公司換 IP 不用重發 release。
-// VPET_PLAZA_URL 給開發／換主機用。
-const DEFAULT_URL = 'http://KAIHSIANGCHANG:37373';
+// 位址內建，使用者不用設定（規格 §十）。VPET_PLAZA_URL 給開發／換主機用。
+// 用 IP 而不是電腦名稱（2026-10-07 改）：公司內網不一定解析得到電腦名稱，IP 一定通。
+// ⚠️ 代價是主機的 IP 一變（DHCP 重新分配）就連不上，要改這裡重發 release ——
+//    最好請 IT 把這台的 IP 固定（DHCP 保留）。
+const DEFAULT_URL = 'http://192.168.164.46:37373';
 const RETRY_MS    = 10000;
 const REQ_TIMEOUT = 4000;
 

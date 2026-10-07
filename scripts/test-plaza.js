@@ -80,7 +80,8 @@ console.log('— 邊界 —');
         if (prev && (q.x !== prev.x || q.y !== prev.y)) moves++;
         prev = q;
     }
-    ok(moves > 300, `超過 MAX_REPLAY 之後就不走了（400 拍只動了 ${moves} 拍）`);
+    // 門檻 200：會停下來休息（約兩三成的時間），但凍住的話是 0 —— 這條顧的是「凍住」
+    ok(moves > 200, `超過 MAX_REPLAY 之後就不走了（400 拍只動了 ${moves} 拍）`);
 
     // 冷啟動（沒快取）超過上限 = 「這隻現在才進場」：位置合法、且不重播。
     const cold = W.posAt({ seed, joinStep: 0 }, 2383378291, null, F);
@@ -94,7 +95,8 @@ console.log('— 邊界 —');
     ok(ms < 50, `joinStep 傳錯時 posAt 花了 ${ms.toFixed(1)}ms，會拖垮 daemon`);
 
     // 上限之內的行為不能變（廣場的 joinStep 是伺服器發的，永遠在射程內）
-    ok(W.posAt({ seed, joinStep: 0 }, 50, null, F).x === 31,
+    // 期望值是「目前演算法」算出來的定值（2026-10-07 停留規則改過，由 31 改為 10）
+    ok(W.posAt({ seed, joinStep: 0 }, 50, null, F).x === 10,
        '上限之內的走位被改掉了（決定性必須維持）');
 }
 
@@ -118,6 +120,8 @@ console.log('— 邊界 —');
             let c = null;
             for (let s = 0; s < 3000; s++) {
                 const p = W.posAt({ seed, joinStep: 0 }, s, c, F); c = p.cache;
+                // 只算走動中的拍：停下來休息會在原地待好幾拍，那是刻意的，不是「被吸進角落」
+                if (!p.moving) continue;
                 const k = p.x + ',' + p.y;
                 heat.set(k, (heat.get(k) || 0) + 1); tot++;
             }
@@ -197,9 +201,28 @@ console.log('— 分布 —');
     const area = (W.MAX_X - W.MIN_X + 1) * (W.MAX_Y - W.MIN_Y + 1);
     ok(seen.size > area * 0.4, `一小時只走訪 ${seen.size} / ${area} 格（疑似卡住或活動範圍太小）`);
     const stayPct = stay / 3600 * 100;
-    // 設計值約 12%（見 plaza-walk.js STAY_CHANCE 附近的算式）。
-    // 太高 = 一群角色在發呆（v1 的 37% 就是這樣）；太低 = 從不休息，也不自然。
-    ok(stayPct > 6 && stayPct < 20, `停留時間佔比 ${stayPct.toFixed(1)}% 落在合理區間外`);
+    // 設計值約 21%（2026-10-07 起，見 plaza-walk.js STAY_CHANCE）。
+    // 太高 = 一群角色在發呆（v1 的 37% 就是這樣）；太低 = 從不休息（回報過「不用一直走」）。
+    ok(stayPct > 12 && stayPct < 30, `停留時間佔比 ${stayPct.toFixed(1)}% 落在合理區間外`);
+
+    // 營地分區、真的廣場也要會停（回報：「不用一直走，可以偶爾停下來」）。
+    // 分區很小、幾乎一直貼牆 —— 舊版「貼牆就不停」讓營地只停 2% 的時間。
+    // 現在貼牆抽到停會先離開牆幾步再停，而且停的地方一定不在牆上。
+    for (const [nm, F] of [['廣場', W.PLAZA_LIVE_FIELD], ['營地分區', W.yardZones(4)[0]]]) {
+        let st = 0, n = 0, onWallStay = 0;
+        for (let seed = 1; seed <= 20; seed++) {
+            let c = null;
+            for (let t = 0; t < 2000; t++) {
+                const p = W.posAt({ seed: seed * 977, joinStep: 0 }, t, c, F); c = p.cache; n++;
+                if (!p.moving) {
+                    st++;
+                    if (p.x <= F.minX || p.x >= F.maxX || p.y <= F.minY || p.y >= F.maxY) onWallStay++;
+                }
+            }
+        }
+        ok(st / n > 0.15, `${nm}：停下來的時間只有 ${(st / n * 100).toFixed(1)}%（幾乎一直在走）`);
+        ok(onWallStay === 0, `${nm}：有 ${onWallStay} 拍停在牆邊（應該先離開牆再停）`);
+    }
 }
 
 // ── 4. 走路：面向與水平移動一致 ─────────────────────────────────────

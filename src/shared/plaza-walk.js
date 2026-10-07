@@ -69,13 +69,17 @@ const DIR_VECTORS = (() => {
 const RUN_MIN = 6, RUN_MAX = 34;
 // 撞牆截短之後還剩幾拍，才算「這段值得走」。低於這個數就改抽別的方向 —— 見 legAt。
 const MIN_LEG = 5;
-// 停一次幾拍。注意「抽中停的機率」與「站著的時間佔比」差很多 ——
-// 一段路平均 15 拍、一次停平均 6 拍，所以 1/4 的抽中率換算成時間只有約 12%。
-// v1 曾經是時間 37%，畫面上就是一群角色在發呆。
-// 停下時角色仍持續演 IDLE_1/IDLE_2（見 plaza.js spriteDots），
-// 所以停 4~8 拍讀起來是「站著休息」而不是「當掉」。
-const STAY_MIN = 4, STAY_MAX = 8;
-const STAY_CHANCE = 1 / 4;
+// 停一次幾拍。注意「抽中停的機率」與「站著的時間佔比」差很多 —— 要看實際場地量。
+// 停下時角色仍持續演 IDLE_1/IDLE_2（見 plaza.js spriteDots），讀起來是「站著休息」而不是「當掉」。
+//
+// 2026-10-07 調多（回報：「不用一直走，可以偶爾停下來」）。舊值 1/4、4~8 拍、貼牆不停，
+// 實測停的時間只有 廣場 7% / 營地分區 2%（分區很小，幾乎一直貼著牆，而貼牆時一律不停）。
+// 新值實測（30 組 seed x 3000 拍）：廣場 21%（約每分鐘停 1 次）、營地分區 35%。
+// v1 曾經是 37% 而且是碎步磨蹭，看起來像發呆 —— 這次停得久而少，走的時候是一整段路，不一樣。
+const STAY_MIN = 6, STAY_MAX = 14;     // 4.5 ~ 10.5 秒
+const STAY_CHANCE = 0.3;
+// 在牆邊抽到「停」時，先離開牆走幾步再停（見 legAt）。等於 MIN_LEG，短到不像在趕路。
+const WALL_STEP_OUT = 5;
 
 // 底部保留一個 cell 列（2 dot）給名牌。名牌固定標在**腳下**（見 plaza.js
 // buildLabels），沒有這段保留區的話，角色走到最底時腳下那一列會落到畫面外，
@@ -365,17 +369,22 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     const leaves = (vx, vy) => (!wL || vx > 0) && (!wR || vx < 0)
                             && (!wT || vy > 0) && (!wB || vy < 0);
 
-    // 貼牆時不抽「停」。停在牆邊 4~8 拍是「卡在邊界」體感最大的來源 ——
-    // 一般位置照舊有 STAY_CHANCE 的機率停下來發呆。
-    if (!onWall && rand01(seed, k * 3) < STAY_CHANCE) {
-        const len = STAY_MIN + Math.floor(rand01(seed, k * 3 + 1) * (STAY_MAX - STAY_MIN + 1));
-        return { vx: 0, vy: 0, len: Math.min(len, STAY_MAX), stay: true };
-    }
+    // 抽到「停」：
+    //   - 不在牆邊 → 原地停 STAY_MIN~STAY_MAX 拍
+    //   - 在牆邊   → 先離開牆走幾步（WALL_STEP_OUT），**再**停。不能就地停在牆邊：
+    //                貼著牆站著是「卡在邊界」體感最大的來源（v1 學到的）。
+    // 第二種是 2026-10-07 加的：營地分區很小、走完一段幾乎都撞牆，舊版「貼牆就不抽停」
+    // 讓營地的寵物幾乎不會停下來（實測只停 2% 的時間）。
+    const wantStay = rand01(seed, k * 3) < STAY_CHANCE;
+    const stayLen  = STAY_MIN + Math.floor(rand01(seed ^ 0x5bd1e995, k) * (STAY_MAX - STAY_MIN + 1));
+    if (wantStay && !onWall) return { vx: 0, vy: 0, len: stayLen, stay: true };
     const idx  = Math.floor(rand01(seed, k * 3 + 1) * DIR_VECTORS.length) % DIR_VECTORS.length;
-    const want = RUN_MIN + Math.floor(rand01(seed, k * 3 + 2) * (RUN_MAX - RUN_MIN + 1));
+    const runWant = RUN_MIN + Math.floor(rand01(seed, k * 3 + 2) * (RUN_MAX - RUN_MIN + 1));
+    const offWall = (px, py) => px > minX && px < maxX && py > minY && py < maxY;
 
     // 截短到剛好停在牆邊。位移在兩軸都單調，往回找第一個界內的 t 即可；
     // want 最多 RUN_MAX，成本可忽略。
+    let want = runWant;
     const fit = (vx, vy) => {
         let n = Math.min(want, RUN_MAX);
         while (n > 0) {
@@ -401,19 +410,36 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     // 沒有位置在牆上時 leaves() 恆真，兩輪等價。第二輪拿掉那個要求當退路 ——
     // 場地極小或縮在角落時可能真的沒有同時滿足兩者的方向，寧可走得動也不要卡死。
     const n = DIR_VECTORS.length;
+    // 在牆邊抽到「停」：找一個方向走 WALL_STEP_OUT 步、而且**落點不在任何一面牆上**，
+    // 走到那裡再停。找不到（分區太窄、縮在角落）就不停了，照常走一段 —— 寧可少停一次，
+    // 也不要停在牆邊（那就是「卡在邊界」）。
+    if (wantStay) {
+        want = WALL_STEP_OUT;
+        for (let i = 0; i < n; i++) {
+            const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
+            if (!leaves(c[0], c[1])) continue;
+            const len = fit(c[0], c[1]);
+            if (len < MIN_LEG) continue;
+            const [ox, oy] = offsetAt(c[0], c[1], len);
+            // walk = 真的在走的拍數；len 含後面停的拍數（posAt 只在前 walk 拍移動）
+            if (offWall(x + ox, y + oy)) return { vx: c[0], vy: c[1], len: len + stayLen, walk: len, stay: false };
+        }
+        want = runWant;
+    }
+    const leg = (vx, vy, len) => ({ vx, vy, len, stay: false });
     let bestLen = 0, bestV = null;
     for (let pass = 0; pass < 2; pass++) {
         for (let i = 0; i < n; i++) {
             const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
             if (pass === 0 && !leaves(c[0], c[1])) continue;
             const len = fit(c[0], c[1]);
-            if (len >= MIN_LEG) return { vx: c[0], vy: c[1], len, stay: false };
+            if (len >= MIN_LEG) return leg(c[0], c[1], len);
             if (len > bestLen) { bestLen = len; bestV = c; }
         }
         if (!onWall) break;   // 沒貼牆 → 第一輪就是全掃，不需要再來一次
     }
     // 所有方向都走不滿 MIN_LEG（場地極小或縮在角落）→ 走能走的最長那個。
-    if (bestLen > 0) return { vx: bestV[0], vy: bestV[1], len: bestLen, stay: false };
+    if (bestLen > 0) return leg(bestV[0], bestV[1], bestLen);
 
     return { vx: 0, vy: 0, len: STAY_MIN, stay: true };   // 理論上到不了（場地至少放得下一步）
 }
@@ -506,7 +532,7 @@ function posAt(occ, step, cache, field = PLAZA_FIELD) {
     // 推進完整的段
     let leg = legAt(seed, st.k, st.x, st.y, field);
     while (st.at + leg.len <= target) {
-        const [ox, oy] = offsetAt(leg.vx, leg.vy, leg.len);
+        const [ox, oy] = offsetAt(leg.vx, leg.vy, leg.walk != null ? leg.walk : leg.len);
         st.x += ox; st.y += oy;
         if (leg.vx < 0) st.facing = 'left';
         else if (leg.vx > 0) st.facing = 'right';
@@ -518,7 +544,8 @@ function posAt(occ, step, cache, field = PLAZA_FIELD) {
 
     // 這一段已經走了幾拍（零頭）→ 補上，移動才連續而不是每段瞬移
     const within = target - st.at;
-    const [ox, oy] = offsetAt(leg.vx, leg.vy, within);
+    const walkN = leg.walk != null ? leg.walk : leg.len;   // 走完 walk 拍之後是停（離開牆再停那種）
+    const [ox, oy] = offsetAt(leg.vx, leg.vy, Math.min(within, walkN));
     const x = st.x + ox, y = st.y + oy;
     let facing = st.facing;
     // within === 0 的那一拍畫的其實是「上一段的終點」—— 位置還沒動，就先套新方向的
@@ -529,7 +556,7 @@ function posAt(occ, step, cache, field = PLAZA_FIELD) {
         else if (leg.vx > 0) facing = 'right';
     }
 
-    return { x, y, facing, k: st.k, moving: !leg.stay, cache: st };
+    return { x, y, facing, k: st.k, moving: !leg.stay && within < walkN, cache: st };
 }
 
 // ── 手動模式（WASD）─────────────────────────────────────────────────

@@ -88,7 +88,8 @@ function renderProbe(js, html, daemonSrc) {
     });
     let raf = null;
     const g = {
-        document: { getElementById: () => el(), querySelectorAll: () => [], addEventListener() {}, body: el() },
+        // createElement：天氣層用暫存畫布（光柱／雲加濃蓋在角色身上），畫的東西一樣記進 calls
+        document: { getElementById: () => el(), createElement: () => el(), querySelectorAll: () => [], addEventListener() {}, body: el() },
         requestAnimationFrame: (f) => { raf = f; return 1; },
         setInterval: () => 0, setTimeout: () => 0, clearTimeout() {},
         fetch: () => new Promise(() => {}),
@@ -824,6 +825,133 @@ setTimeout(async () => {
             } finally {
                 try { kid.kill(); } catch (e) {}
                 try { fs2.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+            }
+        }
+        console.log('— 廣場（第 1 期）—');
+        {
+            // 前端：入口只在前線，離開鈕一開始藏著；幽靈對戰的入口拿掉了，名牌留著
+            ok(/data-cmd="plaza" data-scope="home"/.test(html), '前線沒有廣場按鈕');
+            ok(/data-cmd="plazaLeave" data-scope="plaza"[^>]*style="display:none"/.test(html),
+               '「離開廣場」一開頁就露出來了（應該只在廣場裡出現）');
+            ok(!/data-cmd="pvp"|data-cmd="pvp-setup"/.test(html), '幽靈對戰的入口還在網頁上');
+            ok(/data-cmd="code"/.test(html), '名牌設定被一起拿掉了（它現在是廣場的名牌）');
+
+            // 真的起一個廣場伺服器 + 一個指向它的 daemon（隔離的 state 目錄）
+            const fs2 = require('fs'), os2 = require('os');
+            const PS = require('../src/daemon/plaza-server.js');
+            const ps = PS.createPlazaServer({ graceMs: 500 });
+            await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
+            const SD = fs2.mkdtempSync(path.join(os2.tmpdir(), 'vpet-plaza-'));
+            fs2.writeFileSync(path.join(SD, 'pvp.json'), JSON.stringify({ code: '測試員' }));
+            fs2.writeFileSync(path.join(SD, 'hook.json'), JSON.stringify({ ts: 1 }));
+            const P4 = PORT + 4;
+            const kid = spawn(process.execPath,
+                [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
+                { env: { ...process.env, AGUMON_DAEMON_PORT: String(P4), AGUMON_STATE_DIR: SD,
+                         VPET_PLAZA_URL: 'http://127.0.0.1:' + ps.server.address().port },
+                  stdio: 'ignore' });
+            const cmd = async (action, args = {}) => JSON.parse(await post(P4, '/cmd', { action, args }));
+            const stateFile = () => { try { return JSON.parse(fs2.readFileSync(path.join(SD, 'daemon-state.json'), 'utf8')); } catch (e) { return {}; } };
+            const wait = (ms) => new Promise(r => setTimeout(r, ms));
+            try {
+                for (let i = 0; i < 100; i++) { try { await getOn(P4, '/state'); break; } catch (e) { await wait(100); } }
+                await wait(1600);   // 讓 daemon 先吃掉 hook ts=1（第一次讀到不加訓練值）
+                const before = stateFile();
+                const j = await cmd('plazaJoin');
+                ok(j.ok, '進不了廣場：' + JSON.stringify(j).slice(0, 160));
+                const s1 = JSON.parse(await getOn(P4, '/state'));
+                ok(s1.plaza && s1.plaza.active === true, '/state 沒說在廣場（其他分頁不會跟著進去）');
+                const p1 = JSON.parse(await getOn(P4, '/plaza'));
+                ok(p1.ok && p1.active && Array.isArray(p1.lines) && p1.lines.length === p1.rows,
+                   '/plaza 沒有畫出廣場：' + JSON.stringify(p1).slice(0, 160));
+                ok(p1.names && p1.names.includes('測試員'), '廣場名單裡沒有自己');
+                ok(p1.cols === y.cols && p1.rows === y.rows,
+                   `廣場大小 ${p1.cols}x${p1.rows} 跟營地 ${y.cols}x${y.rows} 不一樣`);
+                ok(/small\s*=\s*\(v==='yard'\s*\|\|\s*v==='plaza'\)/.test(js),
+                   '廣場畫面沒有用營地那套小一號的格子（前端 CW/CH）');
+                ok(p1.names.length === 1, '廣場上出現了不是玩家的東西：' + p1.names.join(','));
+
+                // 名牌隨時可改：網頁改（走 CLI 存檔再同步）、終端機 vpet code 改（daemon 自己發現）
+                const rn = await cmd('plazaRename', { name: '改名員' });
+                ok(rn.ok, '在廣場裡改名失敗：' + JSON.stringify(rn).slice(0, 160));
+                ok(ps.roster().some(m => m.name === '改名員'), '改名之後伺服器上還是舊名字');
+                fs2.writeFileSync(path.join(SD, 'pvp.json'), JSON.stringify({ code: '終端機改' }));
+                let synced = false;
+                for (let i = 0; i < 40 && !synced; i++) { synced = ps.roster().some(m => m.name === '終端機改'); if (!synced) await wait(100); }
+                ok(synced, '用 vpet code 改的名牌沒有同步到廣場');
+                const cc = await cmd('plazaColor', { color: '#12ab34' });
+                ok(cc.ok && ps.roster().some(m => m.color === '#12ab34'), '名牌顏色沒送到廣場：' + JSON.stringify(cc).slice(0, 120));
+                ok(JSON.parse(fs2.readFileSync(path.join(SD, 'pvp.json'), 'utf8')).code === '終端機改',
+                   '存顏色時把名牌洗掉了');
+                const p2 = JSON.parse(await getOn(P4, '/plaza'));
+                ok(p2.myColor === '#12ab34', '/plaza 沒回自己的顏色（選色器會跳回預設）');
+                // 名牌真的用那個顏色畫出來（進場那段可能還在畫面外、名牌不畫，所以等它走進來）
+                let colored = false;
+                for (let i = 0; i < 60 && !colored; i++) {
+                    colored = (JSON.parse(await getOn(P4, '/plaza')).tags || []).some(t => t.color === '#12ab34');
+                    if (!colored) await wait(400);
+                }
+                ok(/function drawNameTags/.test(js) && /drawNameTags\(p\.tags\)/.test(js), '前端沒有畫名牌');
+                // 自動／手動（WASD）
+                ok((await cmd('plazaMode', { mode: 'manual' })).ok, '切手動失敗');
+                ok(JSON.parse(await getOn(P4, '/plaza')).mode === 'manual', '/plaza 沒說現在是手動（按鈕文字跟 WASD 都會不對）');
+                const mv = await cmd('plazaMove', { vx: '1', vy: '-1' });
+                ok(mv.ok && ps.roster()[0].walk.vx === 1 && ps.roster()[0].walk.vy === -1, 'WASD 沒送到廣場：' + JSON.stringify(mv));
+                await cmd('plazaMove', { vx: '0', vy: '0' });
+                ok((await cmd('plazaMode', { mode: 'auto' })).ok && JSON.parse(await getOn(P4, '/plaza')).mode === 'auto', '切回自動失敗');
+                ok(/typing\(\)\) return/.test(js), '打字時按 WASD 會被當成移動（名牌欄打不了 w/a/s/d）');
+                ok(/addEventListener\('blur'/.test(js), '切走視窗時沒有停下（keyup 收不到，角色會一直走）');
+                ok(/#plazabar button\{background:#21262d/.test(html), '廣場下方的按鈕是瀏覽器預設的白鈕');
+
+                // 名牌保留大小寫（以前一律轉大寫）
+                const lc = await cmd('plazaRename', { name: 'kai' });
+                ok(lc.ok && ps.roster().some(m => m.name === 'kai'), '小寫名牌被改成大寫了：' + JSON.stringify(ps.roster().map(m => m.name)));
+                ok(colored, '選的名牌顏色沒有畫在廣場上');
+                ok(p2.weather && typeof p2.weather.sky === 'string' && typeof p2.weather.night === 'boolean',
+                   '廣場沒有天氣（應該比照營地）');
+                ok(/view!=='yard'&&view!=='plaza'/.test(js), '天氣粒子層／看板在廣場不會動');
+                ok(ps.roster().length === 1 && ps.roster()[0].char === (before.characterId || 'agumon'),   // 上面改過名，不看名字
+                   '伺服器上的不是前線那隻：' + JSON.stringify(ps.roster()));
+
+                // 場景鎖：伺服器端也要擋（/cmd 是公開端點，只藏按鈕不夠）
+                for (const a of ['keep', 'pet', 'yardPet', 'battle', 'reset']) {
+                    const r = await cmd(a, a === 'yardPet' ? { which: 'x' } : {});
+                    ok(!r.ok && /廣場/.test(r.error || ''), `在廣場裡 ${a} 沒被擋下：` + JSON.stringify(r).slice(0, 120));
+                }
+                // 飼育暫停：在廣場時來了新訊息，訓練值不加、自動戰鬥不武裝
+                fs2.writeFileSync(path.join(SD, 'hook.json'), JSON.stringify({ ts: 2 }));
+                await wait(1700);
+                const mid = stateFile();
+                ok((mid.trainingBonus || 0) === (before.trainingBonus || 0),
+                   `在廣場時訓練值還在加（${before.trainingBonus || 0} → ${mid.trainingBonus || 0}）`);
+                ok(mid.lastHookTs === 2 && mid.battleFiredHookTs === mid.battleArmHookTs,
+                   '在廣場時的訊息武裝了自動戰鬥（一回前線就會立刻開打）');
+                ok(mid.plaza && typeof mid.plaza.at === 'number', 'state 沒有寫 plaza（CLI 擋不了指令）');
+
+                const l = await cmd('plazaLeave');
+                ok(l.ok, '離開廣場失敗');
+                ok(await (async () => { for (let i = 0; i < 30; i++) { if (!ps.roster().length) return true; await wait(50); } return false; })(),
+                   '離開之後伺服器上還有人');
+                await wait(1600);
+                ok(!stateFile().plaza, '離開之後 state 還留著 plaza（CLI 會一直被擋）');
+
+                // 主機關掉：daemon 自己回前線，並留一句話給頁面
+                ok((await cmd('plazaJoin')).ok, '第二次進場失敗');
+                await ps.close();
+                let back = null;
+                for (let i = 0; i < 140 && !back; i++) {
+                    const s = JSON.parse(await getOn(P4, '/state'));
+                    if (s.plaza && !s.plaza.active) back = s.plaza; else await wait(100);
+                }
+                ok(back && back.notice && /前線/.test(back.notice.text),
+                   '主機關掉後沒有回前線、或沒留下原因：' + JSON.stringify(back));
+                // 連不上（主機沒開）→ 進場失敗並說出原因，人留在前線
+                const r = await cmd('plazaJoin');
+                ok(!r.ok && /連不上廣場/.test(r.error || ''), '主機沒開時的訊息不對：' + JSON.stringify(r).slice(0, 160));
+            } finally {
+                try { kid.kill(); } catch (e) {}
+                try { await ps.close(); } catch (e) {}
+                try { fs2.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
             }
         }
     } catch (e) {

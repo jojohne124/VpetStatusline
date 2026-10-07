@@ -13,9 +13,14 @@ const path = require('path');
 const INSTALL_ROOT = __dirname;
 const IS_RELEASE   = fs.existsSync(path.join(INSTALL_ROOT, 'RELEASE'));   // release 版：隱藏/停用開發指令
 const ROSTER_FILE  = path.join(INSTALL_ROOT, 'assets', 'roster.json');
-const FORCE_FILE   = path.join(INSTALL_ROOT, 'state', 'force-char.json');
-const STATE_FILE   = path.join(INSTALL_ROOT, 'state', 'color-state.json');
-const PVP_FILE     = path.join(INSTALL_ROOT, 'state', 'pvp.json');   // { endpoint, key, code, name }
+// state 目錄吃 AGUMON_STATE_DIR（與 core 同一條規則）。daemon 開子行程跑 CLI 時會把環境變數
+// 帶下來，所以測試用暫存目錄起的 daemon，CLI 也只會碰暫存目錄。
+// ⚠️ 以前寫死安裝目錄：測試 daemon 一把指令轉給 CLI，就直接改到使用者真正的存檔
+//    （2026-10-07 一次 mutation 測試因此真的把使用者的前線重抽掉了）。
+const STATE_ROOT   = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'state');
+const FORCE_FILE   = path.join(STATE_ROOT, 'force-char.json');
+const STATE_FILE   = path.join(STATE_ROOT, 'color-state.json');
+const PVP_FILE     = path.join(STATE_ROOT, 'pvp.json');   // { endpoint, key, code, name }
 
 const rosterData = JSON.parse(fs.readFileSync(ROSTER_FILE, 'utf8'));
 const roster   = Array.isArray(rosterData) ? rosterData : rosterData.roster;
@@ -59,10 +64,9 @@ function printHelp() {
     console.log('  vpet album                  開啟圖鑑（瀏覽器）');
     console.log('  vpet bg                     設定獨立視窗的舞台底圖（瀏覽器）');
     console.log('  vpet battle on / off        恢復 / 停用 prompt 後的自動戰鬥');
-    console.log('  vpet pvp-setup <url> <key> [名牌]  一鍵設定 PvP（首次用這個）');
-    console.log('  vpet pvp [名牌]             幽靈對戰（隨機 / 指名；配不到真人派固定對手）');
-    console.log('  vpet pvp MAJAJA             指名固定練習對手（純本機免連線）');
-    console.log('  vpet code [名牌]            查看 / 設定名牌');
+    // 幽靈對戰（pvp / pvp-setup）不再列出：對戰改在廣場裡做（docs/plaza-spec.md §十）。
+    // 指令本身還在（開發者用），列在下面的開發區。
+    console.log('  vpet code [名牌]            查看 / 設定名牌（廣場上顯示的名字）');
     console.log('  vpet doctor [--check]       檢查並清除卡死的 node 孤兒（--check 只診斷不清）');
     console.log('  vpet hide / show            隱藏 / 顯示狀態列的 pet（只留狀態文字；pet 可到獨立介面看）');
     if (dev) {
@@ -71,7 +75,7 @@ function printHelp() {
     console.log('  vpet stats                  查看隱藏統計');
         console.log('  vpet evolve <next>          立即播進化表演');
         console.log('  vpet battle [enemy] [win|lose]  強制戰鬥 / 指定勝負');
-        console.log('  vpet pvp-server <url> [key] 只設後端');
+        console.log('  vpet pvp [名牌] / pvp-setup / pvp-server  舊的幽靈對戰（已隱藏，改用廣場）');
         console.log('  vpet pin / unpin            釘住 / 解除 IDLE 對照');
     }
     printInstallInfo();
@@ -110,6 +114,26 @@ function printInstallInfo() {
 if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') { printHelp(); process.exit(0); }
 // 無參數：印用法（視為未給指令，exit 1）
 if (!args.length) { printHelp(); process.exit(1); }
+
+// 在廣場時擋掉會改變前線角色的指令（docs/plaza-spec.md §六）。
+// state.plaza 是 daemon 每拍寫的影子（含時戳）；daemon 死掉時它不會被清，
+// 所以超過 PLAZA_STALE_MS 沒更新就當作不在廣場，不能讓一份殘留永遠鎖住 CLI。
+const PLAZA_STALE_MS = 10000;
+const PLAZA_BLOCKED = new Set(['--battle', '--evolve', '--reset', '--keep', '--swap', '--release',
+                               '--jogress', '--pvp', '--sleep']);
+function inPlaza() {
+    try {
+        const p = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).plaza;
+        return !!(p && typeof p.at === 'number' && Date.now() - p.at < PLAZA_STALE_MS);
+    } catch (e) { return false; }
+}
+// 角色切換（裸角色名）也算：不是 -- 開頭、也不是 help 的那些
+const isSwitch = !args[0].startsWith('--');
+if ((PLAZA_BLOCKED.has(args[0]) || isSwitch) && inPlaza()
+    && !(args[0] === '--battle' && /^(on|off)$/i.test(args[1] || ''))) {
+    console.log('🏛 在廣場中，先在獨立視窗按「🚪 離開廣場」。');
+    process.exit(1);
+}
 
 // 玩家用的獨立頁面（圖鑑 / 底圖編輯器）：起一個 detached server 再開瀏覽器。
 // server 以 detached 方式起，指令本身立刻結束（不佔住終端機）；已經在跑就直接開瀏覽器。
@@ -298,12 +322,14 @@ if (args[0] === '--code') {
     // 取值：vpet code <名牌>；相容舊寫法 vpet code id <名牌>
     const val = (args[1] === 'id') ? args[2] : args[1];
     if (val != null) {
-        const id = normId(val);
+        // 保留大小寫：名牌現在是廣場上給人看的名字，小寫英文要能用（回報過「英文只能大寫」）。
+        // 以前一律轉大寫，是為了舊的幽靈對戰拿它當指名 ID —— 那邊指名時自己會再正規化。
+        const id = String(val).trim();
         if (!validId(id)) {
             console.log('✗ 名牌格式：1-16 字、中文或英數、不可有空白與符號。例：vpet code 阿張 / vpet code KAI123');
             process.exit(1);
         }
-        if (id === PVP_BOT_CODE) {
+        if (normId(id) === PVP_BOT_CODE) {
             console.log(`✗「${PVP_BOT_CODE}」是內建練習對手保留字，請換一個。`);
             process.exit(1);
         }

@@ -107,6 +107,11 @@ const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
 // 第三個參數 0 = 不留名牌位：院子不顯示名字（要看是誰就右鍵），
 // 省下來的 2 dot 直接還給可走範圍。
 const YARD_FIELD  = makeField(52, 40, 0);
+// 廣場（第二版）：畫布跟營地畫出來的一樣大（69x54 細格，見 plaza.js 的 YARD_RENDER），
+// 但**直接在細格上走** —— 一拍走 1 細格（6px）。營地是走在 52x40 的粗格再放大 1.47 倍畫，
+// 每一步要跳 1~2 個細格，廣場用同一套看起來「步伐很大」（回報過）。
+// 底部照廣場慣例留 LABEL_RESERVE 給名牌。69x54 必須跟 YARD_RENDER 一致，test-plaza-net 釘著。
+const PLAZA_LIVE_FIELD = makeField(69, 54);
 
 // ── 營地分區 ─────────────────────────────────────────────────────────
 // 3 隻共用 37x25 的可站範圍時，有 73.7% 的拍數會有一對蓋掉對方 25% 以上的身體
@@ -277,6 +282,46 @@ function startPos(seed, field = PLAZA_FIELD) {
         y: minY + Math.min(maxY - minY, Math.floor(rand01(seed, -2) * (maxY - minY + 1))),
         facing: rand01(seed, -3) < 0.5 ? 'left' : 'right',
     };
+}
+
+/**
+ * 廣場進場：從畫面外的某一個邊走進來（docs/plaza-spec.md §三「第二版的兩個改動」）。
+ *
+ * 不需要新的走路模式 —— 營地「放到區域外 → 先走直線回定位點」那一條（returnLeg）
+ * 正好就是這件事：起點（origin）放在畫面外，定位點（anchor）放在場內貼近那個邊，
+ * posAt 就會先走一條直線進場，到了再接回一般的鏈。所以這裡只決定兩個點。
+ *
+ * 起點離畫面剛好一隻角色（完全看不到），定位點在場內離邊 ENTRY_IN 格 ——
+ * 只停在邊上的話，下一段 legAt 一開始就貼牆，第一步常常是沿著牆滑，不像「走進來」。
+ *
+ * 全由 seed 決定（k = -4 / -5 / -6，與 startPos 的 -1~-3 錯開），伺服器發 seed，
+ * 每個 client 算出同一條進場路線。
+ */
+const ENTRY_IN = 6;
+function entryWalk(seed, field = PLAZA_FIELD) {
+    const { w, h, minX, maxX, minY, maxY } = field;
+    const edge = Math.floor(rand01(seed, -4) * 4) % 4;   // 0 左 1 右 2 上 3 下
+    const pick = (lo, hi) => lo + Math.min(hi - lo, Math.floor(rand01(seed, -5) * (hi - lo + 1)));
+    const facing0 = rand01(seed, -6) < 0.5 ? 'left' : 'right';
+    let origin, anchor;
+    if (edge === 0) {          // 左：x = -16 完全在畫面外，往右走
+        const y = pick(minY, maxY);
+        origin = { x: minX - SPRITE, y, facing: 'right' };
+        anchor = { x: Math.min(maxX, minX + ENTRY_IN), y };
+    } else if (edge === 1) {   // 右：x = 畫面寬，往左走
+        const y = pick(minY, maxY);
+        origin = { x: w, y, facing: 'left' };
+        anchor = { x: Math.max(minX, maxX - ENTRY_IN), y };
+    } else if (edge === 2) {   // 上
+        const x = pick(minX, maxX);
+        origin = { x, y: minY - SPRITE, facing: facing0 };
+        anchor = { x, y: Math.min(maxY, minY + ENTRY_IN) };
+    } else {                   // 下
+        const x = pick(minX, maxX);
+        origin = { x, y: h, facing: facing0 };
+        anchor = { x, y: Math.max(minY, maxY - ENTRY_IN) };
+    }
+    return { edge, origin, anchor };
 }
 
 /**
@@ -487,6 +532,42 @@ function posAt(occ, step, cache, field = PLAZA_FIELD) {
     return { x, y, facing, k: st.k, moving: !leg.stay, cache: st };
 }
 
+// ── 手動模式（WASD）─────────────────────────────────────────────────
+// 自動走是「伺服器發起點、各自用 seed 推算」；手動也一樣，只是起點換成「按鍵改變的那一刻」：
+//   walk = { mode:'manual', x, y, facing, vx, vy, at }   // at = 伺服器毫秒
+// 位置 = 起點 + 方向 × 經過時間 × 速度，碰到場地邊界就停在邊上。
+// 只有按下／放開方向鍵時伺服器才發新的起點，按住不放不用一直送。
+// 跟自動走同一個節奏：**一拍一動**（每拍 1 格），而且對齊全域的拍子 —— 按下去之後
+// 在下一個拍點才邁出第一步，所有人（自動、手動）在同一個拍點一起動。
+// （第一版是毫秒計時、每秒 4 格，使用者要求同步成一拍一動。）
+// 步伐比自動走大：一拍 MANUAL_STRIDE 格（自己在操作，一拍一格太慢 —— 回報過）。
+// 全程整數，每台算出來位元級相同。
+const MANUAL_STRIDE = 2;
+// 停在原地多久就睡著（規格：手動模式放著不動「太久要睡覺」）。從停下來那一刻（at）起算，
+// 所以每台判定的時間點一樣。一按方向鍵就有新的 at → 自然醒來。
+const MANUAL_SLEEP_MS = 60000;
+
+function manualPos(walk, ms, field = PLAZA_LIVE_FIELD) {
+    const t = Math.max(0, ms - walk.at);
+    const d = Math.max(0, stepAt(ms) - stepAt(walk.at)) * MANUAL_STRIDE;   // 經過幾個拍點 × 步伐
+    const x = clamp(walk.x + walk.vx * d, field.minX, field.maxX);
+    const y = clamp(walk.y + walk.vy * d, field.minY, field.maxY);
+    const moving = (walk.vx !== 0 || walk.vy !== 0)
+        && !(x === clamp(walk.x + walk.vx * (d + 1), field.minX, field.maxX)
+             && y === clamp(walk.y + walk.vy * (d + 1), field.minY, field.maxY));
+    return {
+        x, y, facing: walk.facing || 'right', moving,
+        sleeping: walk.vx === 0 && walk.vy === 0 && t >= MANUAL_SLEEP_MS,
+    };
+}
+
+/** 廣場上某人在 ms 時的位置：手動照 manualPos，自動照 posAt。伺服器與 daemon 共用這一個入口。 */
+function walkPos(walk, ms, cache, field = PLAZA_LIVE_FIELD) {
+    if (walk && walk.mode === 'manual') return { ...manualPos(walk, ms, field), cache: null };
+    return posAt({ seed: walk.seed, joinStep: walk.joinStep, origin: walk.origin, anchor: walk.anchor },
+                 stepAt(ms), cache, field);
+}
+
 /**
  * 牆鐘毫秒 → 第幾拍。所有 client 共用這一個換算，時鐘先用 serverNow 校正過
  * （clockSkew = serverNow - localNow），否則各機器差幾秒就會看到不同畫面。
@@ -495,9 +576,11 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
-    makeField, PLAZA_FIELD, YARD_FIELD,
+    makeField, PLAZA_FIELD, YARD_FIELD, PLAZA_LIVE_FIELD,
     ZONE_MARGIN, YARD_LAYOUTS, YARD_LAYOUT_DEFAULT, yardZones, yardLayoutNames,
     zoneAnchor, inZone, returnLeg,
     DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,
     hash2, rand01, clamp, startPos, offsetAt, legAt, posAt, stepAt,
+    ENTRY_IN, entryWalk,
+    MANUAL_STRIDE, MANUAL_SLEEP_MS, manualPos, walkPos,
 };

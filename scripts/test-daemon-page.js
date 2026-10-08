@@ -506,6 +506,22 @@ setTimeout(async () => {
         try { new Function(js); } catch (e) { err = e; }
         ok(!err, `前端 JS 語法錯誤：${err && err.message}（頁面所有功能都會死）`);
 
+        // 顯示天氣日期：營地與廣場都有勾選框；取消 → body 掛 nohud 把看板藏起來，記在瀏覽器
+        {
+            ok(/body\.nohud #hud\{display:none!important\}/.test(html), '「顯示天氣日期」取消後藏看板的 CSS 不在');
+            const ctl = (html.match(/<div id="controls">[\s\S]*?\n    <\/div>/) || [''])[0];
+            ok(/id="hudshow"[\s\S]*?id="hudcb" checked>顯示天氣日期<\/label>/.test(ctl), '控制列沒有「顯示天氣日期」勾選框');
+            ok(/hudshow'\)\.style\.display = \(v==='yard'\|\|v==='plaza'\)/.test(js), '「顯示天氣日期」沒有只在營地／廣場出現');
+            const fnSrc = (js.match(/function setHud\(on\)\{[\s\S]*?\n\}/) || [''])[0];
+            let cls = null, saved = null; const cb = { checked: true };
+            const doc = { body: { classList: { toggle: (c, v) => { cls = v ? c : null; } } }, getElementById: () => cb };
+            const setHud = new Function('document', 'localStorage', fnSrc + '\nreturn setHud;')(doc, { setItem: (k, v) => { saved = [k, v]; } });
+            setHud(false);
+            ok(cls === 'nohud' && cb.checked === false && saved && saved[1] === '0', '取消「顯示天氣日期」沒有藏起看板／沒記住');
+            setHud(true);
+            ok(cls === null && cb.checked === true && saved[1] === '1', '勾回「顯示天氣日期」看板沒回來');
+            ok(/setHud\(v!=='0'\)/.test(js), '重開頁面沒有讀回「顯示天氣日期」的設定');
+        }
         // dev 介面 on/off：dev 限定的東西都要掛 devonly，關掉才藏得到；開關列不能被當成指令列送出
         {
             // 右上看板後面要壓黑（往外淡掉的暗影），不然節日彩旗／煙火經過會把字吃掉
@@ -946,14 +962,18 @@ setTimeout(async () => {
                 const fy = JSON.parse(await getOn(P4, '/yard?fest=doubleten'));
                 ok(fy.festival && fy.festival.id === 'doubleten' && fy.festCostume === true, '/yard?fest= 預覽沒生效：' + JSON.stringify(fy.festival));
                 ok(/<canvas id="fest"><\/canvas><canvas id="pet"/.test(html), '節日背景畫布不在角色畫布下面');
-                ok(/id="festplaza"/.test(html) && /id="festcos"/.test(html), '頁面沒有節日開關');
+                ok(/id="festplaza"/.test(html) && !/id="festcos"/.test(html) && !/id="festyard"/.test(html), '頁面沒有節日開關，或營地還留著另一顆');
                 ok(/applyFestival\(p\.festival/.test(js) && /applyFestival\(y\.festival/.test(js), '前端沒有套用節日');
                 ok(/view==='plaza' \|\| \(view==='yard' && festState\.bg\)/.test(js), '廣場的節日背景不該吃營地的開關');
                 // 造型勾選框排在「離開廣場」那一列（#controls）的右邊，文案「顯示節慶造型」
                 const ctl = (html.match(/<div id="controls">[\s\S]*?\n    <\/div>/) || [''])[0];
                 ok(/id="festplaza"[^>]*margin-left:auto[\s\S]*?顯示節慶造型<\/label>/.test(ctl), '造型勾選框沒有排在離開廣場那一列的右邊');
                 // 營地只有一顆：背景跟造型同一個開關
-                ok(!/id="festbg"/.test(html) && /id="festcos">顯示節慶造型<\/label>/.test(html), '營地的節日開關沒合成一顆「顯示節慶造型」');
+                ok(!/id="festbg"/.test(html), '營地的節日開關沒合成一顆「顯示節慶造型」');
+                // 營地與廣場共用控制列最右那一顆（跟「顯示天氣日期」並排靠右）
+                ok(/festplaza'\)\.style\.display = \(f && \(view==='yard'\|\|view==='plaza'\)\)/.test(js), '營地沒有用控制列右邊那顆節慶勾選框');
+                ok(/<span id="ctlright" style="margin-left:auto[^"]*">\s*<label class="k" id="festplaza"[\s\S]*?id="hudshow"/.test(html), '兩個勾選框沒有一起靠右');
+                ok(/if\(v!=='yard'&&v!=='plaza'\) document\.getElementById\('festplaza'\)\.style\.display='none'/.test(js), '回前線時節慶勾選框沒藏起來');
                 ok(/opts\.costume!=null\) festState\.bg = !!opts\.costume/.test(js), '營地背景沒跟著造型開關走');
                 ok(/const festNow = [^\n]*IS_RELEASE \? null/.test(require('fs').readFileSync(
                        path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8')),'release 版還吃節日預覽 —— 開關會在活動期間外出現');

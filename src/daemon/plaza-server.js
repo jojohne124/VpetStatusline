@@ -19,6 +19,8 @@
  */
 const http   = require('http');
 const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
 const W      = require('../shared/plaza-walk.js');
 
 const DEFAULT_PORT = 37373;
@@ -339,8 +341,21 @@ function createPlazaServer(opts = {}) {
         res.end(JSON.stringify({ ...body, serverNow: now() }));
     }
 
+    // 自動更新（docs/update-spec.md）：發版時 publish-release 把簽好的包放進 updateDir，
+    // 這裡只負責原樣送出（每次現讀，發版不用重開伺服器）。驗章在 daemon 那邊做，伺服器不用被信任。
+    const updateDir = opts.updateDir || process.env.VPET_UPDATE_DIR || path.join(__dirname, '..', '..', 'dist', 'update');
+    function serveUpdate(res, file, type) {
+        fs.readFile(path.join(updateDir, file), (err, buf) => {
+            if (err) return reply(res, 404, { ok: false, error: '沒有更新包' });
+            res.writeHead(200, { 'Content-Type': type, 'Content-Length': buf.length, 'Cache-Control': 'no-store' });
+            res.end(buf);
+        });
+    }
+
     const server = http.createServer((req, res) => {
         const u = new URL(req.url, 'http://x');
+        if (req.method === 'GET' && u.pathname === '/update/manifest') return serveUpdate(res, 'manifest.json', 'application/json; charset=utf-8');
+        if (req.method === 'GET' && u.pathname === '/update/bundle') return serveUpdate(res, 'bundle.bin', 'application/octet-stream');
         if (req.method === 'GET' && u.pathname === '/events') return openEvents(req, res, u.searchParams.get('id'));
         if (req.method === 'GET' && u.pathname === '/roster') return reply(res, 200, { ok: true, roster: roster() });
         if (req.method === 'POST' && u.pathname === '/join') {

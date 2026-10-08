@@ -971,6 +971,16 @@ setTimeout(async () => {
                 const fy = JSON.parse(await getOn(P4, '/yard?fest=doubleten'));
                 ok(fy.festival && fy.festival.id === 'doubleten' && fy.festCostume === true, '/yard?fest= 預覽沒生效：' + JSON.stringify(fy.festival));
                 ok(/<canvas id="fest"><\/canvas><canvas id="pet"/.test(html), '節日背景畫布不在角色畫布下面');
+                // 掛在鏡頭前的（雙十彩旗、春節燈籠）畫在前景畫布：DOM 排在角色後面、同一層 → 疊在角色上
+                ok(/<canvas id="pet"[^>]*><\/canvas><canvas id="festfront"><\/canvas>/.test(html) && /#festfront\{[^}]*z-index:1\}/.test(html),
+                   '節日前景畫布不在角色畫布上面');
+                ok(/festDot\(gf,x,y,'#8b949e'/.test(js) && /festPix\(gf,FEST_ART\.redlantern/.test(js), '雙十彩旗／春節燈籠沒畫在前景（會被角色擋住）');
+                ok(/Math\.max\(3,Math\.floor\(W\/11\)\)/.test(js), '春節燈籠沒有依畫面寬度擺滿一整排');
+                // 跨年 101 是遠景天際線：只在上方（base＝上面 27%）、底部起霧，煙火先畫、天際線蓋上去（煙火在大樓後面）
+                ok(/const base=Math\.round\(H\*0\.27\)/.test(js) && /const fade=\(y\)=>/.test(js), '跨年天際線不是上方的遠景（會像立在營地裡的柱子）');
+                ok(/festFireworks\(g,ts,W,H,\[[^\]]*\],wxState\.night\?1300:2600\);\s*festSkyline\(g,ts,W,H\);/.test(js), '跨年的煙火沒有在天際線後面');
+                // 煙火是遠方天空：只在最上緣（y < 6）、畫在後面那張
+                ok(/y:2\.5\+Math\.random\(\)\*3,/.test(js) && /festFireworks\(g,ts/.test(js) && !/festFireworks\(gf/.test(js), '煙火不在畫面最上緣，或跑到角色前面了');
                 ok(/id="festplaza"/.test(html) && !/id="festcos"/.test(html) && !/id="festyard"/.test(html), '頁面沒有節日開關，或營地還留著另一顆');
                 ok(/applyFestival\(p\.festival/.test(js) && /applyFestival\(y\.festival/.test(js), '前端沒有套用節日');
                 ok(/view==='plaza' \|\| \(view==='yard' && festState\.bg\)/.test(js), '廣場的節日背景不該吃營地的開關');
@@ -981,7 +991,8 @@ setTimeout(async () => {
                 ok(!/id="festbg"/.test(html), '營地的節日開關沒合成一顆「顯示節慶造型」');
                 // 營地與廣場共用控制列最右那一顆（跟「顯示天氣日期」並排靠右）
                 ok(/festplaza'\)\.style\.display = \(f && \(view==='yard'\|\|view==='plaza'\)\)/.test(js), '營地沒有用控制列右邊那顆節慶勾選框');
-                ok(/<span id="ctlright" style="margin-left:auto[^"]*">\s*<label class="k" id="festplaza"[\s\S]*?id="hudshow"/.test(html), '兩個勾選框沒有一起靠右');
+                // 「🆕 有新版本」鈕（平常藏著）可以排在最前面
+                ok(/<span id="ctlright" style="margin-left:auto[^"]*">\s*(<button id="selfupdate"[^>]*>[^<]*<\/button>\s*)?<label class="k" id="festplaza"[\s\S]*?id="hudshow"/.test(html), '兩個勾選框沒有一起靠右');
                 ok(/if\(v!=='yard'&&v!=='plaza'\) document\.getElementById\('festplaza'\)\.style\.display='none'/.test(js), '回前線時節慶勾選框沒藏起來');
                 ok(/opts\.costume!=null\) festState\.bg = !!opts\.costume/.test(js), '營地背景沒跟著造型開關走');
                 ok(/const festNow = [^\n]*IS_RELEASE \? null/.test(require('fs').readFileSync(

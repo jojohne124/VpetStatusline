@@ -149,7 +149,9 @@ cd vpet
 - **doctor 也救不回**：到 `tools/agumon-doctor/` 雙擊 **`agumon-restart.bat`**（Windows）/
   **`agumon-restart.command`**（macOS）強制重啟（會保留你的角色與進度），或執行
   `node tools/agumon-doctor/restart.js`。要回報問題就跑 `agumon-report`（見 `tools/agumon-doctor/`）。
-- **更新到新版**：在 clone 的資料夾裡 `git pull`，再雙擊一次 `install`。角色與進度不受影響。
+- **更新到新版**：會自動更新 —— 每次打開桌寵（或重開電腦）時，若廣場伺服器有新版就自動下載安裝；
+  開著的時候有新版，畫面上會出現「🆕 有新版本」，按一下幾秒鐘就好。角色與進度不受影響。
+  （第一次從舊版換過來要手動一次：在 clone 的資料夾裡 `git pull`，再雙擊一次 `install`。）
 - **想移除**：雙擊 **`uninstall.bat`**（Windows）／ **`uninstall.command`**（macOS）／
   `./uninstall.sh`，或執行 `node scripts/uninstall.js`。你的桌寵存檔預設保留（加 `--purge`
   才一併刪除）。**你自己的 statusline 設定不會被動到。**

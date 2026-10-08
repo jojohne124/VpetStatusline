@@ -20,6 +20,17 @@ const http = require('http');
 const { Worker } = require('worker_threads');
 const { spawnSync, spawn } = require('child_process');   // spawn：起走動範圍編輯器（dev）
 
+// release 樹（根目錄有 RELEASE）：交給 supervisor —— 先檢查更新、再起子行程跑真正的 daemon
+// （docs/update-spec.md）。開發樹沒有 RELEASE，照舊直接跑。VPET_SUPERVISE 給測試用。
+const TREE_ROOT = path.resolve(__dirname, '..', '..');
+const TREE_IS_RELEASE = fs.existsSync(path.join(TREE_ROOT, 'RELEASE'));
+if (require.main === module && !process.env.VPET_CHILD && (TREE_IS_RELEASE || process.env.VPET_SUPERVISE)) {
+    require('./supervisor.js').run();
+    return;
+}
+// 我是 supervisor 起的子行程：外殼不在了（tray「結束」只殺得到外殼）就跟著收掉
+if (process.env.VPET_PARENT_PID) require('./supervisor.js').watchParent(Number(process.env.VPET_PARENT_PID), () => process.exit(0));
+
 // 優先用「已安裝」的 core（跟 statusLine 同一份權威），抓不到再退回 repo 內。
 let core;
 const INSTALLED_CORE = path.join(os.homedir(), '.claude', 'agumon-statusline', 'agumon-core.js');
@@ -394,6 +405,31 @@ const plazaStep = () => require('../shared/plaza-walk.js').stepAt(Date.now());
 // ── 廣場（docs/plaza-spec.md）─────────────────────────────────────────
 // 連線就是在場：斷線重試失敗 → onLost → 回前線，並留一句話給頁面顯示。
 // 「在廣場」只活在這個行程裡（state.plaza 只是給 CLI 看的影子），所以重開 daemon = 回前線。
+// ── 自動更新（docs/update-spec.md）──
+// 版本 = release 樹的 VERSION（發版時寫入）；開發樹沒有 → ''。
+// 有沒有新版：問廣場伺服器的 /update/manifest（啟動後 5 秒、之後每 30 分鐘）。
+// 只有 supervisor 起的 daemon 才給「有新版本」鈕 —— 按下去是靠外殼重開，沒有外殼就重開不了。
+const UPDATER = require('./updater.js');
+const MY_VERSION = UPDATER.localVersion(TREE_ROOT);
+const UPDATE_CHECK_MS = 30 * 60 * 1000;
+let updateAvail = null;     // { version }
+async function checkUpdate() {
+    if (!TREE_IS_RELEASE && !process.env.VPET_SUPERVISE) return;
+    const m = await UPDATER.fetchManifest(UPDATER.baseUrl());
+    updateAvail = m && m.version !== MY_VERSION ? { version: m.version } : null;
+}
+setTimeout(checkUpdate, 5000).unref();
+setInterval(checkUpdate, UPDATE_CHECK_MS).unref();
+// 上一次啟動前 updater 的結果（state/update.json）：10 分鐘內的才算「剛剛」，頁面顯示一次
+function lastUpdateResult() {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'update.json'), 'utf8'));
+        if (!j || Date.now() - j.at > 10 * 60 * 1000) return null;
+        return { at: j.at, ok: !!j.ok,
+                 text: j.ok ? '已更新到新版本（' + j.to + '）' : '自動更新失敗：' + j.error + '（目前仍是舊版）' };
+    } catch (e) { return null; }
+}
+
 let plazaNotice = null;   // { text, at }：頁面顯示一次就好
 const plazaCaches = new Map();
 const plazaClient = PlazaClient.create({
@@ -933,6 +969,17 @@ function applyCommand(action, args = {}) {
         if (!args.inviteId) return { ok: false, error: '沒有邀請' };
         return plazaClient.answer(args.inviteId, args.accept === '1').then(r => (r.ok ? { ok: true, action } : r));
     }
+    // 有新版本 → 結束碼 RESTART_CODE，外殼（supervisor）會跑 updater 再重開。在廣場的話先離場。
+    if (action === 'selfUpdate') {
+        if (!process.env.VPET_CHILD) return { ok: false, error: '這個 daemon 不是由更新外殼啟動的（開發版或舊的啟動方式），請手動重啟。' };
+        const bye = () => process.exit(require('./supervisor.js').RESTART_CODE);
+        setTimeout(() => {
+            if (!plazaClient.active()) return bye();
+            const t = setTimeout(bye, 1000);
+            plazaClient.leave().finally(() => { clearTimeout(t); bye(); });
+        }, 300);
+        return { ok: true, action, output: '更新中，daemon 重開後頁面會自動重新整理…' };
+    }
     if (action === 'plazaHappy') {
         return plazaClient.emote().then(r => (r.ok ? { ok: true, action } : r));
     }
@@ -1131,8 +1178,10 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 節日背景：墊在角色畫布**下面**（角色畫布清空的地方是透明的）。只在營地／廣場。
      角色畫布要 position + z-index 才壓得過它；只對營地／廣場加，家裡的 letterbox 不受影響。 */
   #fest{position:absolute;display:none;pointer-events:none;z-index:0}
+  /* 節日前景：跟角色同一層、DOM 排在角色後面 → 疊在角色上面；天氣（z2）再蓋在它上面 */
+  #festfront{position:absolute;display:none;pointer-events:none;z-index:1}
   body.yard #pet,body.plaza #pet{position:relative;z-index:1}
-  body.fest.yard #fest,body.fest.plaza #fest{display:block}
+  body.fest.yard #fest,body.fest.plaza #fest,body.fest.yard #festfront,body.fest.plaza #festfront{display:block}
   body.yard #wx,body.plaza #wx{display:block}
   /* 右上角的日期／時間／天氣。用 HTML 疊層而不是畫點陣字：52 dot 寬塞一整行日期
      會佔掉整列又糊掉，而這裡本來就不是像素風的一部分，是「看板」。 */
@@ -1236,13 +1285,14 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage"><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
       <select id="jgsel" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
+      <button id="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
       <label class="k" id="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
              title="關掉的話，大家看到的你就是平常的樣子"><input type="checkbox" id="festcos2">顯示節慶造型</label>
       <label class="k" id="hudshow" style="display:none;align-items:center;gap:4px;font-size:12px"
@@ -1498,9 +1548,11 @@ function syncWx(){
   const w=pet.offsetWidth, h=pet.offsetHeight;
   wx.style.left=pet.offsetLeft+'px'; wx.style.top=pet.offsetTop+'px';
   if(wx.width!==w||wx.height!==h){ wx.width=w; wx.height=h; }
-  const fe=document.getElementById('fest');
-  fe.style.left=pet.offsetLeft+'px'; fe.style.top=pet.offsetTop+'px';
-  if(fe.width!==w||fe.height!==h){ fe.width=w; fe.height=h; }
+  for(const id of ['fest','festfront']){
+    const fe=document.getElementById(id);
+    fe.style.left=pet.offsetLeft+'px'; fe.style.top=pet.offsetTop+'px';
+    if(fe.width!==w||fe.height!==h){ fe.width=w; fe.height=h; }
+  }
 }
 
 function wxBuild(w,h){
@@ -1750,7 +1802,6 @@ const FEST_ART={
   bat2:['..KKK..','.KK.KK.','K.....K'],
   tree:['....D....','....N....','...NNN...','..NNNNN..','...NNN...','..NNNNN..','.NNNNNNN.','NNNNNNNNN','....P....','....P....'],
   gift:['.D.D.','RRDRR','RRDRR','RRDRR'],
-  tower:['..Q..','..Q..','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','QQQQQ','QQQQQ'],
   redlantern:['..D..','.RRR.','RRDRR','RRRRR','.RRR.','..D..','..D..'],
   skylantern:['.OOO.','OYYYO','OYYYO','.OOO.','..Y..'],
   heart:['H.H','HHH','.H.'],
@@ -1774,21 +1825,56 @@ function festDot(g,x,y,color,alpha){
 let festBursts=[], festNextBurst=0;
 // 0～1 的固定亂數（同一個 i 每一幀都一樣）：雪花、星星、天燈的位置用它，不用另外存狀態
 const festRnd=(i)=>{ const x=Math.sin(i*127.1+311.7)*43758.5453; return x-Math.floor(x); };
-// 煙火：上半部隨機炸開，一秒內散開淡掉（雙十晚上、跨年整天）
+// 煙火：遠方的天空 → 只在畫面最上緣（跟萬聖節蝙蝠同高）、炸得小，畫在角色後面那張畫布
+//（雙十晚上、跨年整天）。以前炸在上面三成的地方，看起來像在角色旁邊炸（回報過）
 function festFireworks(g,ts,W,H,colors,gap){
   if(ts>festNextBurst){
     festNextBurst=ts+gap*(0.6+Math.random()*0.8);
-    festBursts.push({x:6+Math.random()*(W-12), y:8+Math.random()*(H*0.3), t0:ts,
+    festBursts.push({x:4+Math.random()*(W-8), y:2.5+Math.random()*3, t0:ts,
                      c:colors[Math.floor(Math.random()*colors.length)]});
   }
   festBursts=festBursts.filter(b=>ts-b.t0<1100);
   for(const b of festBursts){
-    const k=(ts-b.t0)/1100, r=1+k*6;
-    for(let i=0;i<12;i++){
-      const a=i/12*Math.PI*2;
-      festDot(g,b.x+Math.cos(a)*r, b.y+Math.sin(a)*r*0.8, b.c, 0.9*(1-k));
+    const k=(ts-b.t0)/1100, r=0.6+k*3.4;
+    for(let i=0;i<10;i++){
+      const a=i/10*Math.PI*2;
+      festDot(g,b.x+Math.cos(a)*r, b.y+Math.sin(a)*r*0.6, b.c, 0.9*(1-k));
     }
   }
+}
+// 跨年的遠景：上緣一排城市天際線，101 最高。
+// 為什麼是遠景、不是右側一整根：101 從畫面底部長上來，等於立在營地地板上，跟角色一樣近，
+// 看起來像營地裡的一根柱子（回報過）。遠方的東西要「只在上方、淡、底部起霧」，
+// 跟下面的營地地面分開。顏色接近底色，窗燈稀疏、慢慢閃；煙火在它後面的天空炸開。
+function festSkyline(g,ts,W,H){
+  const base=Math.round(H*0.27);            // 天際線的「地面」：再下面就是營地
+  const col='#2b3342', lit='#ffd84a';
+  // 底部起霧：離 base 越近越淡 → 大樓沒有「站」在任何東西上
+  const fade=(y)=>Math.max(0,Math.min(1,(base-y)/3));
+  const dot=(x,y,c,a)=>{ const f=fade(y); if(f>0) festDot(g,x,y,c,a*f); };
+  // 矮樓：寬 2～4、高 4～8，左右排滿（101 的位置留給它）
+  const tx=Math.round(W*0.5);              // 正中間：右上是時間天氣看板，放右邊頂端會被蓋住
+  for(let x=0,i=0;x<W;i++){
+    const w=2+Math.floor(festRnd(i+300)*3), h=4+Math.floor(festRnd(i+400)*5);
+    if(x+w>=tx-2 && x<=tx+2){ x=tx+3; continue; }
+    for(let dx=0;dx<w;dx++) for(let y=base-h;y<=base;y++) dot(x+dx,y,col,0.9);
+    if(festRnd(i+500)<0.6){
+      const wy=base-h+1+Math.floor(festRnd(i+600)*(h-2));
+      dot(x+Math.floor(w/2),wy,lit,0.25+0.35*(0.5+0.5*Math.sin(ts/900+i)));
+    }
+    x+=w;
+  }
+  // 101：天線 → 頂冠 → 八節（每節兩列，上列寬一點＝竹節外擴）→ 底座，一路到 base
+  let y=1;
+  for(;y<4;y++) dot(tx,y,col,0.95);
+  dot(tx,y,col,0.95); y++;
+  for(let k=0;k<8&&y<base-1;k++){
+    for(let dx=-1;dx<=1;dx++) dot(tx+dx,y,col,0.95);
+    dot(tx-1,y+1,col,0.95); dot(tx,y+1,col,0.95); dot(tx+1,y+1,col,0.95);
+    dot(tx,y+1,lit,0.2+0.3*(0.5+0.5*Math.sin(ts/800+k)));
+    y+=2;
+  }
+  for(;y<=base;y++) for(let dx=-2;dx<=2;dx++) dot(tx+dx,y,col,0.95);
 }
 // 由下往上飄的東西（天燈、愛心、氣球）：n 個，各自速度、左右晃，飄出上緣再從下面出來
 function festRise(g,ts,W,H,n,art,h,alpha,mapOf){
@@ -1805,17 +1891,20 @@ function festDraw(ts){
   if(!on||!cv.width||!cv.height) return;
   const g=cv.getContext('2d'), W=Math.floor(cv.width/CW), H=Math.floor(cv.height/(CH/2));
   g.clearRect(0,0,cv.width,cv.height);
+  // 前景（疊在角色上面）：雙十彩旗、春節燈籠 —— 掛在鏡頭前的東西
+  const fcv=document.getElementById('festfront'), gf=fcv.getContext('2d');
+  gf.clearRect(0,0,fcv.width,fcv.height);
   if(festState.id==='doubleten'){
-    // 上緣一條彩旗：紅白藍三角旗掛在微微下垂的繩子上
+    // 上緣一條彩旗：紅白藍三角旗掛在微微下垂的繩子上，掛在**鏡頭前**（前景畫布）
     // 繩子兩端在畫面外（y=-1），中間垂到 y=1：太低會跟右上角的時間／天氣看板疊在一起
     const sag=2;
     for(let x=0;x<W;x++){
       const t=2*x/(W-1)-1, y=sag*(1-t*t)-1;
-      festDot(g,x,y,'#8b949e',0.6);
+      festDot(gf,x,y,'#8b949e',0.6);
       if(x%5===2){
         const c=['#de2028','#ffffff','#0038a8'][Math.floor(x/5)%3];
-        for(let dx=-1;dx<=1;dx++) festDot(g,x+dx,y+1,c,0.85);
-        festDot(g,x,y+2,c,0.85);
+        for(let dx=-1;dx<=1;dx++) festDot(gf,x+dx,y+1,c,0.85);
+        festDot(gf,x,y+2,c,0.85);
       }
     }
     // 晚上加煙火
@@ -1849,14 +1938,16 @@ function festDraw(ts){
     lights.forEach(([c,r],i)=>festDot(g,W-11+c,H-10+r,['#de2028','#ffd84a','#4a8cff'][(Math.floor(ts/450)+i)%3],1));
     festPix(g,FEST_ART.gift,2,H-4,1);
   } else if(festState.id==='newyear'){
-    // 整天都放煙火（晚上放得比較密）＋右下台北 101
+    // 整天都放煙火（晚上放得比較密）＋上緣城市天際線（101 最高）
+    // 先放煙火、再蓋天際線：煙火在大樓後面的天空炸開
     festFireworks(g,ts,W,H,['#de2028','#ffffff','#5b8cff','#ffd84a','#f0508c','#5fe08a'],wxState.night?1300:2600);
-    festPix(g,FEST_ART.tower,W-8,H-14,0.95);
-    for(let r=3;r<13;r+=2) festDot(g,W-6,H-14+r,'#ffd84a',0.5+0.5*Math.sin(ts/500+r));
+    festSkyline(g,ts,W,H);
   } else if(festState.id==='lunarny'){
-    // 上緣一排紅燈籠微微晃；下緣兩角掛鞭炮，底下一直冒火花
-    for(const [i,fx] of [[0,0.08],[1,0.3],[2,0.52]]){
-      festPix(g,FEST_ART.redlantern,Math.round(fx*W)+Math.sin(ts/900+i)*0.6,0,1);
+    // 上緣一整排紅燈籠微微晃，掛在**鏡頭前**（前景畫布，角色走過去會被擋住）；
+    // 下緣兩角掛鞭炮，底下一直冒火花
+    const nL=Math.max(3,Math.floor(W/11));
+    for(let i=0;i<nL;i++){
+      festPix(gf,FEST_ART.redlantern,Math.round((i+0.5)*W/nL)-2+Math.sin(ts/900+i)*0.6,0,1);
     }
     for(const px of [3,W-4]){
       // 中間一條引信，兩側交錯一節一節的紅炮
@@ -1872,9 +1963,10 @@ function festDraw(ts){
     }
   } else if(festState.id==='lantern'){
     // 天燈從下面慢慢飄上去，火光一閃一閃
-    festRise(g,ts,W,H,6,FEST_ART.skylantern,5,0.85*(0.85+0.15*Math.sin(ts/200)));
+    // 上升的東西都壓暗（半透明）：滿畫面在飄，太亮會搶過角色
+    festRise(g,ts,W,H,6,FEST_ART.skylantern,5,0.45*(0.85+0.15*Math.sin(ts/200)));
   } else if(festState.id==='valentine'){
-    festRise(g,ts,W,H,9,FEST_ART.heart,3,0.75);
+    festRise(g,ts,W,H,9,FEST_ART.heart,3,0.4);
   } else if(festState.id==='qingming'){
     // 清明：低調。斜斜的毛毛雨（很淡）＋左上垂下幾條柳枝隨風擺，偶爾飄一片柳葉
     for(let i=0;i<34;i++){
@@ -1899,7 +1991,7 @@ function festDraw(ts){
     }
   } else if(festState.id==='children'){
     const cols=['#de2028','#4a8cff','#ffd84a','#5fe08a','#f0508c'];
-    festRise(g,ts,W,H,6,FEST_ART.balloon,5,0.9,(i)=>({X:cols[i%cols.length]}));
+    festRise(g,ts,W,H,6,FEST_ART.balloon,5,0.45,(i)=>({X:cols[i%cols.length]}));
   } else if(festState.id==='dragonboat'){
     // 下緣水面＋一艘龍舟慢慢划過去（槳手一上一下）
     const sp=ts/1000*3, bx=(sp%(W+16))-14;
@@ -2153,6 +2245,44 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   el.style.left=Math.min(ev.clientX, innerWidth-el.offsetWidth-8)+'px';
   el.style.top =Math.min(ev.clientY, innerHeight-el.offsetHeight-8)+'px';
 });
+
+// ── 自動更新（docs/update-spec.md）──
+// 每分鐘問一次 daemon 有沒有新版；有就亮「🆕 有新版本」。按下去 daemon 會重開，
+// 這段期間 fetch 會失敗，等版本號變了就重新整理頁面（新版的頁面也要重載）。
+let myVersion=null, updating=false;
+async function pollUpdate(){
+  let u=null;
+  try{ u=await (await fetch('/update',{cache:'no-store'})).json(); }catch(e){ return null; }
+  if(myVersion===null) myVersion=u.version;
+  if(updating && u.version!==myVersion){ location.reload(); return u; }
+  const b=document.getElementById('selfupdate');
+  b.style.display = (u.available && !updating) ? '' : 'none';
+  if(u.available) b.title='新版本 '+u.available.version+'：下載並重開 daemon（幾秒鐘）';
+  // 上一次重開時的更新結果：同一筆只講一次（重新整理後不要再跳）
+  if(u.last){
+    let seen=0; try{ seen=Number(localStorage.getItem('vpet.updseen'))||0; }catch(e){}
+    if(u.last.at>seen){
+      try{ localStorage.setItem('vpet.updseen',String(u.last.at)); }catch(e){}
+      flashCmdMsg(u.last.text, u.last.ok?'#3fb950':'#d29922');
+    }
+  }
+  return u;
+}
+document.getElementById('selfupdate').addEventListener('click',()=>{
+  if(!confirm('更新到新版本？daemon 會重開幾秒鐘，在廣場的話會先離場。')) return;
+  sendCmd('selfUpdate',{}).then(r=>{
+    if(!r||!r.ok) return;
+    updating=true;
+    document.getElementById('selfupdate').style.display='none';
+    const t0=Date.now();
+    const iv=setInterval(()=>{
+      if(Date.now()-t0>180000){ clearInterval(iv); updating=false; flashCmdMsg('更新等太久了，請手動重開 daemon','#d29922'); return; }
+      pollUpdate();
+    },1500);
+  });
+});
+setInterval(pollUpdate,60000);
+pollUpdate();
 
 // ── 廣場 ──
 // 「被帶回前線」的原因只顯示一次：記住看過的最後一則（at），之後的輪詢不再重複跳。
@@ -2974,6 +3104,13 @@ const server = http.createServer((req, res) => {
         }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(body));
+        return;
+    }
+    // 版本與更新狀態：每個畫面（前線／營地／廣場）都要看得到「有新版本」，所以獨立一支
+    if (req.url === '/update') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ version: MY_VERSION, pid: process.pid, supervised: !!process.env.VPET_CHILD,
+                                 available: process.env.VPET_CHILD ? updateAvail : null, last: lastUpdateResult() }));
         return;
     }
     if (req.url === '/state') {

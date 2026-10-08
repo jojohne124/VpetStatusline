@@ -131,11 +131,20 @@ console.log('— dev 資產不可以混進 release —');
        'scripts/ 只該留 install / uninstall，出現了別的：' + all.filter(f => f.startsWith('scripts/')).join(', '));
 }
 
+console.log('— 自動更新（docs/update-spec.md）—');
+{
+    for (const f of ['src/daemon/updater.js', 'src/daemon/supervisor.js', 'src/shared/update-bundle.js', 'src/shared/update-key.js'])
+        ok(has(f), 'release 少了 ' + f + ' → 自動更新整個不會動（daemon 一起動就 MODULE_NOT_FOUND）');
+    ok(!all.some(f => /\.pem$/i.test(f)), '簽章私鑰混進 release 了！');
+    ok(!all.includes('scripts/gen-release-key.js'), '產金鑰的腳本混進 release 了');
+}
+
 console.log('— 根目錄乾淨、預設安裝是純 daemon —');
 {
     // 一般使用者打開資料夾只該看到三件事：安裝、打開桌寵、解除安裝。
     const rootFiles = fs.readdirSync(OUT, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name);
-    const allowed = /^(README\.md|RELEASE|package\.json|(install|uninstall)\.(bat|command|sh)|vpet-standalone\.(bat|command|sh|vbs))$/;
+    // VERSION：publish-release 才寫（自動更新比對版本用），build 本身不產生；出現也合法
+    const allowed = /^(README\.md|RELEASE|VERSION|package\.json|(install|uninstall)\.(bat|command|sh)|vpet-standalone\.(bat|command|sh|vbs))$/;
     const extra = rootFiles.filter(f => !allowed.test(f));
     ok(extra.length === 0, 'release 根目錄多了這些檔（不在「安裝／打開／解除安裝」裡）：' + extra.join(', '));
 

@@ -7,6 +7,10 @@
  * 流程：build-release 產 dist/release → 用 worktree 檢出 release 分支 →
  *   以 dist 內容覆蓋 → 有變更才 commit + push origin release → 清 worktree。
  * 沒有實質變更時直接跳過（不會產生空 commit）。
+ *
+ * 另外打一包簽好章的更新包到 dist/update/（manifest.json + bundle.bin），
+ * 廣場伺服器（plaza-host）從那裡發給大家的 daemon 自動更新（docs/update-spec.md）。
+ * 私鑰：~/.vpet/release-key.pem（或 VPET_RELEASE_KEY）；沒有就跳過這一步（GitHub 照推）。
  */
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -17,6 +21,25 @@ const REPO   = path.resolve(__dirname, '..');
 const DIST   = path.join(REPO, 'dist', 'release');
 const BRANCH = 'release';
 const WT     = path.join(os.tmpdir(), `agumon-release-publish-${process.pid}`);
+const UPDATE_DIR = path.join(REPO, 'dist', 'update');
+const KEY_FILE   = process.env.VPET_RELEASE_KEY || path.join(os.homedir(), '.vpet', 'release-key.pem');
+
+// 簽好章的更新包 → dist/update/。先寫暫存再改名：plaza-host 隨時可能在讀
+function makeUpdateBundle(version) {
+    if (!fs.existsSync(KEY_FILE)) {
+        console.log(`\n（沒有簽章私鑰 ${KEY_FILE} → 不產生自動更新包；要開自動更新先跑 node scripts/gen-release-key.js）`);
+        return;
+    }
+    const B = require('../src/shared/update-bundle.js');
+    const buf = B.pack(DIST, version);
+    const manifest = B.sign(buf, version, fs.readFileSync(KEY_FILE, 'utf8'));
+    fs.mkdirSync(UPDATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(UPDATE_DIR, 'bundle.bin.tmp'), buf);
+    fs.renameSync(path.join(UPDATE_DIR, 'bundle.bin.tmp'), path.join(UPDATE_DIR, 'bundle.bin'));
+    fs.writeFileSync(path.join(UPDATE_DIR, 'manifest.json.tmp'), JSON.stringify(manifest, null, 2));
+    fs.renameSync(path.join(UPDATE_DIR, 'manifest.json.tmp'), path.join(UPDATE_DIR, 'manifest.json'));
+    console.log(`\n🆕 自動更新包：${version}（${(buf.length / 1048576).toFixed(1)} MB）→ ${path.relative(REPO, UPDATE_DIR)}，plaza-host 開著就會發給大家`);
+}
 
 function git(args, cwd = REPO) {
     return execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -40,6 +63,8 @@ function main() {
     execFileSync('node', [path.join(REPO, 'scripts', 'build-release.js')], { cwd: REPO, stdio: 'inherit' });
 
     const mainRef = git(['rev-parse', '--short', 'HEAD']).trim();
+    // 版本號：自動更新拿它比對（daemon 的 VERSION ≠ 伺服器的 → 更新）
+    fs.writeFileSync(path.join(DIST, 'VERSION'), mainRef + '\n');
 
     console.log('\n[2/5] 準備 release worktree …');
     tryGit(['fetch', 'origin', BRANCH]);
@@ -59,6 +84,7 @@ function main() {
     if (noChange) {
         console.log('\n[4/5] release 已是最新，無變更 → 不 commit/push。');
         cleanup();
+        makeUpdateBundle(mainRef);
         console.log('\n✅ 完成（release 未變動）。');
         return;
     }
@@ -75,6 +101,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`;
     console.log('[5/5] push origin release …');
     git(['push', 'origin', BRANCH], WT);
     cleanup();
+    makeUpdateBundle(mainRef);
     console.log(`\n✅ release 已同步到 main (${mainRef}) 並 push。`);
 }
 

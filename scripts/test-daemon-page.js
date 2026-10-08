@@ -508,6 +508,8 @@ setTimeout(async () => {
 
         // dev 介面 on/off：dev 限定的東西都要掛 devonly，關掉才藏得到；開關列不能被當成指令列送出
         {
+            // 右上看板後面要壓黑（往外淡掉的暗影），不然節日彩旗／煙火經過會把字吃掉
+            ok(/#hud::before\{[^}]*z-index:-1;[^}]*radial-gradient\(closest-side,rgba\(0,0,0,/.test(html), '右上看板後面沒有壓黑');
             ok(/body\.nodev \.devonly\{display:none!important\}/.test(html), 'dev 介面關掉的 CSS 不在');
             ok(/id="devui"[\s\S]*?data-on="1">on<[\s\S]*?data-on="0">off</.test(html), '進階區沒有 dev介面 on/off');
             ok(/#adv \.form:not\(#devui\)/.test(js), 'dev介面列會被當成指令列（按了送出空指令）');

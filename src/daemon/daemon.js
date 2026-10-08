@@ -1487,6 +1487,7 @@ function setView(v){
 // （沒有人分得出你我的雨滴有沒有對齊），所以接廣場時這段原封不動就能用。
 // 走路那邊就不一樣了，那個必須逐拍決定性，見 shared/plaza-walk.js。
 const wxState = {sky:'clear', cold:false, night:false};
+const WX_SHAFT_END_HOUR=17;   // 晴天光柱只到這個整點（本機時間）
 let wxParts=null, wxLast=0, wxSeed=1;
 function wxRand(){ wxSeed=(Math.imul(wxSeed,1664525)+1013904223)>>>0; return wxSeed/4294967296; }
 
@@ -1610,7 +1611,8 @@ function wxDraw(ts){
   // 晴：斜射的光柱。用 lighter 疊加，只加亮不遮擋 —— 光線蓋住角色會很怪。
   // ⚠️ 夜裡一定要關掉。光柱是**陽光**，天黑了還有幾道斜射的亮帶，看起來不是
   //    「晚上的晴天」而是「畫面壞了」。晴朗的夜空就該是空的，沒有粒子。
-  if(sky==='clear'&&!wxState.night){
+  //    17:00 之後也關：夏天天黑得晚，傍晚還掛著正午那種光柱不對（看本機時鐘）。
+  if(sky==='clear'&&!wxState.night&&new Date().getHours()<WX_SHAFT_END_HOUR){
     fxUsed=true;
     fg.globalCompositeOperation='lighter';
     for(const f of P.shaft){

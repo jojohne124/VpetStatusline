@@ -30,6 +30,8 @@ const BODY_LIMIT   = 4096;
 const CHAT_KEEP    = 50;        // 保留最近幾則（進場時一併給）
 const CHAT_MAX     = 100;       // 一則幾個字
 const CHAT_GAP_MS  = 1000;      // 每人每秒最多 1 則
+// 開心鈕：一次演 1.8 秒（同營地摸摸的 REACT_MS），演完才能再按 —— 連按只會讓畫面一直抖
+const EMOTE_MS     = 1800;
 // 對戰（規格 §八）
 const INVITE_MS    = 30000;     // 邀請多久沒回就當作拒絕
 // 對戰演出多長：前線的戰鬥最長 21 拍（cut-in 版）x 750ms ≈ 15.8 秒，再加上「下一拍才開演」
@@ -70,8 +72,10 @@ function createPlazaServer(opts = {}) {
 
     // mode：自動／手動（對戰中 walk 會被暫時改成原地不動，所以模式要另外記）
     // battle：正在對戰（旁觀的人在頭上畫 ⚔）
+    // costume：要不要讓別人看到我的節日造型（本人決定，大家看到的一樣）。
+    // 伺服器只轉送這個旗標，不管今天是不是節日 —— 那由各台 daemon 用伺服器時間判斷。
     const pub = (m) => ({ id: m.id, name: m.name, color: m.color, char: m.char, stage: m.stage, walk: m.walk,
-                          mode: m.mode || 'auto', battle: !!m.battle });
+                          mode: m.mode || 'auto', battle: !!m.battle, costume: m.costume !== false });
     const roster = () => [...members.values()].map(pub);
 
     function send(m, event, data) {
@@ -120,7 +124,8 @@ function createPlazaServer(opts = {}) {
         // lostAt = now：join 之後要在 graceMs 內接上 SSE，不然一樣當作離場
         // （join 成功但 daemon 當場死掉的情況，不能留一隻幽靈在場上）。
         const color = validColor(body.color) ? body.color.toLowerCase() : null;
-        const m = { id, name, color, char, stage, card, walk, mode: 'auto', battle: null, stream: null, lostAt: now() };
+        const costume = body.costume !== false;   // 沒帶（舊版 daemon）= 預設給看
+        const m = { id, name, color, costume, char, stage, card, walk, mode: 'auto', battle: null, stream: null, lostAt: now() };
         members.set(id, m);
         broadcast('enter', pub(m), id);
         sys(`${name} 進入廣場`);
@@ -144,12 +149,13 @@ function createPlazaServer(opts = {}) {
             return { status: 409, body: { ok: false, error: `廣場上已經有人叫「${name}」了` } };
         }
         const c = color ? color.toLowerCase() : null;
-        if (name === m.name && c === m.color) return { status: 200, body: { ok: true } };
+        const costume = body.costume !== undefined ? body.costume !== false : m.costume;
+        if (name === m.name && c === m.color && costume === m.costume) return { status: 200, body: { ok: true } };
         const old = m.name;
         if (name !== m.name) log(`改名：${m.name} → ${name}`);
-        m.name = name; m.color = c;
+        m.name = name; m.color = c; m.costume = costume;
         if (name !== old) sys(`${old} 改名為 ${name}`);
-        broadcast('profile', { id, name: m.name, color: m.color });
+        broadcast('profile', { id, name: m.name, color: m.color, costume: m.costume });
         return { status: 200, body: { ok: true } };
     }
 
@@ -290,6 +296,20 @@ function createPlazaServer(opts = {}) {
         return { status: 200, body: { ok: true, seq: e.seq } };
     }
 
+    // 開心：大家在同一刻看到這隻跳一下（HAPPY 幀 + 原地跳）。伺服器只蓋時間戳、廣播，
+    // 怎麼演由各台 daemon 依時間戳自己算（跟走路同一個道理：給起點，不給畫面）。
+    function emote(body) {
+        const { id } = body || {};
+        const m = members.get(id);
+        if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (m.battle) return { status: 409, body: { ok: false, error: '對戰中' } };
+        const t = now();
+        if (m.emoteAt && t - m.emoteAt < EMOTE_MS) return { status: 429, body: { ok: false, error: '還在開心中' } };
+        m.emoteAt = t;
+        broadcast('emote', { id, at: t });
+        return { status: 200, body: { ok: true, at: t } };
+    }
+
     function openEvents(req, res, id) {
         const m = members.get(id);
         if (!m) {
@@ -332,6 +352,9 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'POST' && u.pathname === '/chat') {
             return readBody(req, (j) => { const r = say(j); reply(res, r.status, r.body); });
         }
+        if (req.method === 'POST' && u.pathname === '/emote') {
+            return readBody(req, (j) => { const r = emote(j); reply(res, r.status, r.body); });
+        }
         if (req.method === 'POST' && u.pathname === '/invite') {
             return readBody(req, (j) => { const r = invite(j); reply(res, r.status, r.body); });
         }
@@ -371,7 +394,7 @@ function createPlazaServer(opts = {}) {
 }
 
 module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
-                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS };
+                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS };
 
 if (require.main === module) {
     const port = parseInt(process.env.VPET_PLAZA_PORT || String(DEFAULT_PORT), 10);

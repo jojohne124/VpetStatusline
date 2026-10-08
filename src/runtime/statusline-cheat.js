@@ -21,6 +21,12 @@ const STATE_ROOT   = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'st
 const FORCE_FILE   = path.join(STATE_ROOT, 'force-char.json');
 const STATE_FILE   = path.join(STATE_ROOT, 'color-state.json');
 const PVP_FILE     = path.join(STATE_ROOT, 'pvp.json');   // { endpoint, key, code, name }
+// 重抽冷卻：reset / keep 共用（兩者都會抽一隻新的起始桌寵，只限一個會被另一個繞過）。
+// 只限 release 版；dev 不限，開發時要能狂抽。AGUMON_REROLL_COOLDOWN_MS 給測試覆寫。
+const REROLL_FILE  = path.join(STATE_ROOT, 'reroll.json');  // { at: 上次重抽的時戳 }
+const REROLL_COOLDOWN_MS = process.env.AGUMON_REROLL_COOLDOWN_MS != null
+    ? Number(process.env.AGUMON_REROLL_COOLDOWN_MS)
+    : (IS_RELEASE ? 60 * 60 * 1000 : 0);
 
 const rosterData = JSON.parse(fs.readFileSync(ROSTER_FILE, 'utf8'));
 const roster   = Array.isArray(rosterData) ? rosterData : rosterData.roster;
@@ -47,13 +53,30 @@ if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] =
 // 在這裡就折成 --ranch，下面所有分支都不用知道有兩個名字。
 if (args[0] === '--camp') args[0] = '--ranch';
 
+// 冷卻中 → 印剩餘時間並結束（exit 1，daemon 那邊會顯示成失敗訊息）
+function rerollGate() {
+    if (!(REROLL_COOLDOWN_MS > 0)) return;
+    let at = 0;
+    try { at = Number(JSON.parse(fs.readFileSync(REROLL_FILE, 'utf8')).at) || 0; } catch (e) {}
+    const left = at + REROLL_COOLDOWN_MS - Date.now();
+    if (left <= 0) return;
+    const m = Math.ceil(left / 60000);
+    console.log(`重抽冷卻中，還要 ${m >= 60 ? Math.floor(m / 60) + ' 小時 ' + (m % 60) + ' 分' : m + ' 分鐘'}。`);
+    process.exit(1);
+}
+function rerollMark() {
+    try {
+        fs.mkdirSync(STATE_ROOT, { recursive: true });
+        fs.writeFileSync(REROLL_FILE, JSON.stringify({ at: Date.now() }));
+    } catch (e) { /* 寫不進去就當沒冷卻，不擋玩家 */ }
+}
 function printHelp() {
     const dev = !IS_RELEASE;   // 開發指令只在非 release 顯示
     console.log('用法（指令可省略 --，例 vpet pvp）:');
     console.log('  vpet help                   顯示這份指令說明');
     console.log('  vpet card                   顯示狀態卡（角色 / 階級 / 戰力 / 勝率）');
     console.log('  vpet tree                   顯示進化歷程（走過的彩色、未到的黑影問號）');
-    console.log('  vpet reset                  重抽一隻起始桌寵（舊的不保留）');
+    console.log('  vpet reset                  重抽一隻起始桌寵（舊的不保留）' + (IS_RELEASE ? '，與 keep 共用 1 小時冷卻' : ''));
     console.log('  vpet camp / ranch           營地：列出收藏的桌寵');
     console.log('  vpet keep                   現役收進營地 + 抽一隻新的（保留版 reset）');
     console.log('  vpet swap <編號|名稱>       現役收進營地，叫出指定那隻');
@@ -684,6 +707,7 @@ if (RANCH_CMDS.includes(args[0])) {
             console.log(`營地已滿（${pets.length}/${cap}）。先 vpet release <編號> 騰出位置，或改用 vpet swap 交換。`);
             process.exit(1);
         }
+        rerollGate();
         // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
         const pool = starters.filter(x => roster.includes(x));
         const next = weightedPickStarter(pool.length ? pool : starters);
@@ -695,6 +719,7 @@ if (RANCH_CMDS.includes(args[0])) {
         force.dropTriggerTs  = Date.now();    // 空降表演
         delete force.evolveTriggerTs; delete force.evolveTarget;
         writeForce(force);
+        rerollMark();
         console.log(`✓ 已排入：現役收進營地（${pets.length + 1}/${cap}），新夥伴 🎲 ${core.getDisplayName(next)}（下次 refresh 生效）`);
         process.exit(0);
     }
@@ -804,6 +829,7 @@ if (RANCH_CMDS.includes(args[0])) {
 const arg = args[0];
 let target;
 if (arg === '--reset') {
+    rerollGate();
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
     const pool = starters.filter(s => roster.includes(s));
     target = weightedPickStarter(pool.length ? pool : starters);
@@ -827,4 +853,5 @@ delete force.evolveTriggerTs;
 delete force.evolveTarget;
 if (arg === '--reset') force.dropTriggerTs = Date.now();   // reset 抽 starter → 播空降表演
 writeForce(force);
+if (arg === '--reset') rerollMark();
 console.log(`✓ 已切換至 ${target}（下次 refresh 生效）`);

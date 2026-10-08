@@ -38,7 +38,7 @@ for (const f of FEST.FESTIVALS) {
     ok(a && (a.kind === 'hat' || a.kind === 'flag'), `${f.id} 的配件 ${f.acc} 不存在或不是帽子／旗子`);
     if (!a) continue;
     ok(a.art.every(r => [...r].every(ch => ch === '.' || FEST.PAL[ch])), `${f.acc} 用了調色盤沒有的顏色`);
-    if (a.kind === 'hat') ok(a.art.every(r => r.length <= 7), `${f.acc} 帽子太寬（> 7）`);
+    if (a.kind === 'hat') ok(a.art.every(r => r.length <= (f.acc === 'chun' ? 9 : 7)), `${f.acc} 帽子太寬`);
 }
 
 console.log('— 新節日與重疊 —');

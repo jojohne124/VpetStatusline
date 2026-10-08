@@ -99,6 +99,9 @@ function renderProbe(js, html, daemonSrc) {
         addEventListener() {}, removeEventListener() {},
     };
     g.window = g; g.globalThis = g;
+    // 頁面看本機幾點（晴天光柱 17:00 收）：固定成中午，不然測試結果跟著跑測試的時間變
+    g.__hour = 12;
+    g.Date = class extends Date { getHours() { return g.__hour; } };
     vm.createContext(g);
     // 頂層的 let/const 不會變成 context 的屬性 → 補一段尾巴把要用的東西露出來
     const epilogue = ';globalThis.__p={sky:(s,c,n)=>{wxState.sky=s;wxState.cold=!!c;wxState.night=!!n;wxParts=null;},'
@@ -169,6 +172,12 @@ function renderProbe(js, html, daemonSrc) {
     ok((clearNight.n.fill || 0) === 0,
        `夜裡的晴天還在畫光柱（${clearNight.n.fill} 次 fill）`);
     ok((clearNight.n.lineTo || 0) === 0, '夜裡的晴天還在畫光柱的邊');
+    // 17:00 之後就算還沒天黑也收掉（夏天天黑得晚）；16 點還在
+    g.__hour = 16; const clear16 = run('clear', false, t, 4, false); t += 500;
+    g.__hour = 17; const clear17 = run('clear', false, t, 4, false); t += 500;
+    g.__hour = 12;
+    ok((clear16.n.fill || 0) > 0, '16 點的晴天沒有光柱（應該到 17:00 才收）');
+    ok((clear17.n.fill || 0) === 0, `17 點之後晴天還在畫光柱（${clear17.n.fill} 次 fill）`);
 
     // 入夜只關掉陽光，其它表演照舊 —— 雨會下到半夜，寒流也不會因為天黑就停。
     const rainNight = run('rain', false, t, 4, true); t += 500;

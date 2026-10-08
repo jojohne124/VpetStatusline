@@ -12,6 +12,7 @@
 const fs   = require('fs');
 const path = require('path');       // 讀 assets/yard-layouts.json（編輯器存的自訂切法）
 const W  = require('../shared/plaza-walk.js');
+const FEST = require('../shared/festival.js');   // 節日配件（帽子／背後插旗）
 
 // ── dot ↔ cell 轉換 ──────────────────────────────────────────────────
 // 既有的美術資料都是 cell 格式（1 cell = 1 dot 寬 × 2 dot 高，[ur,ug,ub,lr,lg,lb]，
@@ -237,7 +238,17 @@ function composePlaza(core, occupants, step, opts = {}) {
     placed.sort((a, b) => (a.y - b.y) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
     placed.forEach((p, i) => {
-        const sp = spriteDots(core, p.char, step, p.facing, p.react);
+        let sp = spriteDots(core, p.char, step, p.facing, p.react);
+        // 節日配件：穿進 dot 圖本身，所以遮擋與名牌挖洞（owner）都自動算在這隻身上。
+        // o.acc 優先（廣場：每個人自己決定給不給看），沒有就用整場的 opts.acc（營地）。
+        const acc = p.acc !== undefined ? p.acc : opts.acc;
+        let aox = 0, aoy = 0;
+        if (sp && acc) {
+            const d = FEST.dress(sp, acc, p.facing); sp = d.dots; aox = d.ox; aoy = d.oy;
+            // 旗桿／帽子會高出原本的 16x16：記下來，前端的對話泡泡和 z 才不會壓在帽子上
+            const b = FEST.bbox(sp);
+            p.accTop = b ? Math.min(0, b.minY + aoy) : 0;
+        }
         // 跳躍只影響**畫在哪**，不影響上面那個 y 排序，也不影響名牌（名牌釘在腳下的
         // 地面位置）。跳起來就切到別人前面、名牌跟著飛，兩個都不對。
         // 貼著上緣時往上頂會超出畫面 -> 夾住，那一下就看不到跳（很少見，可接受）。
@@ -248,7 +259,7 @@ function composePlaza(core, occupants, step, opts = {}) {
         // 地面位置（不含跳躍）：名牌釘在這裡的腳下，要跟畫面同一套座標
         const g = render ? render.toDraw(p.x, p.y) : { x: p.x, y: p.y };
         p.gx = g.x; p.gy = g.y;
-        if (sp) blit(dots, sp, at.x, at.y, owner, i);
+        if (sp) blit(dots, sp, at.x + aox, at.y + aoy, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
 
@@ -363,8 +374,9 @@ function nameTags(placed, labels, me) {
         // 以前沒選時「自己黃、別人白」—— 結果自己看到的跟別人看到的不一樣（回報過）。
         color: p.color || NAME_DEFAULT_COLOR,
         x: p.gx + W.SPRITE / 2, y: p.gy + W.SPRITE,
-        sleeping: !!p.sleeping, top: p.gy,          // 睡著時前端在頭上畫 z
+        sleeping: !!p.sleeping, top: p.gy + (p.accTop || 0),   // 睡著時前端在頭上畫 z；含節日配件的高度
         battling: !!p.battle,                         // 對戰中：前端在頭上畫 ⚔
+        happy: p.react === 'HAPPY',                   // 開心鈕演出中（測試用來確認大家都看得到）
         z: p.z,                                       // 前後順序（大的在前面），配合 owner 決定名牌哪裡被擋
     }));
 }

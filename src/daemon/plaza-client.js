@@ -108,8 +108,12 @@ function create(opts = {}) {
         } else if (event === 'leave' && d.id) {
             members.delete(d.id);
         } else if (event === 'profile' && d.id) {
-            if (members.has(d.id)) Object.assign(members.get(d.id), { name: d.name, color: d.color });
-            if (d.id === me.id) Object.assign(me, { name: d.name, color: d.color });
+            const prof = { name: d.name, color: d.color, costume: d.costume !== false };
+            if (members.has(d.id)) Object.assign(members.get(d.id), prof);
+            if (d.id === me.id) Object.assign(me, prof);
+        } else if (event === 'emote' && d.id) {
+            // 開心鈕：記在成員身上，合成時依 serverNow - emoteAt 演 HAPPY + 跳
+            if (members.has(d.id)) members.get(d.id).emoteAt = d.at;
         } else if (event === 'member' && d.id) {
             // 成員狀態整份換掉（走法、自動／手動、是否對戰中）
             const { serverNow, ...m } = d; void serverNow;
@@ -226,6 +230,16 @@ function create(opts = {}) {
         return { ok: true, seq: r.body.seq };
     }
 
+    // 開心鈕。成功就先記在自己身上（推播也會到，結果相同），按下去立刻有反應
+    async function emote() {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/emote', { id: me.id });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        if (members.has(me.id)) members.get(me.id).emoteAt = r.body.at;
+        return { ok: true };
+    }
+
     // 邀請對戰／回覆邀請
     async function invite(to) {
         if (!me) return { ok: false, error: '不在廣場' };
@@ -254,7 +268,7 @@ function create(opts = {}) {
     }
 
     return {
-        join, leave, rename, update, move, say, invite, answer, active,
+        join, leave, rename, update, move, say, emote, invite, answer, active,
         incoming: () => incoming, outgoing: () => outgoing,
         chat: () => chat.slice(),
         me: () => me,

@@ -270,6 +270,24 @@ async function main() {
     ok(await until(() => (a2.roster().find(m => m.id === b.me().id) || {}).color === '#33ccff'), '改了顏色別人沒看到');
     const badc = await b.update({ color: 'red;' });
     ok(!badc.ok, '不合法的顏色應該被拒');
+    // 節日造型：預設給看；本人關掉 → 別人收到 costume:false；再開回來別人也看到
+    const costumeOf = () => (a2.roster().find(m => m.id === b.me().id) || {}).costume;
+    ok(costumeOf() === true, '沒說要不要給看時，預設應該給看：' + costumeOf());
+    ok((await b.update({ costume: false })).ok, '關節日造型失敗');
+    ok(await until(() => costumeOf() === false), '關了節日造型，別人那邊還是看得到');
+    // 之後才進場的人：拿到的初始名單裡也要是關的（走 join 的名單，不是 profile 推播）
+    const late = mk('late');
+    ok((await late.join(prof('晚到'))).ok, '晚到的人進不來');
+    ok((late.roster().find(m => m.id === b.me().id) || {}).costume === false, '晚進場的人看到的名單裡，節日造型沒有關');
+    await late.leave();
+    // 開心鈕：別人收到同一個時間戳；演完之前再按要被擋
+    const em = await b.emote();
+    ok(em.ok, '開心鈕失敗：' + em.error);
+    ok(await until(() => typeof (a2.roster().find(m => m.id === b.me().id) || {}).emoteAt === 'number'), '按了開心，別人沒收到');
+    const em2 = await b.emote();
+    ok(!em2.ok, '開心還沒演完又按，應該被擋（連按畫面會一直抖）');
+    ok((await b.update({ costume: true })).ok, '開節日造型失敗');
+    ok(await until(() => costumeOf() === true), '開回節日造型，別人那邊沒更新');
     await b.rename('阿明');
 
     // 自動／手動：伺服器用「當下算出來的位置」當起點，別人收到同一份

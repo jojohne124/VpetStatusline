@@ -31,6 +31,7 @@ const plaza = require('./plaza');   // 廣場／院子的合成器（走路在 .
 const PW    = require('../shared/plaza-walk.js');   // 拍子換算（摸摸要把停走的拍數扣掉）
 const YT    = require('./yard-touch');              // 營地摸摸的狀態機（輪詢間隔也從這裡取）
 const WX    = require('../shared/weather.js');
+const FEST  = require('../shared/festival.js');   // 特殊節日（docs/festival-spec.md）
 const wxSrc = require('./weather-source.js');
 const PlazaClient = require('./plaza-client');
 const PlazaServer = require('./plaza-server');   // 只拿常數（聊天字數上限），不在 daemon 裡起伺服器     // 廣場（docs/plaza-spec.md）：連內網主機的那一端
@@ -429,6 +430,25 @@ const PLAZA_BATTLE_STALE_MS = 40000;   // 保險：卡住（例如正在進化�
 // 與 CLI 的 INSTALL_ROOT/state/pvp.json 是同一份（正式環境 STATE_DIR 就是那裡）；
 // 用 STATE_DIR 是為了吃 AGUMON_STATE_DIR —— 測試不能讀寫使用者真正的名牌。
 const PVP_FILE = path.join(STATE_DIR, 'pvp.json');
+// 節日開關：bg = 營地的節日背景（廣場一律顯示，不吃這個）、costume = 節日造型
+// （營地：自己的寵物穿不穿；廣場：要不要讓別人看到我穿）。預設都開。
+const FEST_FILE = path.join(STATE_DIR, 'festival.json');
+function readFest() {
+    let j = {};
+    try { j = JSON.parse(fs.readFileSync(FEST_FILE, 'utf8')) || {}; } catch (e) {}
+    // 一顆開關管全部：營地背景 + 造型（舊檔的 bg 欄位不再看）
+    return { costume: j.costume !== false };
+}
+function writeFest(patch) {
+    const next = { ...readFest(), ...patch };
+    fs.mkdirSync(path.dirname(FEST_FILE), { recursive: true });
+    fs.writeFileSync(FEST_FILE, JSON.stringify(next, null, 2));
+    return next;
+}
+// 現在是哪個節日。VPET_FESTIVAL=halloween 可以在非節日期間預覽（營地另有 ?fest=）。
+// release 不吃預覽：節日背景與造型開關只在活動期間出現
+const festNow = (ms, q) => FEST.active(ms, IS_RELEASE ? null : (q || process.env.VPET_FESTIVAL || null));
+const festView = (f) => (f ? { id: f.id, name: f.name, acc: f.acc } : null);
 // 名牌沿用 `vpet code`（state/pvp.json 的 code）。沒設過就請 CLI 產一個 —— 規則只在 CLI 那份。
 function plazaName() {
     const read = () => { try { return JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')).code || null; } catch (e) { return null; } };
@@ -460,7 +480,8 @@ async function plazaJoin() {
     // 對戰用的戰力：跟前線、幽靈對戰同一套 = min(基礎 + 訓練值, 階級上限)
     let str = power + (st.trainingBonus || 0);
     try { str = Math.min(core.getBasePower(st, char) + (st.trainingBonus || 0), core.getTierCap(stage)); } catch (e) {}
-    const r = await plazaClient.join({ name, color: readProfile().color, char, stage,
+    const prof = readProfile();
+    const r = await plazaClient.join({ name, color: prof.color, costume: prof.costume, char, stage,
                                        card: { power, train: st.trainingBonus || 0, str } });
     if (!r.ok) return { ok: false, error: r.error };
     plazaNotice = null; plazaCaches.clear();
@@ -471,18 +492,20 @@ async function plazaJoin() {
 // 這樣終端機打 `vpet code 新名字` 也會即時反映，不必每個入口各自通知廣場。
 // 被拒的那組記下來，不要每 2 秒重送同一個失敗請求。
 const readProfile = () => {
-    try { const j = JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')); return { code: j.code || null, color: j.color || null }; }
-    catch (e) { return { code: null, color: null }; }
+    const costume = readFest().costume;
+    try { const j = JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')); return { code: j.code || null, color: j.color || null, costume }; }
+    catch (e) { return { code: null, color: null, costume }; }
 };
 let plazaRenameRejected = null;
 let plazaRenaming = false;
 async function plazaSyncName() {
     if (!plazaClient.active() || plazaRenaming) return null;
-    const { code, color } = readProfile();
+    const { code, color, costume } = readProfile();
     const me = plazaClient.me();
     const patch = {};
     if (code && code !== me.name) patch.name = code;
     if ((color || null) !== (me.color || null)) patch.color = color || null;
+    if (costume !== (me.costume !== false)) patch.costume = costume;
     const key = JSON.stringify(patch);
     if (!Object.keys(patch).length || key === plazaRenameRejected) return null;
     plazaRenaming = true;
@@ -883,6 +906,18 @@ function applyCommand(action, args = {}) {
     if (action === 'plazaRename') return plazaRename(args.name);
     if (action === 'plazaColor')  return plazaColor(args.color);
     // 自動／手動與 WASD。/cmd 只收字串，方向在這裡轉回 -1/0/1。
+    // 節日開關（營地背景＋造型一起）。在廣場也能切，所以不在 PLAZA_BLOCKED_CMDS 裡
+    if (action === 'festCostume') {
+        const on = args.on !== 'false' && args.on !== false;
+        try { writeFest({ costume: on }); }
+        catch (e) { return { ok: false, error: '存不了節日設定：' + e.message }; }
+        if (plazaClient.active()) {
+            plazaRenameRejected = null;
+            return plazaSyncName().then(r => (r && !r.ok ? { ok: false, error: r.error }
+                : { ok: true, action, output: on ? '節日造型：開' : '節日造型：關' }));
+        }
+        return { ok: true, action, output: on ? '節日造型：開' : '節日造型：關' };
+    }
     if (action === 'plazaMode') {
         if (args.mode !== 'auto' && args.mode !== 'manual') return { ok: false, error: '模式只有 auto / manual' };
         return plazaClient.move({ mode: args.mode }).then(r => (r.ok ? { ok: true, action } : r));
@@ -894,6 +929,9 @@ function applyCommand(action, args = {}) {
     if (action === 'plazaAnswer') {
         if (!args.inviteId) return { ok: false, error: '沒有邀請' };
         return plazaClient.answer(args.inviteId, args.accept === '1').then(r => (r.ok ? { ok: true, action } : r));
+    }
+    if (action === 'plazaHappy') {
+        return plazaClient.emote().then(r => (r.ok ? { ok: true, action } : r));
     }
     if (action === 'plazaChat') {
         if (!args.text) return { ok: false, error: '沒有內容' };
@@ -1087,6 +1125,11 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      刻意不用 image-rendering:pixelated —— 雨絲、光線是向量畫的，柵格化反而變鋸齒。
      pointer-events:none 是必要的，否則它會吃掉右鍵選單的命中判定。 */
   #wx{position:absolute;display:none;pointer-events:none;z-index:2}
+  /* 節日背景：墊在角色畫布**下面**（角色畫布清空的地方是透明的）。只在營地／廣場。
+     角色畫布要 position + z-index 才壓得過它；只對營地／廣場加，家裡的 letterbox 不受影響。 */
+  #fest{position:absolute;display:none;pointer-events:none;z-index:0}
+  body.yard #pet,body.plaza #pet{position:relative;z-index:1}
+  body.fest.yard #fest,body.fest.plaza #fest{display:block}
   body.yard #wx,body.plaza #wx{display:block}
   /* 右上角的日期／時間／天氣。用 HTML 疊層而不是畫點陣字：52 dot 寬塞一整行日期
      會佔掉整列又糊掉，而這裡本來就不是像素風的一部分，是「看板」。 */
@@ -1137,6 +1180,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                padding:3px 9px;font:inherit;font-size:12px;cursor:pointer}
   .form button:hover{background:#30363d;border-color:#8b949e}
   .devtag{color:#d29922;font-size:11px}
+  /* dev 介面關掉：dev 限定的鈕／列／預覽全部藏起來，看到的就是 release 的樣子 */
+  body.nodev .devonly{display:none!important}
   /* 指令輸出：子行程的 stdout 原樣顯示（doctor / stats / code 這種有回應的） */
   #cmdout{margin-top:8px;max-width:480px;display:none;background:#0d1117;border:1px solid #30363d;
           border-radius:6px;padding:8px 10px;font-size:12px;color:#c9d1d9;
@@ -1184,17 +1229,22 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage"><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
       <select id="jgsel" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
+      <label class="k" id="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
+             title="關掉的話，大家看到的你就是平常的樣子"><input type="checkbox" id="festcos2">顯示節慶造型</label>
     </div>
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <span id="yardinfo">–</span>
       <span class="k">（點一下摸摸、按右鍵開選單）</span>
-${IS_RELEASE ? '' : `
+      <span id="festyard" style="display:none">
+        <label class="k"><input type="checkbox" id="festcos">顯示節慶造型</label>
+      </span>
+${IS_RELEASE ? '' : `<span class="devonly">
       <label class="k">天氣預覽 <span class="devtag">dev</span><select id="wxsel">
         <option value="">自動（實際天氣）</option>
         <option value="clear">晴</option>
@@ -1205,11 +1255,16 @@ ${IS_RELEASE ? '' : `
       </select></label>
       <label class="k"><input type="checkbox" id="wxcold"> 寒流</label>
       <label class="k"><input type="checkbox" id="wxnight"> 夜晚</label>
+      <label class="k">節日預覽 <span class="devtag">dev</span><select id="festsel">
+        <option value="">自動（依日期）</option>
+${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).join('\n')}
+      </select></label>
       <label class="k"><input type="checkbox" id="zonebox"> 走動範圍 <span class="devtag">dev</span></label>
-      <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label>`}
+      <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label></span>`}
     </div>
     <div id="plazabar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <button id="plazamode" title="自動：隨機散步／手動：WASD 或方向鍵移動">🚶 自動</button>
+      <button id="plazahappy" title="跳一下，大家都看得到">😄 開心</button>
       <div id="plazainvite"></div>
       <div class="form" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
@@ -1224,12 +1279,14 @@ ${IS_RELEASE ? '' : `
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
       ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
-                .map(f => `<div class="form" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
+                .map(f => `<div class="form${f.dev ? ' devonly' : ''}" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
         <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
         ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
         ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
                     : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
       </div>`).join('\n      ')}
+${IS_RELEASE ? '' : `      <div class="form" id="devui"><span class="lbl">🛠 dev介面 <span class="devtag">dev</span></span>
+        <button data-on="1">on</button><button data-on="0">off</button></div>`}
     </details>
     <div id="cmdout"></div></div>
   <div class="panel">
@@ -1429,6 +1486,9 @@ function syncWx(){
   const w=pet.offsetWidth, h=pet.offsetHeight;
   wx.style.left=pet.offsetLeft+'px'; wx.style.top=pet.offsetTop+'px';
   if(wx.width!==w||wx.height!==h){ wx.width=w; wx.height=h; }
+  const fe=document.getElementById('fest');
+  fe.style.left=pet.offsetLeft+'px'; fe.style.top=pet.offsetTop+'px';
+  if(fe.width!==w||fe.height!==h){ fe.width=w; fe.height=h; }
 }
 
 function wxBuild(w,h){
@@ -1517,6 +1577,7 @@ function wxGust(g,x,y,s){
 
 function wxDraw(ts){
   requestAnimationFrame(wxDraw);
+  festDraw(ts);   // 節日背景：同一個幀迴圈
   const cv=document.getElementById('wx');
   if((view!=='yard'&&view!=='plaza')||!cv.width||!cv.height){ wxLast=ts; return; }
   const dt=Math.min(0.1,(ts-wxLast)/1000)||0; wxLast=ts;
@@ -1659,6 +1720,100 @@ function hudTick(){
 }
 setInterval(hudTick,1000);
 
+// ── 特殊節日（docs/festival-spec.md）──────────────────────────────────
+// 背景：墊在角色下面的一張畫布，畫幾樣點陣小東西，**只放在邊緣**（上緣一條、下緣兩角），
+// 中間是角色走路的地方，不放東西 —— 背景搶戲的話角色就看不清楚了。
+// 一個 dot = CW x CH/2，跟角色同一套格子，所以裝飾跟角色一樣是方塊像素。
+// 每一幀由 wxDraw 順手呼叫（蝙蝠拍翅、煙火要動），不另開一條 requestAnimationFrame 迴圈。
+// 開關：廣場一律顯示；營地看「節日背景」勾選框（daemon 存的，換分頁也記得）。
+const festState={id:null, bg:true};
+// 蝙蝠不能用深色：營地底色是 rgb(24,24,24)，深紫疊上去幾乎看不見（截圖確認過）
+const FEST_PAL={K:'#8a68b4',O:'#f0922a',Y:'#ffd84a',G:'#4f8a3a'};
+const FEST_ART={
+  pumpkin:['...G...','.OOOOO.','OYOOOYO','OOOOOOO','OYYYYYO','.OOOOO.'],
+  bat1:['K.....K','KK.K.KK','..KKK..'],
+  bat2:['..KKK..','.KK.KK.','K.....K'],
+};
+function festPix(g,art,x,y,alpha){
+  g.globalAlpha=alpha==null?1:alpha;
+  for(let r=0;r<art.length;r++) for(let c=0;c<art[r].length;c++){
+    const ch=art[r][c]; if(ch==='.') continue;
+    g.fillStyle=FEST_PAL[ch];
+    g.fillRect(Math.round(x+c)*CW, Math.round(y+r)*(CH/2), CW, CH/2);
+  }
+  g.globalAlpha=1;
+}
+function festDot(g,x,y,color,alpha){
+  g.globalAlpha=alpha; g.fillStyle=color;
+  g.fillRect(Math.round(x)*CW, Math.round(y)*(CH/2), CW, CH/2); g.globalAlpha=1;
+}
+let festBursts=[], festNextBurst=0;
+function festDraw(ts){
+  const cv=document.getElementById('fest');
+  const on = !!festState.id && (view==='plaza' || (view==='yard' && festState.bg));
+  document.body.classList.toggle('fest', on);
+  if(!on||!cv.width||!cv.height) return;
+  const g=cv.getContext('2d'), W=Math.floor(cv.width/CW), H=Math.floor(cv.height/(CH/2));
+  g.clearRect(0,0,cv.width,cv.height);
+  if(festState.id==='doubleten'){
+    // 上緣一條彩旗：紅白藍三角旗掛在微微下垂的繩子上
+    // 繩子兩端在畫面外（y=-1），中間垂到 y=1：太低會跟右上角的時間／天氣看板疊在一起
+    const sag=2;
+    for(let x=0;x<W;x++){
+      const t=2*x/(W-1)-1, y=sag*(1-t*t)-1;
+      festDot(g,x,y,'#8b949e',0.6);
+      if(x%5===2){
+        const c=['#de2028','#ffffff','#0038a8'][Math.floor(x/5)%3];
+        for(let dx=-1;dx<=1;dx++) festDot(g,x+dx,y+1,c,0.85);
+        festDot(g,x,y+2,c,0.85);
+      }
+    }
+    // 晚上加煙火：上半部隨機炸開，一秒內散開淡掉
+    if(wxState.night){
+      if(ts>festNextBurst){
+        festNextBurst=ts+1400+Math.random()*2200;
+        festBursts.push({x:6+Math.random()*(W-12), y:8+Math.random()*(H*0.3), t0:ts,
+                         c:['#de2028','#ffffff','#5b8cff','#ffd84a'][Math.floor(Math.random()*4)]});
+      }
+      festBursts=festBursts.filter(b=>ts-b.t0<1100);
+      for(const b of festBursts){
+        const k=(ts-b.t0)/1100, r=1+k*6;
+        for(let i=0;i<12;i++){
+          const a=i/12*Math.PI*2;
+          festDot(g,b.x+Math.cos(a)*r, b.y+Math.sin(a)*r*0.8, b.c, 0.9*(1-k));
+        }
+      }
+    }
+  } else if(festState.id==='halloween'){
+    // 蜘蛛網試過拿掉了：一格 dot 太大，九格的網看起來是一塊灰色棋盤，不像網
+    // 上緣三隻蝙蝠慢慢飛過，翅膀兩幀
+    for(let i=0;i<3;i++){
+      const sp=2.2+i*0.7, x=((ts/1000*sp+i*W/3)%(W+14))-7;
+      const y=3+i*2+Math.sin(ts/600+i)*1.2;
+      festPix(g,(Math.floor(ts/250)+i)%2?FEST_ART.bat1:FEST_ART.bat2,x,y,0.9);
+    }
+    // 下緣兩角的南瓜燈，眼睛會閃（蓋一層忽明忽暗的黑）
+    const glow=0.75+0.25*Math.sin(ts/300);
+    for(const px of [1,W-8]){
+      festPix(g,FEST_ART.pumpkin,px,H-7,1);
+      g.globalAlpha=1-glow; g.fillStyle='#000';
+      for(const [c,r] of [[1,2],[5,2],[1,4],[2,4],[3,4],[4,4],[5,4]])
+        g.fillRect((px+c)*CW,(H-7+r)*(CH/2),CW,CH/2);
+      g.globalAlpha=1;
+    }
+  }
+}
+// 伺服器給的節日狀態 → 背景與勾選框。勾選框只在有節日時出現。
+function applyFestival(f, opts){
+  festState.id = f ? f.id : null;
+  if(opts && opts.costume!=null) festState.bg = !!opts.costume;   // 營地背景跟造型同一顆開關
+  document.querySelectorAll('.festname').forEach(el=>{ el.textContent = f ? f.name : ''; });
+  document.getElementById('festyard').style.display = (f && view==='yard') ? '' : 'none';
+  document.getElementById('festplaza').style.display = (f && view==='plaza') ? 'flex' : 'none';
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null && document.activeElement!==el) el.checked=!!v; };
+  if(opts){ set('festcos',opts.costume); set('festcos2',opts.costume); }
+}
+
 // 天氣：營地與廣場共用（伺服器給一份，這裡套到粒子層與右上看板）
 function applyWeather(w){
   if(!w) return;
@@ -1688,6 +1843,8 @@ async function pollYard(){
   const qs = [];
   if(q) qs.push('w='+encodeURIComponent(q));
   if(zl&&zl.value) qs.push('zl='+encodeURIComponent(zl.value));
+  const fsel=document.getElementById('festsel');
+  if(fsel&&fsel.value) qs.push('fest='+encodeURIComponent(fsel.value));
   const y = await (await fetch('/yard'+(qs.length?'?'+qs.join('&'):''),
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
@@ -1713,6 +1870,7 @@ async function pollYard(){
   document.getElementById('kind').textContent='yard';
   document.getElementById('tick').textContent='#'+y.step;
   applyWeather(y.weather);
+  applyFestival(y.festival, {costume:y.festCostume});
   if(y.lines){ draw(y.lines); }
   else {
     // 空營地：仍然把畫布撐成完整的場地大小再清空。
@@ -1883,6 +2041,7 @@ async function pollPlaza(){
   const mine=p.myColor||'${plaza.NAME_DEFAULT_COLOR}';
   if(ci && document.activeElement!==ci && ci.value!==mine) ci.value=mine;
   applyWeather(p.weather);
+  applyFestival(p.festival, {costume:p.festCostume});
   document.getElementById('kind').textContent='plaza';
   document.getElementById('tick').textContent='#'+p.step;
   document.getElementById('err').textContent='';
@@ -2194,7 +2353,8 @@ async function sendCmd(action,args){
     const MOOD={happy:'摸摸 ♥',wake:'把牠叫醒了',refuse:'牠生氣了！別一直戳',sulking:'鬧脾氣中…不理你',asleep:'牠睡死了，叫不動（vpet wake 才會醒）'};
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
-    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat'||action==='plazaAnswer');
+    const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat'||action==='plazaAnswer'
+                 ||action==='plazaHappy'||action==='festCostume');   // 勾選框／開心鈕：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -2255,9 +2415,28 @@ document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('cli
   if(c && !confirm(c)) return;      // 破壞性操作（重抽）先問一次
   sendCmd(cmd);
 }));
+// dev 介面 on/off：只在 dev 版有。純前端（記在這個瀏覽器），關掉＝看 release 長怎樣。
+// 關的時候順便把預覽歸回自動，不然藏起來的預覽還在生效，畫面會對不上。
+function setDevUi(on){
+  document.body.classList.toggle('nodev', !on);
+  try{ localStorage.setItem('vpet.devui', on ? '1' : '0'); }catch(e){}
+  document.querySelectorAll('#devui button').forEach(b=>{ b.style.borderColor = (b.dataset.on==='1')===on ? '#58a6ff' : ''; });
+  if(on) return;
+  for(const [id,k] of [['wxsel','value'],['festsel','value'],['wxcold','checked'],['wxnight','checked'],['zonebox','checked']]){
+    const el=document.getElementById(id);
+    if(!el || !el[k]) continue;
+    el[k] = k==='value' ? '' : false;
+    el.dispatchEvent(new Event('change'));
+  }
+}
+if(document.getElementById('devui')){
+  document.querySelectorAll('#devui button').forEach(b=>b.addEventListener('click',()=>setDevUi(b.dataset.on==='1')));
+  let v=null; try{ v=localStorage.getItem('vpet.devui'); }catch(e){}
+  setDevUi(v!=='0');
+}
 // 進階區：把該列的輸入框收成 {欄位:值} 一起送出。
 // 一列可以有多顆鈕（開/關成對的開關）→ 動作優先取按鈕自己的 data-cmd，沒有才用整列的。
-document.querySelectorAll('#adv .form').forEach(row=>{
+document.querySelectorAll('#adv .form:not(#devui)').forEach(row=>{
   const collect=()=>{
     const args={};
     row.querySelectorAll('input').forEach(i=>{ if(i.value.trim()) args[i.dataset.f]=i.value.trim(); });
@@ -2296,11 +2475,23 @@ document.getElementById('plazacolor').addEventListener('change',e=>{
   sendCmd('plazaColor',{color:e.target.value}).then(r=>{ if(r&&r.ok) poll(); });
 });
 document.getElementById('plazaname').addEventListener('keydown',e=>{ if(e.key==='Enter') plazaRenameSubmit(); });
+// 節日開關：存在 daemon（state/festival.json），所以換分頁、重開都記得
+for(const [id,act] of [['festcos','festCostume'],['festcos2','festCostume']]){
+  document.getElementById(id).addEventListener('change',e=>{
+    sendCmd(act,{on:String(e.target.checked)}).then(()=>poll());
+  });
+}
 
 // ── 廣場：自動／手動（WASD）──
 // 只在「方向真的改變」時送一次（按下、放開、換方向），按住不放不重送 ——
 // 位置是大家用同一個公式算的（見 plaza-walk 的 manualPos），伺服器只要知道方向何時改變。
 let plazaMode='auto';
+// 演完（${PlazaServer.EMOTE_MS}ms）才能再按：伺服器也會擋，但連按只會換來一排「還在開心中」
+document.getElementById('plazahappy').addEventListener('click',e=>{
+  const b=e.currentTarget; b.disabled=true;
+  setTimeout(()=>{ b.disabled=false; }, ${PlazaServer.EMOTE_MS});
+  sendCmd('plazaHappy',{}).then(()=>poll());
+});
 document.getElementById('plazamode').addEventListener('click',()=>{
   const to = plazaMode==='manual' ? 'auto' : 'manual';
   plazaKeys.clear(); plazaDir='0,0';
@@ -2511,10 +2702,14 @@ const server = http.createServer((req, res) => {
             // 跟 ?w= 一樣是**這次請求**的覆寫，不寫進任何狀態。切法一換，每隻的
             // field 就換 → posAt 的 epoch 跟著變 → 舊快取自動作廢，不用另外清。
             const zoneLayout = new URL(req.url, 'http://x').searchParams.get('zl') || null;
+            // ?fest=halloween → 預覽節日（同 ?w=，只影響這次請求）
+            const fest  = festNow(Date.now(), new URL(req.url, 'http://x').searchParams.get('fest'));
+            const festOpt = readFest();
             const alive = new Set((ranch.pets || []).map(p => p.id));
             const out   = plaza.composeYard(core, ranch, st, step,
                                             { caches: yardCaches, react: yardReactMap(alive),
-                                              layout: zoneLayout });
+                                              layout: zoneLayout,
+                                              acc: fest && festOpt.costume ? fest.acc : null });
             // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -2554,6 +2749,7 @@ const server = http.createServer((req, res) => {
             body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones,
                      inPlaza: plazaClient.active(),   // 別的分頁進了廣場 → 這個分頁也要跟進去
                      weather: { ...wx, ...WX.describe(wx) },
+                     festival: festView(fest), festCostume: festOpt.costume,
                      cap: core.ranchCap(),
                      // dev 下拉要知道這個隻數有哪些切法可挑、現在是哪一個
                      layout: zoneLayout || zoneInfo.def,
@@ -2583,9 +2779,23 @@ const server = http.createServer((req, res) => {
             } else {
                 const me = plazaClient.me();
                 const list = plazaClient.roster();
+                // 節日用伺服器時間判斷：大家同一刻換裝、同一刻掛上背景
+                const fest = festNow(Date.now() + plazaClient.skew());
+                // 開心鈕：照營地摸摸的演法（yard-touch 的 REACT_MS / JUMP_MS / JUMP_H），
+                // 用伺服器時間算相位 → 大家看到同一下跳。走路不停（走法是大家共用的公式，
+                // 一個人停下來要改伺服器的走法，跳一下不值得）。
+                const nowS = Date.now() + plazaClient.skew();
+                const happy = (m) => {
+                    const el = m.emoteAt ? nowS - m.emoteAt : -1;
+                    if (el < 0 || el >= YT.REACT_MS) return null;
+                    const ph = Math.floor(el / YT.JUMP_MS);
+                    return { react: 'HAPPY', jump: ph < YT.JUMP_HOPS * 2 && ph % 2 === 0 ? YT.JUMP_H : 0 };
+                };
                 const occ = list.map(m => ({
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
                     battle: !!m.battle,
+                    acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
+                    ...(happy(m) || {}),
                 }));
                 const step = plazaClient.step();
                 // 場地與畫法比照營地（69x54 細格、角色 16 細格），原住民先不放。
@@ -2607,6 +2817,7 @@ const server = http.createServer((req, res) => {
                          battle: plazaBattle && latest.kind === 'battle' ? plazaBattleView(list, me) : null,
                          cols: plaza.PLAZA_RENDER.w, rows: plaza.PLAZA_RENDER.h / 2,
                          myColor: me.color || null,
+                         festival: festView(fest), festCostume: me.costume !== false,
                          // 天氣比照營地：用這台 daemon 抓到的（內網大家在同一個城市，各抓各的一樣）
                          weather: (() => { const w = weatherFor(null); return { ...w, ...WX.describe(w) }; })(),
                          names: list.map(m => m.name), lines: out.lines, tags: out.tags,

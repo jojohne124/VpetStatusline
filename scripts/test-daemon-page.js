@@ -506,6 +506,35 @@ setTimeout(async () => {
         try { new Function(js); } catch (e) { err = e; }
         ok(!err, `前端 JS 語法錯誤：${err && err.message}（頁面所有功能都會死）`);
 
+        // dev 介面 on/off：dev 限定的東西都要掛 devonly，關掉才藏得到；開關列不能被當成指令列送出
+        {
+            ok(/body\.nodev \.devonly\{display:none!important\}/.test(html), 'dev 介面關掉的 CSS 不在');
+            ok(/id="devui"[\s\S]*?data-on="1">on<[\s\S]*?data-on="0">off</.test(html), '進階區沒有 dev介面 on/off');
+            ok(/#adv \.form:not\(#devui\)/.test(js), 'dev介面列會被當成指令列（按了送出空指令）');
+            const devRows = html.match(/<div class="form[^"]*"[^>]*>\s*<span class="lbl">[^<]*<span class="devtag">/g) || [];
+            ok(devRows.length >= 5 && devRows.every(r => /devonly|id="devui"/.test(r)), '進階區有 dev 列沒掛 devonly：' + devRows.filter(r => !/devonly|id="devui"/.test(r)).join(' | '));
+            const devBtns = html.match(/<button data-cmd="[^"]*"[^>]*>[^<]*<span class="devtag">/g) || [];
+            ok(devBtns.length >= 2 && devBtns.every(b => /class="devonly"/.test(b)), '主列有 dev 鈕沒掛 devonly');
+            ok(/<span class="devonly">\s*<label class="k">天氣預覽/.test(html) && /id="zonelayout"[\s\S]*?<\/label><\/span>/.test(html), '營地的預覽區沒包進 devonly');
+            // 實跑 setDevUi：off → body 掛 nodev、預覽歸回自動並觸發 change；on → 拿掉
+            const fnSrc = (js.match(/function setDevUi\(on\)\{[\s\S]*?\n\}/) || [''])[0];
+            const els = { wxsel: { value: 'rain' }, festsel: { value: 'halloween' }, wxcold: { checked: true },
+                          wxnight: { checked: false }, zonebox: { checked: true } };
+            const fired = [];
+            for (const [k, e] of Object.entries(els)) e.dispatchEvent = () => fired.push(k);
+            let cls = null;
+            const doc = { body: { classList: { toggle: (c, v) => { cls = v ? c : null; } } },
+                          getElementById: (id) => els[id] || null, querySelectorAll: () => [] };
+            const setDevUi = new Function('document', 'localStorage', 'Event', fnSrc + '\nreturn setDevUi;')(
+                doc, { setItem() {} }, function () {});
+            setDevUi(false);
+            ok(cls === 'nodev', 'dev介面 off 沒有掛上 nodev');
+            ok(els.wxsel.value === '' && els.festsel.value === '' && !els.wxcold.checked && !els.zonebox.checked
+               && fired.sort().join() === 'festsel,wxcold,wxsel,zonebox', 'dev介面 off 沒把預覽歸回自動：' + fired.join());
+            setDevUi(true);
+            ok(cls === null, 'dev介面 on 沒有拿掉 nodev');
+        }
+
         // 常見成因：字串字面值裡混進真正的換行。單獨檢出來，訊息才看得懂在說什麼。
         const bad = js.split('\n').filter(l => (l.match(/'/g) || []).length % 2 === 1
                                             && !l.trim().startsWith('//'));
@@ -650,7 +679,11 @@ setTimeout(async () => {
                 rq.setTimeout(8000, () => { rq.destroy(); rej(new Error('timeout')); });
                 rq.end(b);
             });
-            await new Promise(r => setTimeout(r, 900));
+            // 等它真的起來（以前固定等 900ms，機器忙的時候還沒 listen → ECONNREFUSED，
+            // 而且例外會把後面所有段落一起跳過）
+            for (let i = 0; i < 100; i++) {
+                try { await getOn(P2, '/state'); break; } catch (e) { await new Promise(r => setTimeout(r, 100)); }
+            }
             try {
                 // 敵人不存在 → 必須是 CLI 回的拒絕。被快路徑吃掉的話會變成 ok:true，
                 // 而且真的排了一場隨機戰鬥（＝回報的症狀）。用不存在的名字才不會留下副作用。
@@ -848,7 +881,8 @@ setTimeout(async () => {
             const kid = spawn(process.execPath,
                 [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
                 { env: { ...process.env, AGUMON_DAEMON_PORT: String(P4), AGUMON_STATE_DIR: SD,
-                         VPET_PLAZA_URL: 'http://127.0.0.1:' + ps.server.address().port },
+                         VPET_PLAZA_URL: 'http://127.0.0.1:' + ps.server.address().port,
+                         VPET_FESTIVAL: 'halloween' },   // 節日固定，不看今天幾號
                   stdio: 'ignore' });
             const cmd = async (action, args = {}) => JSON.parse(await post(P4, '/cmd', { action, args }));
             const stateFile = () => { try { return JSON.parse(fs2.readFileSync(path.join(SD, 'daemon-state.json'), 'utf8')); } catch (e) { return {}; } };
@@ -896,6 +930,39 @@ setTimeout(async () => {
                     if (!colored) await wait(400);
                 }
                 ok(/function drawNameTags/.test(js) && /drawNameTags\(p\.tags, p\.owner\)/.test(js), '前端沒有畫名牌');
+
+                // 特殊節日（docs/festival-spec.md）：廣場背景固定出現、造型由本人決定給不給看
+                ok(p2.festival && p2.festival.id === 'halloween' && p2.festival.acc === 'hat',
+                   '/plaza 沒帶節日：' + JSON.stringify(p2.festival));
+                ok(p2.festCostume === true && ps.roster()[0].costume === true, '節日造型預設應該是給看');
+                const fc = await cmd('festCostume', { on: 'false' });
+                ok(fc.ok, '關節日造型失敗：' + JSON.stringify(fc).slice(0, 120));
+                ok(ps.roster()[0].costume === false, '關了節日造型，伺服器上還是給看（別人仍看得到）');
+                ok(JSON.parse(await getOn(P4, '/plaza')).festCostume === false, '/plaza 的造型勾選框沒跟著關');
+                ok(JSON.parse(fs2.readFileSync(path.join(SD, 'festival.json'), 'utf8')).costume === false, '節日造型的開關沒存起來');
+                ok((await cmd('festCostume', { on: 'true' })).ok && ps.roster()[0].costume === true, '開回節日造型失敗');
+                const fy = JSON.parse(await getOn(P4, '/yard?fest=doubleten'));
+                ok(fy.festival && fy.festival.id === 'doubleten' && fy.festCostume === true, '/yard?fest= 預覽沒生效：' + JSON.stringify(fy.festival));
+                ok(/<canvas id="fest"><\/canvas><canvas id="pet"/.test(html), '節日背景畫布不在角色畫布下面');
+                ok(/id="festplaza"/.test(html) && /id="festcos"/.test(html), '頁面沒有節日開關');
+                ok(/applyFestival\(p\.festival/.test(js) && /applyFestival\(y\.festival/.test(js), '前端沒有套用節日');
+                ok(/view==='plaza' \|\| \(view==='yard' && festState\.bg\)/.test(js), '廣場的節日背景不該吃營地的開關');
+                // 造型勾選框排在「離開廣場」那一列（#controls）的右邊，文案「顯示節慶造型」
+                const ctl = (html.match(/<div id="controls">[\s\S]*?\n    <\/div>/) || [''])[0];
+                ok(/id="festplaza"[^>]*margin-left:auto[\s\S]*?顯示節慶造型<\/label>/.test(ctl), '造型勾選框沒有排在離開廣場那一列的右邊');
+                // 營地只有一顆：背景跟造型同一個開關
+                ok(!/id="festbg"/.test(html) && /id="festcos">顯示節慶造型<\/label>/.test(html), '營地的節日開關沒合成一顆「顯示節慶造型」');
+                ok(/opts\.costume!=null\) festState\.bg = !!opts\.costume/.test(js), '營地背景沒跟著造型開關走');
+                ok(/const festNow = [^\n]*IS_RELEASE \? null/.test(require('fs').readFileSync(
+                       path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8')),'release 版還吃節日預覽 —— 開關會在活動期間外出現');
+
+                // 開心鈕：按了之後 /plaza 上自己是開心狀態（大家依同一個時間戳演），演完就結束
+                ok(/id="plazahappy"/.test(html), '廣場沒有開心鈕');
+                ok((await cmd('plazaHappy')).ok, '按開心失敗');
+                const meTag = (q) => (q.tags || []).find(t => t.me) || {};
+                ok(meTag(JSON.parse(await getOn(P4, '/plaza'))).happy === true, '按了開心，畫面上沒有開心');
+                await wait(PS.EMOTE_MS + 200);
+                ok(meTag(JSON.parse(await getOn(P4, '/plaza'))).happy === false, '開心演完了還一直在開心');
                 // 自動／手動（WASD）
                 ok((await cmd('plazaMode', { mode: 'manual' })).ok, '切手動失敗');
                 ok(JSON.parse(await getOn(P4, '/plaza')).mode === 'manual', '/plaza 沒說現在是手動（按鈕文字跟 WASD 都會不對）');

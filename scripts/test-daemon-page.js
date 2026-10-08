@@ -934,7 +934,7 @@ setTimeout(async () => {
                 ok(/function drawNameTags/.test(js) && /drawNameTags\(p\.tags, p\.owner\)/.test(js), '前端沒有畫名牌');
 
                 // 特殊節日（docs/festival-spec.md）：廣場背景固定出現、造型由本人決定給不給看
-                ok(p2.festival && p2.festival.id === 'halloween' && p2.festival.acc === 'hat',
+                ok(p2.festival && p2.festival.id === 'halloween' && p2.festival.acc === 'witch',
                    '/plaza 沒帶節日：' + JSON.stringify(p2.festival));
                 ok(p2.festCostume === true && ps.roster()[0].costume === true, '節日造型預設應該是給看');
                 const fc = await cmd('festCostume', { on: 'false' });
@@ -1023,9 +1023,19 @@ setTimeout(async () => {
                     ok(/drawTagText\(g, n\.text, n\.col\*HOME_CW/.test(js), '對戰的名字沒有用正常字型畫');
                     ok(/function renderBattle/.test(js) && /id="battlebox"/.test(html), '頁面沒有對戰的疊層');
                     // 演完（約 15 秒）
-                    let done = false;
-                    for (let i = 0; i < 260 && !done; i++) { const q = JSON.parse(await getOn(P4, '/plaza')); if (shown && !q.battle) done = true; else await wait(100); }
+                    // 一路看下來：爆炸那幾拍不畫名字（整個畫面是爆炸，名字掛在底下很突兀），打鬥中有名字
+                    let done = false, boomSeen = 0, boomNamed = 0, fightNamed = 0;
+                    for (let i = 0; i < 260 && !done; i++) {
+                        const q = JSON.parse(await getOn(P4, '/plaza'));
+                        if (shown && !q.battle) { done = true; break; }
+                        if (q.battle && q.battle.phase === 'boom') { boomSeen++; if (q.battle.names) boomNamed++; }
+                        if (q.battle && q.battle.phase === 'attack' && q.battle.names) fightNamed++;
+                        await wait(100);
+                    }
                     ok(done, '對戰演出一直沒結束');
+                    ok(boomSeen > 0, '一路看下來沒看到爆炸那段（phase 沒帶出來？）');
+                    ok(boomNamed === 0, `爆炸時還在畫名字（${boomNamed}/${boomSeen} 次）`);
+                    ok(fightNamed > 0, '打鬥中名字不見了（只有爆炸該拿掉）');
                     await wait(1600);
                     const after2 = stateFile();
                     ok((after2.battleTotalCount || 0) === (before2.battleTotalCount || 0), '廣場對戰被算進戰績了');

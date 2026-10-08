@@ -344,7 +344,8 @@ function renderTick(i, st, now) {
     saveState(STATE_FILE, st);
     // cutIn：只有真正在演 cut-in 的那幾拍才是 true（decideBattleFrame 的 elapsed 0~4），
     // 打鬥過程的拍數不算。前端據此決定要不要塗上下黑邊 —— 用 kind 判斷會整場戰鬥都塗到。
-    return { kind: result.kind, petLines, cutIn: !!(result.meCutIn || result.enemyCutIn) };
+    // phase：戰鬥演到哪一段（encounter/approach/attack/boom/result），廣場對戰看它決定要不要畫名字
+    return { kind: result.kind, petLines, cutIn: !!(result.meCutIn || result.enemyCutIn), phase: result.phase || null };
 }
 
 // ── token 掃描：搬到 worker thread，每 5 秒刷新一次，主迴圈只讀快取 ──────────────
@@ -409,13 +410,14 @@ const plazaClient = PlazaClient.create({
 // 細長、而且只能對齊到整格，置中會偏（回報過）。這裡把那一列拿掉，改送「名字 + 該站在哪一欄的
 // 中心」，前端用正常字型畫。我方固定在左邊 16 格、敵方在右邊 16 格（core 的 BATTLE_ME_LEFT_COL /
 // BATTLE_ENEMY_RIGHT_COL）；結算階段 core 不畫名牌（我方移到中央），這裡也跟著不送。
+// 爆炸那幾拍也不送：整個畫面是一團爆炸，底下還掛著兩個名字很突兀。
 function plazaBattleView(list, me) {
     const H = core.BATTLE_SCENE_HEIGHT || 8, Wd = core.BATTLE_SCENE_WIDTH || 52;
     const lines = latest.petLines || [];
     const opp = list.find(m => m.id === plazaBattle.opp.id);
-    const named = lines.length > H;   // core 有加名牌列 = 不是結算階段
+    const named = lines.length > H && latest.phase !== 'boom';   // core 有加名牌列 = 不是結算階段
     return {
-        lines: lines.slice(0, H), opp: plazaBattle.opp.name,
+        lines: lines.slice(0, H), opp: plazaBattle.opp.name, phase: latest.phase,
         names: named ? [
             { text: me.name, color: me.color || plaza.NAME_DEFAULT_COLOR, col: 8 },
             { text: plazaBattle.opp.name, color: (opp && opp.color) || plaza.NAME_DEFAULT_COLOR, col: Wd - 8 },
@@ -648,6 +650,7 @@ function doTick() {
             jogress,
             kind: out.kind,
             cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
+            phase: out.phase,
             petLines: out.petLines,                       // ANSI 陣列（瀏覽器解析）
             usage: {
                 activeSession: usage.activeSession,
@@ -1731,17 +1734,28 @@ setInterval(hudTick,1000);
 // 開關：廣場一律顯示；營地看「節日背景」勾選框（daemon 存的，換分頁也記得）。
 const festState={id:null, bg:true};
 // 蝙蝠不能用深色：營地底色是 rgb(24,24,24)，深紫疊上去幾乎看不見（截圖確認過）
-const FEST_PAL={K:'#8a68b4',O:'#f0922a',Y:'#ffd84a',G:'#4f8a3a'};
+const FEST_PAL={K:'#8a68b4',O:'#f0922a',Y:'#ffd84a',G:'#4f8a3a',R:'#de2028',W:'#ffffff',
+  D:'#f2c94c',N:'#2f7d3e',P:'#8b5a2b',B:'#4a8cff',Q:'#5a6472',H:'#f0508c',A:'#3d7fd6',a:'#7fb8ff',
+  M:'#fff1b8',m:'#e8cf7a',s:'#9aa3ad'};
 const FEST_ART={
   pumpkin:['...G...','.OOOOO.','OYOOOYO','OOOOOOO','OYYYYYO','.OOOOO.'],
   bat1:['K.....K','KK.K.KK','..KKK..'],
   bat2:['..KKK..','.KK.KK.','K.....K'],
+  tree:['....D....','....N....','...NNN...','..NNNNN..','...NNN...','..NNNNN..','.NNNNNNN.','NNNNNNNNN','....P....','....P....'],
+  gift:['.D.D.','RRDRR','RRDRR','RRDRR'],
+  tower:['..Q..','..Q..','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','.QQQ.','QQQQQ','QQQQQ','QQQQQ'],
+  redlantern:['..D..','.RRR.','RRDRR','RRRRR','.RRR.','..D..','..D..'],
+  skylantern:['.OOO.','OYYYO','OYYYO','.OOO.','..Y..'],
+  heart:['H.H','HHH','.H.'],
+  balloon:['.XX.','XXXX','XXXX','.XX.','..s.','.s..','..s.'],
+  boat:['..............NN','..O..O..O..O..NN','RRRRRRRRRRRRRRRN','.RDRDRDRDRDRDRR.','..RRRRRRRRRRRR..'],
 };
-function festPix(g,art,x,y,alpha){
+// 一樣的圖換顏色用（氣球）：map 把某個字換成指定顏色
+function festPix(g,art,x,y,alpha,map){
   g.globalAlpha=alpha==null?1:alpha;
   for(let r=0;r<art.length;r++) for(let c=0;c<art[r].length;c++){
     const ch=art[r][c]; if(ch==='.') continue;
-    g.fillStyle=FEST_PAL[ch];
+    g.fillStyle=(map&&map[ch])||FEST_PAL[ch];
     g.fillRect(Math.round(x+c)*CW, Math.round(y+r)*(CH/2), CW, CH/2);
   }
   g.globalAlpha=1;
@@ -1751,6 +1765,32 @@ function festDot(g,x,y,color,alpha){
   g.fillRect(Math.round(x)*CW, Math.round(y)*(CH/2), CW, CH/2); g.globalAlpha=1;
 }
 let festBursts=[], festNextBurst=0;
+// 0～1 的固定亂數（同一個 i 每一幀都一樣）：雪花、星星、天燈的位置用它，不用另外存狀態
+const festRnd=(i)=>{ const x=Math.sin(i*127.1+311.7)*43758.5453; return x-Math.floor(x); };
+// 煙火：上半部隨機炸開，一秒內散開淡掉（雙十晚上、跨年整天）
+function festFireworks(g,ts,W,H,colors,gap){
+  if(ts>festNextBurst){
+    festNextBurst=ts+gap*(0.6+Math.random()*0.8);
+    festBursts.push({x:6+Math.random()*(W-12), y:8+Math.random()*(H*0.3), t0:ts,
+                     c:colors[Math.floor(Math.random()*colors.length)]});
+  }
+  festBursts=festBursts.filter(b=>ts-b.t0<1100);
+  for(const b of festBursts){
+    const k=(ts-b.t0)/1100, r=1+k*6;
+    for(let i=0;i<12;i++){
+      const a=i/12*Math.PI*2;
+      festDot(g,b.x+Math.cos(a)*r, b.y+Math.sin(a)*r*0.8, b.c, 0.9*(1-k));
+    }
+  }
+}
+// 由下往上飄的東西（天燈、愛心、氣球）：n 個，各自速度、左右晃，飄出上緣再從下面出來
+function festRise(g,ts,W,H,n,art,h,alpha,mapOf){
+  for(let i=0;i<n;i++){
+    const sp=1.2+festRnd(i)*1.4, x=festRnd(i+50)*(W-6)+Math.sin(ts/1300+i*2)*1.5;
+    const y=H+1-((ts/1000*sp+festRnd(i+90)*(H+h))%(H+h+2));
+    festPix(g,art,x,y,alpha*(y<H*0.25?Math.max(0,y/(H*0.25)):1),mapOf&&mapOf(i));
+  }
+}
 function festDraw(ts){
   const cv=document.getElementById('fest');
   const on = !!festState.id && (view==='plaza' || (view==='yard' && festState.bg));
@@ -1771,22 +1811,8 @@ function festDraw(ts){
         festDot(g,x,y+2,c,0.85);
       }
     }
-    // 晚上加煙火：上半部隨機炸開，一秒內散開淡掉
-    if(wxState.night){
-      if(ts>festNextBurst){
-        festNextBurst=ts+1400+Math.random()*2200;
-        festBursts.push({x:6+Math.random()*(W-12), y:8+Math.random()*(H*0.3), t0:ts,
-                         c:['#de2028','#ffffff','#5b8cff','#ffd84a'][Math.floor(Math.random()*4)]});
-      }
-      festBursts=festBursts.filter(b=>ts-b.t0<1100);
-      for(const b of festBursts){
-        const k=(ts-b.t0)/1100, r=1+k*6;
-        for(let i=0;i<12;i++){
-          const a=i/12*Math.PI*2;
-          festDot(g,b.x+Math.cos(a)*r, b.y+Math.sin(a)*r*0.8, b.c, 0.9*(1-k));
-        }
-      }
-    }
+    // 晚上加煙火
+    if(wxState.night) festFireworks(g,ts,W,H,['#de2028','#ffffff','#5b8cff','#ffd84a'],2500);
   } else if(festState.id==='halloween'){
     // 蜘蛛網試過拿掉了：一格 dot 太大，九格的網看起來是一塊灰色棋盤，不像網
     // 上緣三隻蝙蝠慢慢飛過，翅膀兩幀
@@ -1803,6 +1829,105 @@ function festDraw(ts){
       for(const [c,r] of [[1,2],[5,2],[1,4],[2,4],[3,4],[4,4],[5,4]])
         g.fillRect((px+c)*CW,(H-7+r)*(CH/2),CW,CH/2);
       g.globalAlpha=1;
+    }
+  } else if(festState.id==='christmas'){
+    // 飄雪（整面，很淡）＋右下聖誕樹（燈會閃）＋左下禮物
+    for(let i=0;i<40;i++){
+      const sp=1+festRnd(i)*1.2, x=festRnd(i+7)*W+Math.sin(ts/1500+i)*1.5;
+      const y=((ts/1000*sp)+festRnd(i+30)*(H+2))%(H+2)-1;
+      festDot(g,x,y,'#ffffff',0.35+festRnd(i+60)*0.35);
+    }
+    festPix(g,FEST_ART.tree,W-11,H-10,1);
+    const lights=[[4,3],[3,5],[5,5],[2,6],[6,6],[4,7],[1,7],[7,7]];
+    lights.forEach(([c,r],i)=>festDot(g,W-11+c,H-10+r,['#de2028','#ffd84a','#4a8cff'][(Math.floor(ts/450)+i)%3],1));
+    festPix(g,FEST_ART.gift,2,H-4,1);
+  } else if(festState.id==='newyear'){
+    // 整天都放煙火（晚上放得比較密）＋右下台北 101
+    festFireworks(g,ts,W,H,['#de2028','#ffffff','#5b8cff','#ffd84a','#f0508c','#5fe08a'],wxState.night?1300:2600);
+    festPix(g,FEST_ART.tower,W-8,H-14,0.95);
+    for(let r=3;r<13;r+=2) festDot(g,W-6,H-14+r,'#ffd84a',0.5+0.5*Math.sin(ts/500+r));
+  } else if(festState.id==='lunarny'){
+    // 上緣一排紅燈籠微微晃；下緣兩角掛鞭炮，底下一直冒火花
+    for(const [i,fx] of [[0,0.08],[1,0.3],[2,0.52]]){
+      festPix(g,FEST_ART.redlantern,Math.round(fx*W)+Math.sin(ts/900+i)*0.6,0,1);
+    }
+    for(const px of [3,W-4]){
+      // 中間一條引信，兩側交錯一節一節的紅炮
+      for(let r=0;r<9;r++){
+        festDot(g,px,H-12+r,'#8b5a2b',1);
+        festDot(g,px+(r%2?1:-1),H-12+r,'#de2028',1);
+        if(r%2===0) festDot(g,px+(r%4?2:-2),H-12+r,'#b0151c',1);
+      }
+      for(let k=0;k<4;k++){
+        const t=Math.floor(ts/120)+k*7+px;
+        festDot(g,px-2+festRnd(t)*4,H-3+festRnd(t+1)*2,festRnd(t+2)<0.5?'#ffd84a':'#ffffff',0.9);
+      }
+    }
+  } else if(festState.id==='lantern'){
+    // 天燈從下面慢慢飄上去，火光一閃一閃
+    festRise(g,ts,W,H,6,FEST_ART.skylantern,5,0.85*(0.85+0.15*Math.sin(ts/200)));
+  } else if(festState.id==='valentine'){
+    festRise(g,ts,W,H,9,FEST_ART.heart,3,0.75);
+  } else if(festState.id==='qingming'){
+    // 清明：低調。斜斜的毛毛雨（很淡）＋左上垂下幾條柳枝隨風擺，偶爾飄一片柳葉
+    for(let i=0;i<34;i++){
+      const sp=6+festRnd(i)*3, x0=festRnd(i+11)*(W+8);
+      const t=(ts/1000*sp+festRnd(i+23)*(H+4))%(H+4)-2;
+      for(let k=0;k<2;k++) festDot(g,x0-(t+k)*0.35,t+k,'#a9c4d8',0.18+0.08*k);
+    }
+    // 一根橫枝從左上角伸出來，底下垂幾條長短不一的柳條；柳條細細一條、兩側交錯長葉子，
+    // 越往下擺越大（實心直條試過，看起來像柵欄）
+    for(let x=0;x<16;x++) festDot(g,x,x<8?0:1,'#6b4a2b',0.9);
+    [7,11,5,9,6,10].forEach((len,b)=>{
+      const bx=1+b*2.6, sway=Math.sin(ts/1500+b*0.9)*1.6;
+      for(let r=0;r<len;r++){
+        const k=(r/len)*(r/len), x=bx+sway*k, y=(bx<8?1:2)+r;
+        festDot(g,x,y,'#4f8f3c',0.8);
+        if(r%2===1) festDot(g,x+((r>>1)%2?1:-1),y,'#8fcf6a',0.75);
+      }
+    });
+    for(let i=0;i<3;i++){
+      const sp=1+festRnd(i+70)*0.6, t=(ts/1000*sp+i*7)%(H+4);
+      festDot(g,4+i*3+t*0.8+Math.sin(ts/500+i)*1.5,6+t,'#8fcf6a',0.7);
+    }
+  } else if(festState.id==='children'){
+    const cols=['#de2028','#4a8cff','#ffd84a','#5fe08a','#f0508c'];
+    festRise(g,ts,W,H,6,FEST_ART.balloon,5,0.9,(i)=>({X:cols[i%cols.length]}));
+  } else if(festState.id==='dragonboat'){
+    // 下緣水面＋一艘龍舟慢慢划過去（槳手一上一下）
+    const sp=ts/1000*3, bx=(sp%(W+16))-14;
+    festPix(g,FEST_ART.boat,bx,H-6,1);
+    // 槳：一拍往前一拍往後
+    for(let k=0;k<4;k++) festDot(g,bx+2+k*3+(Math.floor(ts/300)%2?1:-1),H-3,'#8b5a2b',1);
+    for(let x=0;x<W;x++){
+      const crest=Math.sin(x/3+ts/500)>0.3;
+      festDot(g,x,H-2,'#3d7fd6',0.75);
+      festDot(g,x,H-1,'#2a5fa8',0.85);
+      if(crest) festDot(g,x,H-3,'#7fb8ff',0.6);
+    }
+  } else if(festState.id==='qixi'){
+    // 上半部星空：星星一閃一閃，兩顆十字亮星是牛郎、織女（銀河試過，一格 dot 太粗，看起來像灰塵）
+    for(let i=0;i<22;i++){
+      const x=festRnd(i+100)*W, y=festRnd(i+200)*H*0.45;
+      festDot(g,x,y,'#ffffff',0.25+0.45*(0.5+0.5*Math.sin(ts/(500+festRnd(i)*600)+i)));
+    }
+    const tw=0.75+0.25*Math.sin(ts/400);
+    for(const [sx,sy,c] of [[Math.round(W*0.12),Math.round(H*0.18),'#bfe0ff'],[Math.round(W*0.55),Math.round(H*0.1),'#ffc0dd']]){
+      festDot(g,sx,sy,c,1);
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) festDot(g,sx+dx,sy+dy,c,tw*0.6);
+    }
+  } else if(festState.id==='midautumn'){
+    // 左上一顆大月亮（右上是時間看板），月面有兔子影子；兩條雲慢慢飄過
+    const mx=6, my=5, R=4;
+    for(let y=-R;y<=R;y++) for(let x=-R-1;x<=R+1;x++){
+      if((x*x)/((R+1)*(R+1))+(y*y)/(R*R)>1) continue;
+      festDot(g,mx+x,my+y,'#fff1b8',0.95);
+    }
+    for(const [x,y] of [[0,-2],[1,-2],[0,-1],[0,0],[1,0],[-1,1],[0,1],[1,1],[2,1],[-1,2]]) festDot(g,mx+x,my+y,'#e8cf7a',0.9);
+    for(let i=0;i<2;i++){
+      const cx=((ts/1000*(0.8+i*0.4)+i*W*0.5)%(W+20))-10, cy=3+i*5;
+      for(let x=0;x<9;x++) festDot(g,cx+x,cy,'#9aa3ad',0.35);
+      for(let x=2;x<6;x++) festDot(g,cx+x,cy-1,'#9aa3ad',0.3);
     }
   }
 }

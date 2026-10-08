@@ -1143,6 +1143,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #hud::before{content:'';position:absolute;inset:-8px -16px -8px -20px;z-index:-1;
        background:radial-gradient(closest-side,rgba(0,0,0,.85),rgba(0,0,0,.7) 55%,rgba(0,0,0,0))}
   body.yard #hud,body.plaza #hud{display:block}
+  body.nohud #hud{display:none!important}   /* 「顯示天氣日期」取消勾選 */
   #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
   #hud .prev{color:#d29922;font-size:10px}
   /* 左上角曾經放過一顆日／月，拿掉了：右上的看板已經有時鐘，晴夜的圖示也是月亮，
@@ -1241,15 +1242,16 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
       <select id="jgsel" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
+      <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <label class="k" id="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
              title="關掉的話，大家看到的你就是平常的樣子"><input type="checkbox" id="festcos2">顯示節慶造型</label>
+      <label class="k" id="hudshow" style="display:none;align-items:center;gap:4px;font-size:12px"
+             title="右上角的日期／時間／天氣"><input type="checkbox" id="hudcb" checked>顯示天氣日期</label>
+      </span>
     </div>
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <span id="yardinfo">–</span>
       <span class="k">（點一下摸摸、按右鍵開選單）</span>
-      <span id="festyard" style="display:none">
-        <label class="k"><input type="checkbox" id="festcos">顯示節慶造型</label>
-      </span>
 ${IS_RELEASE ? '' : `<span class="devonly">
       <label class="k">天氣預覽 <span class="devtag">dev</span><select id="wxsel">
         <option value="">自動（實際天氣）</option>
@@ -1461,6 +1463,9 @@ function setView(v){
     el.style.display = inScope(el.dataset.scope) ? '' : 'none';
   });
   document.getElementById('yardbar').style.display = (v==='yard') ? '' : 'none';
+  document.getElementById('hudshow').style.display = (v==='yard'||v==='plaza') ? 'flex' : 'none';
+  // 節慶勾選框要等 /yard、/plaza 回來才知道有沒有節日（applyFestival）；回前線先藏起來
+  if(v!=='yard'&&v!=='plaza') document.getElementById('festplaza').style.display='none';
   document.getElementById('plazabar').style.display = (v==='plaza') ? '' : 'none';
   document.querySelectorAll('[data-cmd="yard"]').forEach(b=>{
     // 「家」在這裡有兩個意思會打架：廣場那邊的「回家」是從廣場回到自己的舞台，
@@ -1936,10 +1941,10 @@ function applyFestival(f, opts){
   festState.id = f ? f.id : null;
   if(opts && opts.costume!=null) festState.bg = !!opts.costume;   // 營地背景跟造型同一顆開關
   document.querySelectorAll('.festname').forEach(el=>{ el.textContent = f ? f.name : ''; });
-  document.getElementById('festyard').style.display = (f && view==='yard') ? '' : 'none';
-  document.getElementById('festplaza').style.display = (f && view==='plaza') ? 'flex' : 'none';
+  // 營地、廣場同一顆，排在控制列最右（跟「顯示天氣日期」並排）
+  document.getElementById('festplaza').style.display = (f && (view==='yard'||view==='plaza')) ? 'flex' : 'none';
   const set=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null && document.activeElement!==el) el.checked=!!v; };
-  if(opts){ set('festcos',opts.costume); set('festcos2',opts.costume); }
+  if(opts) set('festcos2',opts.costume);
 }
 
 // 天氣：營地與廣場共用（伺服器給一份，這裡套到粒子層與右上看板）
@@ -2603,8 +2608,16 @@ document.getElementById('plazacolor').addEventListener('change',e=>{
   sendCmd('plazaColor',{color:e.target.value}).then(r=>{ if(r&&r.ok) poll(); });
 });
 document.getElementById('plazaname').addEventListener('keydown',e=>{ if(e.key==='Enter') plazaRenameSubmit(); });
+// 顯示／不顯示右上的天氣日期：純前端、記在這個瀏覽器（營地與廣場共用）
+function setHud(on){
+  document.body.classList.toggle('nohud', !on);
+  document.getElementById('hudcb').checked = on;
+  try{ localStorage.setItem('vpet.hud', on ? '1' : '0'); }catch(e){}
+}
+document.getElementById('hudcb').addEventListener('change',e=>setHud(e.target.checked));
+{ let v=null; try{ v=localStorage.getItem('vpet.hud'); }catch(e){} setHud(v!=='0'); }
 // 節日開關：存在 daemon（state/festival.json），所以換分頁、重開都記得
-for(const [id,act] of [['festcos','festCostume'],['festcos2','festCostume']]){
+for(const [id,act] of [['festcos2','festCostume']]){
   document.getElementById(id).addEventListener('change',e=>{
     sendCmd(act,{on:String(e.target.checked)}).then(()=>poll());
   });

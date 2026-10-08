@@ -1136,6 +1136,9 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #hud{position:absolute;display:none;top:6px;right:8px;z-index:3;text-align:right;
        pointer-events:none;font-size:11px;line-height:1.4;color:#e6edf3;
        text-shadow:0 1px 3px #000, 0 0 6px #000, 0 0 2px #000}
+  /* 壓黑：字後面一團往外淡掉的暗影（沒有框），彩旗／煙火從後面經過時字還讀得到 */
+  #hud::before{content:'';position:absolute;inset:-8px -16px -8px -20px;z-index:-1;
+       background:radial-gradient(closest-side,rgba(0,0,0,.85),rgba(0,0,0,.7) 55%,rgba(0,0,0,0))}
   body.yard #hud,body.plaza #hud{display:block}
   #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
   #hud .prev{color:#d29922;font-size:10px}

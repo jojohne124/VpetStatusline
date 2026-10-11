@@ -165,7 +165,12 @@
     "kakamon",
     "lianpumon",
     "seitengokuwmon",
-    "xingtianmon"
+    "xingtianmon",
+    "mushroomon",
+    "candlemon",
+    "meramon",
+    "skullmeramon",
+    "boltmon"
   ],
   "starters": [
     "agumon",
@@ -192,17 +197,22 @@
     "gammamon",
     "kakamon",
     "keramon",
-    "mothra_larva"
+    "mothra_larva",
+    "mushroomon",
+    "candlemon"
   ],
   "starterWeights": {
     "agumon": 5,
     "agumon_black": 5,
-    "betamon": 7,
+    "betamon": 5,
     "biyomon": 5,
+    "candlemon": 5,
     "demidevimon": 5,
     "fujamon": 5,
     "gabumon": 5,
     "gomamon": 5,
+    "kakamon": 5,
+    "mushroomon": 5,
     "palmon": 5,
     "patamon": 5,
     "renamon": 5,

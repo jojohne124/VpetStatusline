@@ -1,7 +1,7 @@
 {
   "name": "ShogunGekomon",
   "stage": "Perfect",
-  "power": 1,
+  "power": 105,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

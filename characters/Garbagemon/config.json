@@ -1,7 +1,7 @@
 {
   "name": "Garbagemon",
   "stage": "Perfect",
-  "power": 1,
+  "power": 103,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

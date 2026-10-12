@@ -76,7 +76,7 @@
       ]
     },
     {
-      "character": "devimon",
+      "character": "bakemon",
       "conditions": [
         {
           "type": "cost_threshold",
@@ -84,7 +84,7 @@
         },
         {
           "type": "win_rate",
-          "pct": 55,
+          "pct": 50,
           "minBattles": 5
         }
       ]

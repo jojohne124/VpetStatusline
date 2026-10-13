@@ -1,7 +1,7 @@
 {
   "name": "Candlemon",
   "stage": "Child",
-  "power": 1,
+  "power": 8,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,34 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "meramon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 45,
+          "minBattles": 5
+        }
+      ]
+    },
+    {
+      "character": "bakemon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 10
+        },
+        {
+          "type": "win_rate",
+          "pct": 50,
+          "minBattles": 5
+        }
+      ]
+    }
+  ]
 }

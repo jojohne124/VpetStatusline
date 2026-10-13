@@ -1,7 +1,7 @@
 {
   "name": "SkullMeramon",
   "stage": "Perfect",
-  "power": 1,
+  "power": 110,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",
@@ -60,5 +60,20 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "boltmon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 20
+        },
+        {
+          "type": "win_rate",
+          "pct": 60,
+          "minBattles": 12
+        }
+      ]
+    }
+  ]
 }

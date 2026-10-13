@@ -1238,6 +1238,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   .devtag{color:#d29922;font-size:11px}
   /* dev 介面關掉：dev 限定的鈕／列／預覽全部藏起來，看到的就是 release 的樣子 */
   body.nodev .devonly{display:none!important}
+  body.noinfo #info{display:none!important}   /* 進階指令「daemon 資訊」隱藏 */
   /* 指令輸出：子行程的 stdout 原樣顯示（doctor / stats / code 這種有回應的） */
   #cmdout{margin-top:8px;max-width:480px;display:none;background:#0d1117;border:1px solid #30363d;
           border-radius:6px;padding:8px 10px;font-size:12px;color:#c9d1d9;
@@ -1343,11 +1344,13 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
         ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
                     : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
       </div>`).join('\n      ')}
+      <div class="form" id="infoui"><span class="lbl">📊 daemon 資訊</span>
+        <button data-on="1">顯示</button><button data-on="0">隱藏</button></div>
 ${IS_RELEASE ? '' : `      <div class="form" id="devui"><span class="lbl">🛠 dev介面 <span class="devtag">dev</span></span>
         <button data-on="1">on</button><button data-on="0">off</button></div>`}
     </details>
     <div id="cmdout"></div></div>
-  <div class="panel">
+  <div class="panel" id="info">
     <div>daemon tick：<span class="big" id="tick">–</span> <span class="badge" id="kind">–</span></div>
     <div class="k">（背景／切走這個分頁再回來，tick 仍持續跳 = 時鐘不依賴前景）</div>
     <div style="height:10px"></div>
@@ -1648,6 +1651,7 @@ function wxDraw(ts){
   const w=cv.width, h=cv.height, g=cv.getContext('2d');
   if(!wxParts||wxParts.w!==w||wxParts.h!==h) wxParts=wxBuild(w,h);
   const P=wxParts, sky=wxState.sky;
+  const hwSky=sky==='clear'&&festShown()&&festState.id==='halloween';   // 萬聖節：晴天當陰天
   g.clearRect(0,0,w,h);
 
   // 光柱與雲先畫在一張暫存畫布上，再疊兩次：一次照舊鋪滿，一次**只蓋在角色身上**而且加濃。
@@ -1664,7 +1668,8 @@ function wxDraw(ts){
   // ⚠️ 夜裡一定要關掉。光柱是**陽光**，天黑了還有幾道斜射的亮帶，看起來不是
   //    「晚上的晴天」而是「畫面壞了」。晴朗的夜空就該是空的，沒有粒子。
   //    17:00 之後也關：夏天天黑得晚，傍晚還掛著正午那種光柱不對（看本機時鐘）。
-  if(sky==='clear'&&!wxState.night&&new Date().getHours()<WX_SHAFT_END_HOUR){
+  //    萬聖節背景顯示中也關，改飄陰天的雲（見下面）：鬼節配陽光不對。
+  if(sky==='clear'&&!wxState.night&&new Date().getHours()<WX_SHAFT_END_HOUR&&!hwSky){
     fxUsed=true;
     fg.globalCompositeOperation='lighter';
     for(const f of P.shaft){
@@ -1682,7 +1687,8 @@ function wxDraw(ts){
   }
 
   // 陰／雨／大雨：最上方一層薄雲。越糟的天氣雲越厚、飄越快。
-  if(sky!=='clear'){
+  // 萬聖節背景顯示中的晴天也飄（跟陰天一樣）。
+  if(sky!=='clear'||hwSky){
     const heavy=(sky==='storm'||sky==='thunder');
     const boost=sky==='thunder'?2.1:sky==='storm'?1.8:sky==='rain'?1.35:1;
     const speed=sky==='thunder'?3.0:heavy?2.4:sky==='rain'?1.5:1;
@@ -1884,9 +1890,11 @@ function festRise(g,ts,W,H,n,art,h,alpha,mapOf){
     festPix(g,art,x,y,alpha*(y<H*0.25?Math.max(0,y/(H*0.25)):1),mapOf&&mapOf(i));
   }
 }
+// 節日背景現在有沒有在畫（廣場一律、營地看開關）
+function festShown(){ return !!festState.id && (view==='plaza' || (view==='yard' && festState.bg)); }
 function festDraw(ts){
   const cv=document.getElementById('fest');
-  const on = !!festState.id && (view==='plaza' || (view==='yard' && festState.bg));
+  const on = festShown();
   document.body.classList.toggle('fest', on);
   if(!on||!cv.width||!cv.height) return;
   const g=cv.getContext('2d'), W=Math.floor(cv.width/CW), H=Math.floor(cv.height/(CH/2));
@@ -2701,7 +2709,15 @@ if(document.getElementById('devui')){
 }
 // 進階區：把該列的輸入框收成 {欄位:值} 一起送出。
 // 一列可以有多顆鈕（開/關成對的開關）→ 動作優先取按鈕自己的 data-cmd，沒有才用整列的。
-document.querySelectorAll('#adv .form:not(#devui)').forEach(row=>{
+// daemon 資訊（tick 以下那一塊）顯示／隱藏：純前端、記在這個瀏覽器，release 也有；預設隱藏（沒按過顯示就藏）
+function setInfo(on){
+  document.body.classList.toggle('noinfo', !on);
+  try{ localStorage.setItem('vpet.info', on ? '1' : '0'); }catch(e){}
+  document.querySelectorAll('#infoui button').forEach(b=>{ b.style.borderColor = (b.dataset.on==='1')===on ? '#58a6ff' : ''; });
+}
+document.querySelectorAll('#infoui button').forEach(b=>b.addEventListener('click',()=>setInfo(b.dataset.on==='1')));
+{ let v=null; try{ v=localStorage.getItem('vpet.info'); }catch(e){} setInfo(v==='1'); }
+document.querySelectorAll('#adv .form:not(#devui):not(#infoui)').forEach(row=>{
   const collect=()=>{
     const args={};
     row.querySelectorAll('input').forEach(i=>{ if(i.value.trim()) args[i.dataset.f]=i.value.trim(); });

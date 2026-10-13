@@ -117,6 +117,7 @@ function renderProbe(js, html, daemonSrc) {
                    // dev 走動範圍：把框真的畫一次，才驗得到幾何（框畫在哪、多大）
                    + 'drawZones:(z,ctx)=>{zoneBoxes=z;showZones=true;drawZones(ctx);},'
                    + 'yardSprite:(s)=>{yardSprite=s;},'
+                   + 'fest:(id,bg)=>{festState.id=id;festState.bg=bg;},'
                    + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH,LONGPRESS_MS}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
@@ -178,6 +179,15 @@ function renderProbe(js, html, daemonSrc) {
     g.__hour = 12;
     ok((clear16.n.fill || 0) > 0, '16 點的晴天沒有光柱（應該到 17:00 才收）');
     ok((clear17.n.fill || 0) === 0, `17 點之後晴天還在畫光柱（${clear17.n.fill} 次 fill）`);
+    // 萬聖節背景顯示中：晴天不要陽光、改飄陰天的雲；營地關掉節慶造型（背景不畫）→ 光柱回來；別的節日照常有
+    g.__p.fest('halloween', true);  const clearHw = run('clear', false, t, 4, false); t += 500;
+    g.__p.fest('halloween', false); const clearHwOff = run('clear', false, t, 4, false); t += 500;
+    g.__p.fest('christmas', true);  const clearXm = run('clear', false, t, 4, false); t += 500;
+    g.__p.fest(null, true);
+    ok((clearHw.n.lineTo || 0) === 0, `萬聖節晴天還在畫光柱（${clearHw.n.lineTo} 次 lineTo）`);
+    ok((clearHw.n.ellipse || 0) > 0 && (clearHwOff.n.ellipse || 0) === 0, '萬聖節晴天沒有飄陰天的雲（或沒開節慶背景也在飄）');
+    ok((clearHwOff.n.fill || 0) > 0, '營地關掉萬聖節背景後，晴天光柱沒回來');
+    ok((clearXm.n.fill || 0) > 0, '聖誕節的晴天光柱不見了（只該擋萬聖節）');
 
     // 入夜只關掉陽光，其它表演照舊 —— 雨會下到半夜，寒流也不會因為天黑就停。
     const rainNight = run('rain', false, t, 4, true); t += 500;
@@ -530,6 +540,22 @@ setTimeout(async () => {
             setHud(true);
             ok(cls === null && cb.checked === true && saved[1] === '1', '勾回「顯示天氣日期」看板沒回來');
             ok(/setHud\(v!=='0'\)/.test(js), '重開頁面沒有讀回「顯示天氣日期」的設定');
+        }
+        // daemon 資訊顯示／隱藏：進階區一列（release 也有），隱藏 → body 掛 noinfo 把 tick 那塊藏起來
+        {
+            ok(/body\.noinfo #info\{display:none!important\}/.test(html), '隱藏 daemon 資訊的 CSS 不在');
+            ok(/<div class="panel" id="info">\s*<div>daemon tick：/.test(html), 'daemon tick 那塊沒有 id="info"');
+            ok(/<details id="adv">[\s\S]*?id="infoui"[\s\S]*?data-on="1">顯示<[\s\S]*?data-on="0">隱藏<[\s\S]*?<\/details>/.test(html), '進階區沒有 daemon 資訊 顯示／隱藏');
+            ok(/:not\(#infoui\)/.test(js), 'daemon 資訊列會被當成指令列（按了送出空指令）');
+            const fnSrc = (js.match(/function setInfo\(on\)\{[\s\S]*?\n\}/) || [''])[0];
+            let cls = null, saved = null;
+            const doc = { body: { classList: { toggle: (c, v) => { cls = v ? c : null; } } }, querySelectorAll: () => [] };
+            const setInfo = new Function('document', 'localStorage', fnSrc + '\nreturn setInfo;')(doc, { setItem: (k, v) => { saved = [k, v]; } });
+            setInfo(false);
+            ok(cls === 'noinfo' && saved && saved[0] === 'vpet.info' && saved[1] === '0', '隱藏 daemon 資訊沒有生效／沒記住');
+            setInfo(true);
+            ok(cls === null && saved[1] === '1', '顯示 daemon 資訊沒有回來');
+            ok(/setInfo\(v==='1'\)/.test(js), 'daemon 資訊沒有預設隱藏（或重開沒讀回設定）');
         }
         // dev 介面 on/off：dev 限定的東西都要掛 devonly，關掉才藏得到；開關列不能被當成指令列送出
         {

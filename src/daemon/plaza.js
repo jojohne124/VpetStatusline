@@ -238,7 +238,11 @@ function composePlaza(core, occupants, step, opts = {}) {
     placed.sort((a, b) => (a.y - b.y) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
     placed.forEach((p, i) => {
-        let sp = spriteDots(core, p.char, step, p.facing, p.react);
+        // 換角色（愚人節的百變怪）：跟配件同一套 —— o.swap 優先（廣場本人決定），沒有就用整場的
+        // 營地另外帶 swapSalt（每次進營地換一個）→ 進出一次重抽一次變色版
+        const swap = p.swap !== undefined ? p.swap : opts.swap;
+        const skey = opts.swapSalt ? p.key + '|' + opts.swapSalt : p.key;
+        let sp = spriteDots(core, swap ? FEST.swapChar(swap, skey) : p.char, step, p.facing, p.react);
         // 節日配件：穿進 dot 圖本身，所以遮擋與名牌挖洞（owner）都自動算在這隻身上。
         // o.acc 優先（廣場：每個人自己決定給不給看），沒有就用整場的 opts.acc（營地）。
         const acc = p.acc !== undefined ? p.acc : opts.acc;
@@ -529,8 +533,11 @@ function yardSpriteFor(core, ranch, id, step, opts = {}) {
                         origin: opts.origin || null,
                         anchor: W.zoneAnchor(zone) },
                       step, null, zone);
-    const a = spriteDots(core, cid, 0, p.facing, null);
-    const b = spriteDots(core, cid, 1, p.facing, null);
+    // 愚人節：拿在手上的也要是同一隻百變怪（key 跟 yardOccupants 一樣、salt 跟合成時一樣）
+    const skey = 'ranch:' + id + (opts.swapSalt ? '|' + opts.swapSalt : '');
+    const draw = opts.swap ? FEST.swapChar(opts.swap, skey) : cid;
+    const a = spriteDots(core, draw, 0, p.facing, null);
+    const b = spriteDots(core, draw, 1, p.facing, null);
     return a ? { frames: [a, b || a], x: p.x, y: p.y, facing: p.facing } : null;
 }
 

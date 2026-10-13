@@ -291,7 +291,7 @@ function renderTick(i, st, now) {
         const enemyId = result.enemyId || 'godzilla_1999';
         let enemyChar = null;
         try { enemyChar = loadCharacter(enemyId); } catch (e) {}
-        const meArt        = tryLoadArt(artFile);
+        let meArt          = tryLoadArt(artFile), meRightOffset = charDef.RIGHT_OFFSET;
         let enemyArt       = enemyChar ? tryLoadArt(enemyChar.artFile) : null;
         const meBulletArt  = tryLoadArt(bulletArtFile);
         let enemyBulletArt = enemyChar ? tryLoadArt(enemyChar.bulletArtFile) : null;
@@ -313,9 +313,15 @@ function renderTick(i, st, now) {
                 } catch (e) {}
             }
         }
+        // 愚人節的廣場對戰：只換場上打架的本體，CutIn、子彈照原角色（百變怪本來就是學對方的招）
+        const sw = inPlaza ? plazaBattleSwap() : null;
+        const swArt = (id) => { try { const c = loadCharacter(id); const a = tryLoadArt(c.artFile); return a ? { a, off: c.charDef.RIGHT_OFFSET } : null; } catch (e) { return null; } };
+        const swMe = sw && sw.me ? swArt(sw.me) : null, swOpp = sw && sw.opp ? swArt(sw.opp) : null;
+        if (swMe)  { meArt = swMe.a; meRightOffset = swMe.off; }
+        if (swOpp) { enemyArt = swOpp.a; enemyRightOffset = swOpp.off; }
         petLines = composeBattleScene({
             frame: result, meArt, enemyArt, meBulletArt, enemyBulletArt, meCutInArt, enemyCutInArt,
-            shared: loadShared(), meRightOffset: charDef.RIGHT_OFFSET, enemyRightOffset,
+            shared: loadShared(), meRightOffset, enemyRightOffset,
             oppLabel: st.pvpOppLabel || null, meLabel: st.pvpMeLabel || null,
         });
     }
@@ -447,6 +453,17 @@ const plazaClient = PlazaClient.create({
 // 中心」，前端用正常字型畫。我方固定在左邊 16 格、敵方在右邊 16 格（core 的 BATTLE_ME_LEFT_COL /
 // BATTLE_ENEMY_RIGHT_COL）；結算階段 core 不畫名牌（我方移到中央），這裡也跟著不送。
 // 爆炸那幾拍也不送：整個畫面是一團爆炸，底下還掛著兩個名字很突兀。
+// 愚人節的廣場對戰：打架的兩隻換成**廣場上看到的那隻**百變怪（同一個 key → 同一個變色結果），
+// CutIn 照原圖（一眼看得出是誰）。本人關掉節慶造型的那一方照原角色。回傳 { me, opp }，null = 不換。
+function plazaBattleSwap() {
+    if (!plazaBattle) return null;
+    const f = festNow(Date.now() + plazaClient.skew());
+    if (!f || !f.swap) return null;
+    const me = plazaClient.me();
+    const opp = plazaClient.roster().find(m => m.id === plazaBattle.opp.id);
+    const pick = (m) => (m && m.costume !== false ? FEST.swapChar(f.swap, 'p:' + m.id) : null);
+    return { me: pick(me), opp: pick(opp) };
+}
 function plazaBattleView(list, me) {
     const H = core.BATTLE_SCENE_HEIGHT || 8, Wd = core.BATTLE_SCENE_WIDTH || 52;
     const lines = latest.petLines || [];
@@ -1012,6 +1029,8 @@ function applyCommand(action, args = {}) {
             joinStep: (r && r.anchor ? r.anchor.step : plaza.yardJoinStep())
                     + (r ? r.holdSteps || 0 : 0),
             origin: r && r.anchor ? r.anchor.origin : null,
+            swap: (() => { const f = festNow(Date.now(), args.fest); return f && readFest().costume ? f.swap || null : null; })(),
+            swapSalt: args.ds || null,
         });
         if (!sp) return { ok: false, error: '這隻不在營地裡' };
         if (!yardTouch.grab(args.which)) return { ok: false, error: '已經拿在手上了' };
@@ -1503,7 +1522,10 @@ function inScope(sc){
   if(view==='plaza') return sc==='plaza';
   return !sc || sc==='both' || sc===view;
 }
+// 每次切進營地換一個亂數，跟著 /yard 送出去：愚人節的變色版「進出一次抽一次」（見 festival.js swapChar）
+let yardSalt=Math.random().toString(36).slice(2,8);
 function setView(v){
+  if(v==='yard' && view!=='yard') yardSalt=Math.random().toString(36).slice(2,8);
   view = v;
   // 要在 poll() 之前換：下一次畫的就是這個畫面的大小
   // 廣場比照營地：同一張細格、同樣小一號的角色
@@ -2080,6 +2102,7 @@ async function pollYard(){
   if(zl&&zl.value) qs.push('zl='+encodeURIComponent(zl.value));
   const fsel=document.getElementById('festsel');
   if(fsel&&fsel.value) qs.push('fest='+encodeURIComponent(fsel.value));
+  qs.push('ds='+yardSalt);
   const y = await (await fetch('/yard'+(qs.length?'?'+qs.join('&'):''),
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
@@ -2876,7 +2899,10 @@ function cancelPress(){ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;
 let grabbing=null;   // 已經送出 yardGrab、還沒回來的那隻
 async function startDrag(hit, at){
   grabbing=hit.id;
-  const r=await sendCmd('yardGrab',{which:hit.id});
+  // 節日預覽（dev 下拉）也帶過去：愚人節預覽時，拿起來的那隻才會是百變怪
+  const fsel=document.getElementById('festsel');
+  const ga={which:hit.id,ds:yardSalt}; if(fsel&&fsel.value) ga.fest=fsel.value;
+  const r=await sendCmd('yardGrab',ga);
   // ⚠️ 等待期間就放開了（長壓剛好卡在請求來回之間）。這時 mouseup 早就走完了，
   //    再設 drag 的話那隻會在**沒按著滑鼠**的狀態下黏在游標上，滑出畫布就消失，
   //    而且伺服器那邊一直是 held → 合成時被略過 → 看起來就是「被拎起來就不見了」。
@@ -2998,7 +3024,9 @@ const server = http.createServer((req, res) => {
             const out   = plaza.composeYard(core, ranch, st, step,
                                             { caches: yardCaches, react: yardReactMap(alive),
                                               layout: zoneLayout,
-                                              acc: fest && festOpt.costume ? fest.acc : null });
+                                              acc: fest && festOpt.costume ? fest.acc : null,
+                                              swap: fest && festOpt.costume ? fest.swap || null : null,
+                                              swapSalt: new URL(req.url, 'http://x').searchParams.get('ds') || null });
             // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -3084,6 +3112,7 @@ const server = http.createServer((req, res) => {
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
                     battle: !!m.battle,
                     acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
+                    swap: fest && m.costume !== false ? fest.swap || null : null,
                     ...(happy(m) || {}),
                 }));
                 const step = plazaClient.step();

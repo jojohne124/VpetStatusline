@@ -56,6 +56,16 @@ ok(id(at(2027, 4, 5)) === 'qingming' && id(at(2027, 4, 6, 23, 0)) === 'qingming'
 ok(id(at(2027, 4, 3)) === 'children', '清明前面那週還是兒童節');
 ok(id(at(2028, 4, 4)) === 'qingming' && id(at(2028, 4, 3)) === 'children', '2028 清明跟兒童節同一天 → 當天清明、前一天兒童節');
 ok(FEST.active(0, 'qingming').acc === null, '清明不換造型');
+// 愚人節：只有 4/1 當天（前一天、隔天都是兒童節的前一週），不換配件、改換角色
+ok(id(at(2027, 4, 1)) === 'aprilfool' && id(at(2027, 4, 1, 23, 59)) === 'aprilfool', '4/1 當天要是愚人節（蓋過兒童節的前一週）');
+ok(id(at(2027, 3, 31, 23, 59)) === 'children' && id(at(2027, 4, 2)) === 'children', '愚人節只有 4/1 當天（3/31、4/2 是兒童節）');
+ok(FEST.active(0, 'aprilfool').acc === null && FEST.active(0, 'aprilfool').swap === 'ditto', '愚人節不戴配件、全部換成百變怪');
+{
+    const keys = Array.from({ length: 4000 }, (_, i) => 'p:' + i);
+    const shiny = keys.filter(k => FEST.swapChar('ditto', k) === 'ditto_shining').length;
+    ok(keys.every(k => /^ditto(_shining)?$/.test(FEST.swapChar('ditto', k))), 'swapChar 只能換成 ditto / ditto_shining');
+    ok(Math.abs(shiny / keys.length - 0.2) < 0.03, `變色版機率應該約 20%（實際 ${(shiny / keys.length * 100).toFixed(1)}%）`);
+}
 ok(id(at(2027, 6, 9)) === 'dragonboat' && id(at(2027, 8, 8)) === 'qixi' && id(at(2027, 9, 15)) === 'midautumn', '2027 端午／七夕／中秋');
 ok(id(at(2029, 2, 14, 12)) === 'valentine' && id(at(2029, 2, 15)) === 'lunarny', '2029 情人節是初二：正日當天情人節贏，隔天回春節');
 ok(id(at(2028, 10, 3)) === 'midautumn' && id(at(2028, 10, 4)) === 'doubleten', '2028 中秋（10/3）跟雙十期間重疊：當天中秋、隔天雙十');
@@ -168,6 +178,58 @@ else {
     const noAcc = P.composePlaza(core, occ(null), 0, { npc: false, field: F, textLabels: false, acc: 'flag' });
     ok(count(noAcc) === count(plain), '個人 acc=null（不給看）應該蓋過整場的配件');
     ok(hat.tags[0].top < plain.tags[0].top, '戴帽子之後頭頂（對話泡泡的位置）應該往上');
+}
+
+console.log('— 愚人節換角色 —');
+const hasDitto = (() => { try { const a = P.loadArt(core, 'ditto'), b = P.loadArt(core, 'ditto_shining'); return a && b && !a.shadow && !b.shadow; } catch (e) { return false; } })();
+ok(hasDitto, '安裝版讀不到 ditto / ditto_shining 的美術（會退回黑影）');
+if (hasDitto && hasArt) {
+    const F = P.PLAZA_LIVE_FIELD;
+    const one = (key, char, swap) => [{ key, code: 'AA', char, seed: 1, joinStep: 0,
+                                        origin: { x: 30, y: 30 }, anchor: { x: 30, y: 30 }, swap }];
+    const lines = (o, opts = {}) => P.composePlaza(core, o, 0, { npc: false, field: F, textLabels: false, ...opts }).lines.join('\n');
+    const ks = Array.from({ length: 50 }, (_, i) => 'k' + i);
+    const kN = ks.find(k => FEST.swapChar('ditto', k) === 'ditto');
+    const kS = ks.find(k => FEST.swapChar('ditto', k) === 'ditto_shining');
+    ok(lines(one(kN, 'agumon')) !== lines(one(kN, 'ditto')), '（探針）亞古獸跟百變怪要畫得不一樣，下面幾條才有意義');
+    ok(lines(one(kN, 'agumon', 'ditto')) === lines(one(kN, 'ditto')), '個人 swap=ditto 時應該畫成百變怪');
+    ok(lines(one(kS, 'agumon', 'ditto')) === lines(one(kS, 'ditto_shining')), '抽到變色版的那隻應該畫成變色百變怪');
+    ok(lines(one(kN, 'agumon', undefined), { swap: 'ditto' }) === lines(one(kN, 'ditto')), '整場 opts.swap（營地）時應該換成百變怪');
+    ok(lines(one(kN, 'agumon', null), { swap: 'ditto' }) === lines(one(kN, 'agumon')), '個人 swap=null（不給看）應該蓋過整場');
+    // 營地：swapSalt（每次進營地換一個）要真的參與抽籤 → 同一隻換個 salt 結果會變
+    const kSalt = ks.find(k => FEST.swapChar('ditto', k + '|a') === 'ditto_shining' && FEST.swapChar('ditto', k + '|b') === 'ditto');
+    ok(lines(one(kSalt, 'agumon', undefined), { swap: 'ditto', swapSalt: 'a' }) === lines(one(kSalt, 'ditto_shining'))
+       && lines(one(kSalt, 'agumon', undefined), { swap: 'ditto', swapSalt: 'b' }) === lines(one(kSalt, 'ditto')),
+       '營地的 swapSalt 沒有參與抽變色版（進出營地不會重抽）');
+    // 拿在手上的那隻（前端畫）也要換，而且跟合成時同一隻（同一個 key、同一個 salt）
+    // 挑一隻 salt=s1 會抽到變色版、不帶 salt／裸 id 是普通版的：key 或 salt 接錯才抓得到
+    const ranchOf = (k) => ({ pets: [{ id: k, state: { characterId: 'agumon' } }] });
+    const occKey = (k) => P.yardOccupants(core, ranchOf(k), null, null, null, core)[0].key;   // 合成時用的 key
+    const rid = ks.find(k => FEST.swapChar('ditto', occKey(k) + '|s1') === 'ditto_shining'
+                          && FEST.swapChar('ditto', k) === 'ditto' && FEST.swapChar('ditto', occKey(k)) === 'ditto');
+    const ranch = ranchOf(rid);
+    const g0 = P.yardSpriteFor(core, ranch, rid, 0, {});
+    const g1 = P.yardSpriteFor(core, ranch, rid, 0, { swap: 'ditto', swapSalt: 's1' });
+    const want = P.spriteDots(core, 'ditto_shining', 0, g1.facing, null);
+    ok(JSON.stringify(g1.frames[0]) === JSON.stringify(want) && JSON.stringify(g0.frames[0]) !== JSON.stringify(want),
+       '營地拿起來的那隻沒有換成百變怪（或跟畫面上不是同一隻）');
+}
+
+// daemon 有把換角色接到三個出口：營地合成、廣場每個人、營地拿起來那隻（都跟著節慶造型開關）
+{
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
+    ok(/swapSalt: args\.ds \|\| null,/.test(src) && /const ga=\{which:hit\.id,ds:yardSalt\}/.test(src), '營地拿起來的那隻沒帶進場亂數（拿起來會變另一隻）');
+    ok(/qs\.push\('ds='\+yardSalt\);/.test(src), '營地畫面沒有把進場亂數送給 /yard');
+    ok(/if\(v==='yard' && view!=='yard'\) yardSalt=Math\.random\(\)/.test(src), '切進營地沒有重抽進場亂數');
+    // 廣場對戰：打架的本體換成廣場上那隻（p:<id>），CutIn 不換
+    ok(/FEST\.swapChar\(f\.swap, 'p:' \+ m\.id\)/.test(src) && /'p:' \+ m\.id, code: m\.name/.test(src), '廣場對戰的百變怪跟廣場上看到的不是同一個 key');
+    ok(/const sw = inPlaza \? plazaBattleSwap\(\) : null;/.test(src)
+       && /if \(swMe\)  \{ meArt = swMe\.a; meRightOffset = swMe\.off; \}/.test(src)
+       && /if \(swOpp\) \{ enemyArt = swOpp\.a; enemyRightOffset = swOpp\.off; \}/.test(src), '廣場對戰沒有把打架的換成百變怪');
+    ok(!/CutInArt\s*=\s*sw/.test(src), '廣場對戰的 CutIn 應該照原圖');
+    ok(/swap: fest && m\.costume !== false \? fest\.swap \|\| null : null,/.test(src), '廣場每個人沒有帶 swap（或沒跟著本人的開關）');
+    ok(/swap: \(\(\) => \{ const f = festNow\(Date\.now\(\), args\.fest\); return f && readFest\(\)\.costume \? f\.swap \|\| null : null; \}\)\(\),/.test(src), '營地拿起來的那隻沒有帶 swap');
 }
 
 console.log(`\n結果：${pass} passed, ${fail} failed`);

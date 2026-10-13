@@ -39,6 +39,9 @@ const FESTIVALS = [
     { id: 'lunarny',    name: '春節',   lunar: true, acc: 'chun', after: 4 },
     { id: 'lantern',    name: '元宵',   lunar: true, acc: 'lantern' },
     { id: 'valentine',  name: '情人節', month: 2,  day: 14, acc: 'heart' },
+    // 愚人節：只有當天。背景照平日（沒有節日背景），營地／廣場的角色全部變成百變怪
+    //（見 swapChar）。4/1 落在兒童節的前一週裡 → 當天優先規則讓愚人節贏
+    { id: 'aprilfool',  name: '愚人節', month: 4,  day: 1,  acc: null, swap: 'ditto', lead: 0 },
     // 清明：掃墓的日子，不換造型，背景低調（毛毛雨＋柳枝）。只有當天和隔天 ——
     // 前一週都是兒童節；2028 兩個同一天，列在前面的清明贏（見 active 的平手規則）
     { id: 'qingming',   name: '清明',   lunar: true, acc: null, lead: 0, after: 1 },
@@ -280,4 +283,20 @@ function dress(dots, acc, facing) {
     return { dots: out, ox: -PAD, oy: -PAD };
 }
 
-module.exports = { FESTIVALS, LEAD_DAYS, LUNAR, ACC, active, windowOf, dress, bbox, HAT, FLAG, PAL };
+// ── 換角色（愚人節）─────────────────────────────────────────────────
+// 每一隻換成 base，SHINY_RATE 的機率換成 base + '_shining'。
+// 用 key 雜湊決定，不擲骰 → 同一個 key 永遠同一個結果、每個 client 算出來一樣。
+// 「進出一次抽一次」靠 key 本身每次進場都換：
+//   廣場 'p:<成員 id>'：成員 id 是伺服器每次 join 新發的
+//   營地 'ranch:<id>|<進場亂數>'：前端每次切進營地產一個新的（見 setView 的 yardSalt）
+const SHINY_RATE = 0.2;
+function swapChar(base, key) {
+    const s = String(key);
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0;   // 打散低位：key 只差最後一碼時也要分得開
+    h = (h ^ (h >>> 13)) >>> 0;
+    return (h % 1000) < SHINY_RATE * 1000 ? base + '_shining' : base;
+}
+
+module.exports = { FESTIVALS, LEAD_DAYS, LUNAR, ACC, SHINY_RATE, active, windowOf, swapChar, dress, bbox, HAT, FLAG, PAL };

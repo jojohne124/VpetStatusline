@@ -85,13 +85,15 @@ function renderProbe(js, html, daemonSrc) {
         getContext: () => ctx2d(),
         getBoundingClientRect: () => ({ left: 0, top: 0, width: 416, height: 320 }),
         addEventListener() {}, appendChild() {}, append() {}, contains: () => false, querySelectorAll: () => [],
+        querySelector: () => el(),
     });
     let raf = null;
     const g = {
         // createElement：天氣層用暫存畫布（光柱／雲加濃蓋在角色身上），畫的東西一樣記進 calls
-        document: { getElementById: () => el(), createElement: () => el(), querySelectorAll: () => [], addEventListener() {}, body: el() },
+        document: { getElementById: () => el(), createElement: () => el(), querySelectorAll: () => [], querySelector: () => el(), addEventListener() {}, body: el(),
+                    documentElement: { clientWidth: 1200, clientHeight: 800 } },
         requestAnimationFrame: (f) => { raf = f; return 1; },
-        setInterval: () => 0, setTimeout: () => 0, clearTimeout() {},
+        setInterval: () => 1, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
         fetch: () => new Promise(() => {}),
         innerWidth: 1200, innerHeight: 800, confirm: () => false, console,
         // 頁面會在 window 上掛 mousemove / mouseup（長壓拖曳要追到畫布外面）。
@@ -120,6 +122,8 @@ function renderProbe(js, html, daemonSrc) {
                    + 'fest:(id,bg)=>{festState.id=id;festState.bg=bg;},'
                    // 常駐背景（營地草地、辦公室）也畫在同一個幀迴圈：測天氣／拎起時先關掉，不然算到它的 fillRect
                    + 'noScene:()=>{sceneDraw=function(){};},outdoor:(v)=>{plazaOutdoor=v;},'
+                   // 教學：問號模式的點擊攔截（假事件丟進 helpCatch，看有沒有被攔、模式怎麼變）
+                   + 'help:{set:(m)=>helpSet(m),mode:()=>helpMode,catch:(e)=>helpCatch(e),tip:(el)=>helpTip(el),HELP,TUTOR},'
                    + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH,LONGPRESS_MS}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
@@ -138,6 +142,57 @@ function renderProbe(js, html, daemonSrc) {
         g.__p.outdoor(true);
         ok((frame('plaza', 'rain').lineTo || 0) > 0, '辦公室室外沒有天氣層');
         g.__p.outdoor(false);
+    }
+    // ── 教學：問號模式要把點擊攔下來（docs/tutorial-spec.md）──
+    // 想問「重抽」是什麼，不能真的重抽下去：click、mousedown 都要在捕獲階段擋掉。
+    console.log('— 教學：問號模式攔點擊 —');
+    {
+        const H = g.__p.help;
+        const helpEl = (key) => ({ dataset: { help: key }, getBoundingClientRect: () => ({ left: 10, top: 10, right: 90, bottom: 40, width: 80, height: 30 }), classList: { add() {}, remove() {} } });
+        const tgt = (key, isBtn) => ({ closest: (sel) => sel === '#helpbtn' ? (isBtn ? {} : null) : (key ? helpEl(key) : null) });
+        const fire = (type, target) => { const e = { type, target, prevented: false, stopped: false,
+            preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } }; H.catch(e); return e; };
+        H.set(0);
+        const e0 = fire('click', tgt('card'));
+        ok(!e0.prevented && !e0.stopped, '沒開問號模式，點擊卻被攔了（所有按鈕都會失靈）');
+        H.set(1);
+        const md = fire('mousedown', tgt('stage'));
+        ok(md.prevented && md.stopped && H.mode() === 1, '問號模式下 mousedown 沒攔（長壓拎起、下拉選單會照樣觸發）');
+        const nb = fire('click', tgt(null));
+        ok(nb.prevented && nb.stopped && H.mode() === 1, '問號模式下點到沒說明的地方，應該攔下來並留在問號模式');
+        const bb = fire('click', tgt(null, true));
+        ok(!bb.prevented && H.mode() === 1, '問號模式下按 ? 鈕被攔了（應該交給它自己離開）');
+        const c1 = fire('click', tgt('reset'));
+        ok(c1.prevented && c1.stopped, '問號模式下點「重抽」沒有攔下來 —— 會真的重抽');
+        ok(H.mode() === 2, '問號模式下點有說明的地方，沒有進入講解');
+        fire('click', tgt('reset'));           // 還在打字 → 先一次顯示完
+        ok(H.mode() === 2, '老師還在打字時點一下就關了（應該先顯示完整段）');
+        H.set(1);
+        const cm = fire('contextmenu', tgt('stage'));
+        ok(cm.prevented && H.mode() === 0, '問號模式下按右鍵沒有離開（或右鍵選單照樣跳出來）');
+        // 舞台在不同畫面講不同的事
+        g.__p.view('yard');
+        ok(H.tip(helpEl('stage')).t === H.HELP.stage.by.yard.t, '營地的舞台說明沒有依畫面換');
+        g.__p.view('home');
+        ok(H.tip(helpEl('stage')).t === H.HELP.stage.by.home.t, '前線的舞台說明沒有依畫面換');
+        // 窄視窗＋捲軸：innerWidth 含捲軸、clientWidth 不含。框要照 clientWidth 放，不然右邊被切掉（回報過）
+        {
+            const doc = g.document, keep = doc.getElementById, memo = {};
+            doc.documentElement = { clientWidth: 400, clientHeight: 700 };
+            // 框的寬度要跟著 style.width 走（真的瀏覽器就是這樣），才量得出放不放得下
+            const mk = (id) => { const e = keep(); if (id === 'helpbox') { Object.defineProperty(e, 'offsetWidth', { get() { return parseInt(e.style.width, 10) || 420; } }); e.offsetHeight = 120; } return e; };
+            doc.getElementById = (id) => memo[id] || (memo[id] = mk(id));
+            H.set(1);
+            const far = { dataset: { help: 'plaza' }, getBoundingClientRect: () => ({ left: 300, top: 200, right: 380, bottom: 230, width: 80, height: 30 }), classList: { add() {}, remove() {} } };
+            H.catch({ type: 'click', target: { closest: (sel) => sel === '#helpbtn' ? null : far }, preventDefault() {}, stopImmediatePropagation() {} });
+            const st = memo.helpbox.style, right = parseInt(st.left, 10) + parseInt(st.width, 10);
+            ok(right <= 400, '窄視窗有捲軸時，教學對話框右邊超出可視範圍（右緣 ' + right + ' > 400）');
+            doc.getElementById = keep; doc.documentElement = { clientWidth: 1200, clientHeight: 800 }; H.set(0);
+        }
+        ok(Array.isArray(H.TUTOR) && H.TUTOR.length === 2 && H.TUTOR[0].length === 16 && H.TUTOR[0][0].length === 16
+           && H.TUTOR[0].flat().some(Boolean) && JSON.stringify(H.TUTOR[0]) !== JSON.stringify(H.TUTOR[1]),
+           '教學老師的兩幀沒送到頁面（或是空的、兩幀一樣）');
+        H.set(0);
     }
     g.__p.noScene();
     g.__p.view('yard');
@@ -561,8 +616,32 @@ setTimeout(async () => {
         // daemon 資訊顯示／隱藏：進階區一列（release 也有），隱藏 → body 掛 noinfo 把 tick 那塊藏起來
         {
             ok(/body\.noinfo #info\{display:none!important\}/.test(html), '隱藏 daemon 資訊的 CSS 不在');
-            ok(/<div class="panel" id="info">\s*<div>daemon tick：/.test(html), 'daemon tick 那塊沒有 id="info"');
-            ok(/<details id="adv">[\s\S]*?id="infoui"[\s\S]*?data-on="1">顯示<[\s\S]*?data-on="0">隱藏<[\s\S]*?<\/details>/.test(html), '進階區沒有 daemon 資訊 顯示／隱藏');
+            // ── 教學：頁面上的代號跟說明表要一一對上（docs/tutorial-spec.md）──
+            {
+                const HT = require('../src/daemon/help-tips.js');
+                const used = new Set([...html.matchAll(/data-help="([^"]+)"/g)].map(m => m[1]));
+                const miss = [...used].filter(k => !HT.TIPS[k]);
+                ok(!miss.length, '頁面上有代號沒寫說明：' + miss.join(', '));
+                const orphan = Object.keys(HT.TIPS).filter(k => !used.has(k));
+                ok(!orphan.length, '說明表裡有沒人用的條目（元素改名或拿掉了？）：' + orphan.join(', '));
+                // dev 條目 ⇔ 元素在 dev 區塊：開頭標籤有 devonly，或緊接著就有 devtag
+                for (const m of html.matchAll(/<[a-z]+ ([^>]*)data-help="([^"]+)"([^>]*)>/g)) {
+                    const tag = m[0], key = m[2], tip = HT.TIPS[key]; if (!tip) continue;
+                    const after = html.slice(m.index, m.index + tag.length + 160);
+                    const isDev = /devonly/.test(tag) || /class="devtag"/.test(after.slice(0, after.indexOf('data-help', tag.length) > 0 ? after.indexOf('data-help', tag.length) : after.length));
+                    ok(!!tip.dev === isDev, '說明 ' + key + ' 的 dev 標記跟元素對不上（release 會' + (isDev ? '多帶 dev 說明' : '少了這條說明') + '）');
+                }
+                const rel = HT.tipsFor(true), devAll = HT.tipsFor(false);
+                ok(Object.values(rel).every(t => !t.dev) && Object.keys(devAll).length === Object.keys(HT.TIPS).length
+                   && Object.keys(rel).length < Object.keys(devAll).length, 'release 的說明表沒有拿掉 dev 條目');
+                ok(/const HELP=\$\{JSON\.stringify\(HELP\.tipsFor\(IS_RELEASE\)\)\};/.test(require('fs').readFileSync(
+                    path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8')), '頁面帶的說明表沒有依 release 過濾');
+                ok(/<button id="helpbtn"/.test(html), '沒有 ? 鈕');
+                ok(/document\.querySelectorAll\('#controls button\[data-cmd\]'\)\.forEach\(b=>b\.addEventListener\('click'/.test(html),
+                   '#controls 的指令鈕沒限定 data-cmd：按 ? 或「有新版本」會多送一個空指令');
+            }
+            ok(/<div class="panel" id="info"(?: data-help="[^"]*")?>\s*<div>daemon tick：/.test(html), 'daemon tick 那塊沒有 id="info"');
+            ok(/<details id="adv"(?: data-help="[^"]*")?>[\s\S]*?id="infoui"[\s\S]*?data-on="1">顯示<[\s\S]*?data-on="0">隱藏<[\s\S]*?<\/details>/.test(html), '進階區沒有 daemon 資訊 顯示／隱藏');
             ok(/:not\(#infoui\)/.test(js), 'daemon 資訊列會被當成指令列（按了送出空指令）');
             const fnSrc = (js.match(/function setInfo\(on\)\{[\s\S]*?\n\}/) || [''])[0];
             let cls = null, saved = null;
@@ -585,7 +664,7 @@ setTimeout(async () => {
             ok(devRows.length >= 5 && devRows.every(r => /devonly|id="devui"/.test(r)), '進階區有 dev 列沒掛 devonly：' + devRows.filter(r => !/devonly|id="devui"/.test(r)).join(' | '));
             const devBtns = html.match(/<button data-cmd="[^"]*"[^>]*>[^<]*<span class="devtag">/g) || [];
             ok(devBtns.length >= 2 && devBtns.every(b => /class="devonly"/.test(b)), '主列有 dev 鈕沒掛 devonly');
-            ok(/<span class="devonly">\s*<label class="k">天氣預覽/.test(html) && /id="zonelayout"[\s\S]*?<\/label><\/span>/.test(html), '營地的預覽區沒包進 devonly');
+            ok(/<span class="devonly"(?: data-help="[^"]*")?>\s*<label class="k">天氣預覽/.test(html) && /id="zonelayout"[\s\S]*?<\/label><\/span>/.test(html), '營地的預覽區沒包進 devonly');
             // 實跑 setDevUi：off → body 掛 nodev、預覽歸回自動並觸發 change；on → 拿掉
             const fnSrc = (js.match(/function setDevUi\(on\)\{[\s\S]*?\n\}/) || [''])[0];
             const els = { wxsel: { value: 'rain' }, festsel: { value: 'halloween' }, wxcold: { checked: true },
@@ -940,8 +1019,8 @@ setTimeout(async () => {
         console.log('— 廣場（第 1 期）—');
         {
             // 前端：入口只在前線，離開鈕一開始藏著；幽靈對戰的入口拿掉了，名牌留著
-            ok(/data-cmd="plaza" data-scope="home"/.test(html), '前線沒有廣場按鈕');
-            ok(/data-cmd="plazaLeave" data-scope="plaza"[^>]*style="display:none"/.test(html),
+            ok(/data-cmd="plaza"(?: data-help="[^"]*")? data-scope="home"/.test(html), '前線沒有廣場按鈕');
+            ok(/data-cmd="plazaLeave"(?: data-help="[^"]*")? data-scope="plaza"[^>]*style="display:none"/.test(html),
                '「離開廣場」一開頁就露出來了（應該只在廣場裡出現）');
             ok(!/data-cmd="pvp"|data-cmd="pvp-setup"/.test(html), '幽靈對戰的入口還在網頁上');
             ok(/data-cmd="code"/.test(html), '名牌設定被一起拿掉了（它現在是廣場的名牌）');
@@ -1052,7 +1131,7 @@ setTimeout(async () => {
                 ok(/\n  festFloor\(g,ts,W,H,festState\.id\);/.test(sjs), '節日地板沒鋪（營地、廣場都要）');
                 // 營地：節日背景顯示中換成節日的地板，草地收起來（互斥）
                 ok(/if\(view==='yard'\) return festShown\(\) && festState\.hasBg \? '' : 'yard';/.test(sjs), '營地的節日地板跟草地沒有互斥');
-                ok(/<button id="plazaio" style="float:right"/.test(html), '室內／室外鈕沒有靠右');
+                ok(/<button id="plazaio"(?: data-help="[^"]*")? style="float:right"/.test(html), '室內／室外鈕沒有靠右');
                 const ff = (sjs.match(/function festFloor\([\s\S]*?\n\}/) || [''])[0];
                 const noFloor = require('../src/shared/festival.js').FESTIVALS.filter(f => f.bg !== false && !ff.includes("id==='" + f.id + "'")).map(f => f.id);
                 ok(ff && !noFloor.length, '這些節日沒有地板：' + noFloor.join(','));

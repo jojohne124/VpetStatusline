@@ -45,6 +45,7 @@ const WX    = require('../shared/weather.js');
 const FEST  = require('../shared/festival.js');   // 特殊節日（docs/festival-spec.md）
 const wxSrc = require('./weather-source.js');
 const PlazaClient = require('./plaza-client');
+const HELP  = require('./help-tips');      // 教學的說明表（docs/tutorial-spec.md）
 const PlazaServer = require('./plaza-server');   // 只拿常數（聊天字數上限），不在 daemon 裡起伺服器     // 廣場（docs/plaza-spec.md）：連內網主機的那一端
 
 const {
@@ -1172,6 +1173,24 @@ function packWind(dots) {
 }
 const WIND_ART = loadWindArt();
 
+// 教學老師（docs/tutorial-spec.md）：一般角色資料夾（characters/TerriermonAssistant，
+// 沒進 roster，玩家遇不到），拿 IDLE_1／IDLE_2 兩幀交替當講話。
+// 送成 16×16 的色碼（'' = 透明），前端畫進 16×16 的小畫布再放大，不走 dot 網格。
+// 讀不到（素材沒裝）就送 null：說明照樣出，只是沒有老師。
+const TUTOR_ID = 'terriermonassistant';
+function tutorFrames() {
+    try {
+        const { config, artFile } = core.loadCharacter(TUTOR_ID);
+        const art = JSON.parse(fs.readFileSync(artFile, 'utf8'));
+        const hex = (c, o) => c && c[o] >= 0 ? '#' + [c[o], c[o + 1], c[o + 2]].map(v => v.toString(16).padStart(2, '0')).join('') : '';
+        return ['IDLE_1', 'IDLE_2'].map(n => {
+            const f = art.frames[config.frames[n]], px = [];
+            for (const row of f) { px.push(row.map(c => hex(c, 0))); px.push(row.map(c => hex(c, 3))); }
+            return px;
+        });
+    } catch (e) { console.log('   ⚠️ 教學老師的素材讀不到（說明照常，只是沒有老師）：' + e.message); return null; }
+}
+
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>Vpet daemon</title>
 <style>
@@ -1336,28 +1355,47 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
               color:#c9d1d9;padding:6px 8px;border-radius:4px;font-size:12px;cursor:pointer}
   #ctx button:hover{background:#21262d}
   #ctx button.danger{color:#f85149}
+  /* 教學（docs/tutorial-spec.md）：? 鈕 → 問號模式（滑過的地方亮框）→ 點了壓黑＋老師講解 */
+  #helpbtn{width:24px;height:24px;padding:0;border-radius:50%;font-weight:700}
+  #helpbtn.on{background:#3b1f6b;border-color:#a371f7;color:#e9dcff}
+  body.helpmode, body.helpmode *{cursor:help !important}
+  .helphover{outline:2px dashed #a371f7 !important;outline-offset:2px}
+  #helptoast{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:9001;display:none;
+             background:#3b1f6b;border:1px solid #a371f7;color:#e9dcff;border-radius:16px;padding:4px 14px;font-size:12px;pointer-events:none}
+  #helpdim{position:fixed;inset:0;z-index:9000;display:none}
+  #helphole{position:fixed;border-radius:8px;outline:2px solid #a371f7;box-shadow:0 0 0 200vmax rgba(1,4,9,.74);pointer-events:none}
+  #helpbox{position:fixed;display:flex;gap:12px;align-items:flex-start;width:420px;box-sizing:border-box;
+           background:#161b22;border:1px solid #a371f7;border-radius:10px;padding:10px 12px;color:#c9d1d9;font-size:13px;line-height:1.6}
+  #helpcv{width:80px;height:80px;flex:none;image-rendering:pixelated;cursor:inherit}
+  #helpbox .who{font-size:11px;color:#a371f7}
+  #helpbox .hd{font-weight:700;color:#e6edf3;margin-bottom:2px}
+  #helpbox .ft{font-size:11px;color:#8b949e;margin-top:6px}
 </style></head><body>
 <div id="ctx"></div>
+<div id="helptoast">❓ 點想問的地方　（Esc 或右鍵離開）</div>
+<div id="helpdim"><div id="helphole"></div><div id="helpbox"><canvas id="helpcv" width="16" height="16"></canvas>
+  <div style="flex:1;min-width:0"><div class="who">🎓 Terriermon 老師</div><div class="hd"></div><div class="bd"></div><div class="ft">點任何地方關閉</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
-      <select id="jgsel" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
+      <select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
-      <button id="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
-      <label class="k" id="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
+      <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
+      <label class="k" id="festplaza" data-help="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
              title="關掉的話，大家看到的你就是平常的樣子"><input type="checkbox" id="festcos2">顯示節慶造型</label>
-      <label class="k" id="hudshow" style="display:none;align-items:center;gap:4px;font-size:12px"
+      <label class="k" id="hudshow" data-help="hudshow" style="display:none;align-items:center;gap:4px;font-size:12px"
              title="右上角的日期／時間／天氣"><input type="checkbox" id="hudcb" checked>顯示天氣日期</label>
+      <button id="helpbtn" title="教學：按了之後，點想問的地方">?</button>
       </span>
     </div>
     <div id="yardbar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
-      <span id="yardinfo">–</span>
+      <span id="yardinfo" data-help="yardinfo">–</span>
       <span class="k">（點一下摸摸、按右鍵開選單）</span>
-${IS_RELEASE ? '' : `<span class="devonly">
+${IS_RELEASE ? '' : `<span class="devonly" data-help="yarddev">
       <label class="k">天氣預覽 <span class="devtag">dev</span><select id="wxsel">
         <option value="">自動（實際天氣）</option>
         <option value="clear">晴</option>
@@ -1376,47 +1414,47 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
       <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label></span>`}
     </div>
     <div id="plazabar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
-      <button id="plazamode" title="自動：隨機散步／手動：WASD 或方向鍵移動">🚶 自動</button>
-      <button id="plazahappy" title="跳一下，大家都看得到">😄 開心</button>
-      <button id="plazaio" style="float:right" title="辦公室的室內／室外（只影響你自己的畫面）">🏢 室內</button>
-      <div id="plazainvite"></div>
-      <div class="form" style="margin-top:4px">
+      <button id="plazamode" data-help="plazamode" title="自動：隨機散步／手動：WASD 或方向鍵移動">🚶 自動</button>
+      <button id="plazahappy" data-help="plazahappy" title="跳一下，大家都看得到">😄 開心</button>
+      <button id="plazaio" data-help="plazaio" style="float:right" title="辦公室的室內／室外（只影響你自己的畫面）">🏢 室內</button>
+      <div id="plazainvite" data-help="plazainvite"></div>
+      <div class="form" data-help="plazaname" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
         <label class="k" title="名牌顏色">顏色 <input type="color" id="plazacolor" value="${plaza.NAME_DEFAULT_COLOR}"></label>
       </div>
-      <div id="chatlog"></div>
-      <div class="form" style="margin-top:4px;position:relative">
+      <div id="chatlog" data-help="chatlog"></div>
+      <div class="form" data-help="chat" style="margin-top:4px;position:relative">
         <button id="chatemoji" title="表情符號">😀</button><input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
         <div id="emojipick"></div>
       </div>
-${IS_RELEASE ? '' : `      <div class="form" id="plazadevrow" style="margin-top:4px">
+${IS_RELEASE ? '' : `      <div class="form" id="plazadevrow" data-help="plazadev" style="margin-top:4px">
         <label class="k" title="跟進階指令的「🛠 dev介面」是同一個開關"><input type="checkbox" id="plazadev"> dev 介面 <span class="devtag">dev</span></label>
         <label class="k devonly" title="只影響你自己的畫面">節日預覽 <span class="devtag">dev</span><select id="plazafestsel">
           <option value="">自動（依日期）</option>
 ${FEST.FESTIVALS.map(f => `          <option value="${f.id}">${f.name}</option>`).join('\n')}
         </select></label>
       </div>
-`}${IS_RELEASE ? '' : `      <div class="form devonly" id="plazaadmin" style="margin-top:4px">
+`}${IS_RELEASE ? '' : `      <div class="form devonly" id="plazaadmin" data-help="plazaadmin" style="margin-top:4px">
         <span class="lbl">🛡 管理 <span class="devtag">dev</span></span><select id="admwho"></select><button id="admkick">踢出</button>
         <button id="admclear">清空聊天</button>
       </div>`}
     </div>
     <div id="cmdmsg"></div>
-    <details id="adv"><summary>⚙ 進階指令</summary>
+    <details id="adv" data-help="adv"><summary>⚙ 進階指令</summary>
       ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
-                .map(f => `<div class="form${f.dev ? ' devonly' : ''}" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
+                .map(f => `<div class="form${f.dev ? ' devonly' : ''}" data-help="${f.action || f.buttons[0][0]}" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
         <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
         ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
         ${f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
                     : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
       </div>`).join('\n      ')}
-      <div class="form" id="infoui"><span class="lbl">📊 daemon 資訊</span>
+      <div class="form" id="infoui" data-help="infoui"><span class="lbl">📊 daemon 資訊</span>
         <button data-on="1">顯示</button><button data-on="0">隱藏</button></div>
-${IS_RELEASE ? '' : `      <div class="form" id="devui"><span class="lbl">🛠 dev介面 <span class="devtag">dev</span></span>
+${IS_RELEASE ? '' : `      <div class="form" id="devui" data-help="devui"><span class="lbl">🛠 dev介面 <span class="devtag">dev</span></span>
         <button data-on="1">on</button><button data-on="0">off</button></div>`}
     </details>
     <div id="cmdout"></div></div>
-  <div class="panel" id="info">
+  <div class="panel" id="info" data-help="info">
     <div>daemon tick：<span class="big" id="tick">–</span> <span class="badge" id="kind">–</span></div>
     <div class="k">（背景／切走這個分頁再回來，tick 仍持續跳 = 時鐘不依賴前景）</div>
     <div style="height:10px"></div>
@@ -3091,7 +3129,8 @@ async function sendCmd(action,args){
     return r;                        // 抓起來那次要拿回牠的點陣（見 startDrag）
   }catch(e){ flashCmdMsg('送出失敗：'+e.message,'#f85149'); return null; }
 }
-document.querySelectorAll('#controls button').forEach(b=>b.addEventListener('click',()=>{
+// 只綁有 data-cmd 的：? 鈕、🆕 有新版本也在 #controls 裡，綁到了會多送一個空指令（action 是 undefined）
+document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventListener('click',()=>{
   // 廣場：要連網路，回來成功才換畫面；失敗的理由（連不上、人滿、正在進化…）由 sendCmd 顯示
   // 能不能出門（進化中、戰鬥中、睡覺中）由伺服器端的 plazaBlocked 判，這裡不另寫一份。
   if(b.dataset.cmd==='plaza'){
@@ -3419,6 +3458,90 @@ setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Dat
 //
 // 用自己排下一次而不是 setInterval：/yard 偶爾比間隔慢時，setInterval 會讓請求疊在
 // 一起，畫面反而更頓。
+// ── 教學（docs/tutorial-spec.md）────────────────────────────────────
+// ? 鈕 → 問號模式（helpMode 1）：滑鼠變問號、滑過有說明的地方亮虛線框，點了 →
+// 講解（helpMode 2）：其餘壓黑、只留那一塊，Terriermon 老師逐字講。點任何地方關閉、回到平常。
+// 問號模式下的點擊**一律在捕獲階段攔下來**（preventDefault + stopImmediatePropagation）：
+// 想問「重抽」是什麼，不能真的重抽下去。mousedown 也要攔 —— 長壓拎起、下拉選單都從 mousedown 開始。
+// 說明文字在 help-tips.js（release 不帶 dev 條目），元素只標 data-help 代號。
+const HELP=${JSON.stringify(HELP.tipsFor(IS_RELEASE))};
+const TUTOR=${JSON.stringify(tutorFrames())};
+const HELP_TYPE_MS=28, HELP_ANIM_MS=375, HELP_BOX_W=420;   // 逐字速度、老師兩幀交替的間隔（半拍）
+let helpMode=0, helpHover=null, helpAnim=null, helpType=null, helpText='';
+function helpTarget(t){ const el=t&&t.closest&&t.closest('[data-help]'); return el&&HELP[el.dataset.help] ? el : null; }
+// 同一個元素在不同畫面意思不一樣（舞台）：by 依畫面挑
+function helpTip(el){ const t=HELP[el.dataset.help]; return t.by ? (t.by[view]||t.by.home) : t; }
+function helpHoverSet(el){
+  if(helpHover) helpHover.classList.remove('helphover');
+  helpHover=el; if(el) el.classList.add('helphover');
+}
+function helpSet(m){
+  helpMode=m;
+  document.body.classList.toggle('helpmode', m===1);
+  document.getElementById('helpbtn').classList.toggle('on', m>0);
+  document.getElementById('helptoast').style.display = m===1 ? 'block' : 'none';
+  if(m!==1) helpHoverSet(null);
+  if(m!==2){
+    document.getElementById('helpdim').style.display='none';
+    clearInterval(helpAnim); clearInterval(helpType); helpAnim=helpType=null;
+  }
+  if(m===1 && typeof closeCtx==='function') closeCtx();   // 右鍵選單開著的話先收掉
+}
+function helpDrawTutor(i){
+  const cv=document.getElementById('helpcv'), g=cv.getContext('2d');
+  g.clearRect(0,0,16,16);
+  if(!TUTOR) return;
+  const f=TUTOR[i%TUTOR.length];
+  for(let y=0;y<f.length;y++) for(let x=0;x<f[y].length;x++) if(f[y][x]){ g.fillStyle=f[y][x]; g.fillRect(x,y,1,1); }
+}
+function helpTypeDone(){ clearInterval(helpType); helpType=null; document.querySelector('#helpbox .bd').textContent=helpText; }
+function helpShow(el){
+  const tip=helpTip(el);
+  helpSet(2);
+  const r=el.getBoundingClientRect(), pad=4;
+  const hole=document.getElementById('helphole');
+  hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
+  hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
+  document.getElementById('helpdim').style.display='block';
+  // 對話框：先放整段文字量好高度再定位（逐字打的時候框才不會一直長高、跳位置）
+  const box=document.getElementById('helpbox'), bd=box.querySelector('.bd');
+  box.querySelector('.hd').textContent=tip.t;
+  helpText=tip.d; bd.style.minHeight=''; bd.textContent=helpText;
+  document.getElementById('helpcv').style.display = TUTOR ? '' : 'none';
+  // 可視範圍用 clientWidth／clientHeight：innerWidth、100vw 都含捲軸，窄視窗有捲軸時框右邊會被切掉（回報過）
+  const W=document.documentElement.clientWidth||innerWidth, H=document.documentElement.clientHeight||innerHeight;
+  box.style.width=Math.min(HELP_BOX_W, W-24)+'px';
+  const bw=box.offsetWidth, bh=box.offsetHeight, gap=10;
+  // 放目標下面；放不下就上面；都放不下（目標很高，例如舞台）就貼視窗底部
+  let top = r.bottom+pad+gap+bh<=H ? r.bottom+pad+gap : r.top-pad-gap-bh>=0 ? r.top-pad-gap-bh : H-bh-12;
+  const left=Math.max(12, Math.min(W-bw-12, r.left));
+  box.style.left=left+'px'; box.style.top=Math.max(12,top)+'px';
+  bd.style.minHeight=bd.offsetHeight+'px'; bd.textContent='';
+  let n=0;
+  helpType=setInterval(()=>{ n++; bd.textContent=helpText.slice(0,n); if(n>=helpText.length) helpTypeDone(); }, HELP_TYPE_MS);
+  let f=0; helpDrawTutor(0);
+  helpAnim=setInterval(()=>{ f^=1; helpDrawTutor(f); }, HELP_ANIM_MS);
+}
+function helpCatch(ev){
+  if(!helpMode) return;
+  const onBtn = !!(ev.target&&ev.target.closest&&ev.target.closest('#helpbtn'));
+  // 問號模式下按 ? 鈕＝離開：交給它自己的 click（只放行左鍵那一串）
+  if(helpMode===1 && onBtn && ev.type!=='contextmenu') return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  if(ev.type==='contextmenu'){ helpSet(0); return; }
+  if(ev.type!=='click') return;
+  if(helpMode===2){ if(helpType) helpTypeDone(); else helpSet(0); return; }   // 還在打字：先一次顯示完
+  const el=helpTarget(ev.target);
+  if(el) helpShow(el);   // 點到沒說明的地方：留在問號模式，什麼都不做
+}
+['pointerdown','mousedown','mouseup','click','dblclick','auxclick','contextmenu','touchstart']
+  .forEach(t=>window.addEventListener(t, helpCatch, true));
+window.addEventListener('mouseover', ev=>{ if(helpMode===1) helpHoverSet(helpTarget(ev.target)); }, true);
+window.addEventListener('keydown', ev=>{
+  if(helpMode && ev.key==='Escape'){ ev.preventDefault(); ev.stopImmediatePropagation(); helpSet(0); }
+}, true);
+document.getElementById('helpbtn').addEventListener('click', ()=>helpSet(helpMode ? 0 : 1));
+
 const POLL_MS={home:500,yard:${YT.POLL_MS},plaza:250};   // 廣場：一拍 750ms，輪詢要比一拍密才不會跳格
 (function pollLoop(){ poll().finally(()=>setTimeout(pollLoop, POLL_MS[view]||500)); })();
 </script></body></html>`;

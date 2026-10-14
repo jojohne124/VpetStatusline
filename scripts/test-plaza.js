@@ -904,5 +904,35 @@ if (hasArt) {
     ok(/battle: !!m\.battle,\s*react: m\.battle \? 'BATTLE' : undefined,[^\n]*\n[\s\S]{0,400}\.\.\.\(happy\(m\) \|\| \{\}\)/.test(src), '廣場沒有把對戰中的人標成 BATTLE（或開心鈕被它蓋掉）');
 }
 
+console.log('— 角色 config.json 讀取快取（DLP 掛標的檔每次 open ~170ms，營地會卡）—');
+{
+    // core 複製到暫存資料夾，旁邊放假的 assets：不碰安裝版
+    const fs = require('fs'), os = require('os');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-cfgcache-'));
+    try {
+        fs.copyFileSync(path.join(__dirname, '..', 'src', 'runtime', 'agumon-core.js'), path.join(tmp, 'agumon-core.js'));
+        const cf = path.join(tmp, 'assets', 'foomon', 'config.json');
+        fs.mkdirSync(path.dirname(cf), { recursive: true });
+        fs.writeFileSync(cf, JSON.stringify({ name: 'Foomon', stage: 'Adult', power: 42 }));
+        const C = require(path.join(tmp, 'agumon-core.js'));
+        let reads = 0; const orig = fs.readFileSync;
+        fs.readFileSync = function (f, ...a) { if (String(f).endsWith('config.json')) reads++; return orig.call(this, f, ...a); };
+        try {
+            const all = () => [C.getDisplayName('foomon'), C.getCharacterStage('foomon'), C.getCharacterPower('foomon')].join('|');
+            ok(all() === 'Foomon|Adult|42', '讀出來的名字／階級／戰力不對');
+            for (let i = 0; i < 5; i++) all();
+            ok(reads === 1, `同一隻的 config.json 讀了 ${reads} 次（應該只開一次檔，其餘走快取）`);
+            // 檔案改了（編輯器存檔）→ 要重讀
+            fs.writeFileSync(cf, JSON.stringify({ name: 'Foomon', stage: 'Perfect', power: 99 }));
+            fs.utimesSync(cf, new Date(), new Date(Date.now() + 5000));
+            ok(all() === 'Foomon|Perfect|99', 'config.json 改了，快取沒有跟著換');
+            // loadCharacter 交出去的是 clone，呼叫端改了不能汙染快取
+            C.loadCharacter('foomon').config.stage = 'Child';
+            ok(C.getCharacterStage('foomon') === 'Perfect', 'loadCharacter 交出去的 config 被改到，快取跟著壞');
+            ok(C.getCharacterStage('nomon') === 'UnStage', '不存在的角色應該回 UnStage');
+        } finally { fs.readFileSync = orig; }
+    } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {} }
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));
 process.exit(fail ? 1 : 0);

@@ -1138,9 +1138,25 @@ const BATTLE_SAFETY    = 30;                                           // 殘留
 
 const safeF = (F, name, fallback = 0) => F[name] ?? fallback;
 
+// 角色 config.json 的讀取快取（stat 比對 mtime＋大小，檔案改了就重讀）。
+// 為什麼要快取：公司的端點 DLP 會在某些檔案掛標記（NTFS 的 sec.endpointdlp 串流），
+// 被標的檔每次 open 都要等 DLP 掃 ~170ms，stat 不受影響。營地的 /yard 每隻要讀好幾次
+// （名字、階級、戰力…），碰到一隻被標的就整個請求卡半秒以上 —— 點擊、切進營地都延遲。
+// 回傳的物件是共用的，呼叫端只能讀不能改（要改的人自己 clone，見 loadCharacter）。
+const _charCfgCache = new Map();
+function readCharConfig(name) {
+    const f  = path.join(ASSETS_DIR, name, 'config.json');
+    const st = fs.statSync(f);   // 不存在就丟出去，跟原本 readFileSync 的行為一樣
+    const hit = _charCfgCache.get(f);
+    if (hit && hit.m === st.mtimeMs && hit.s === st.size) return hit.c;
+    const c = JSON.parse(fs.readFileSync(f, 'utf8'));
+    _charCfgCache.set(f, { m: st.mtimeMs, s: st.size, c });
+    return c;
+}
+
 function getCharacterStage(name) {
     try {
-        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        const config = readCharConfig(name);
         return config.stage ?? 'UnStage';
     } catch(e) { return 'UnStage'; }
 }
@@ -1188,7 +1204,7 @@ const prettyName = (s) => String(s).replace(/_/g, ' ');
 function getDisplayName(name) {
     if (!name) return '';
     try {
-        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        const config = readCharConfig(name);
         if (typeof config.name === 'string' && config.name && config.name.toLowerCase() === String(name).toLowerCase()) {
             return prettyName(config.name);   // 只在「確實是同一角色」時採用，避免 name 被亂填時張冠李戴
         }
@@ -1200,7 +1216,7 @@ function getDisplayName(name) {
 function getCharacterTags(name) {
     if (!name) return [];
     try {
-        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        const config = readCharConfig(name);
         return Array.isArray(config.tags) ? config.tags : [];
     } catch(e) { return []; }
 }
@@ -1208,7 +1224,7 @@ function getCharacterTags(name) {
 // 角色基礎 power（config.power）；未填預設 10，使用者填好實際值
 function getCharacterPower(name) {
     try {
-        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        const config = readCharConfig(name);
         return typeof config.power === 'number' ? config.power : 10;
     } catch(e) { return 10; }
 }
@@ -1229,7 +1245,7 @@ function getBasePower(st, charId) {
 function getCharacterEvolvePower(name) {
     if (!name) return null;
     try {
-        const config = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, name, 'config.json'), 'utf8'));
+        const config = readCharConfig(name);
         return typeof config.evolvePower === 'number' ? config.evolvePower : null;
     } catch(e) { return null; }
 }
@@ -1362,7 +1378,7 @@ function pickBattleVersion(myId, enemyId) {
 // ── 進化歷史（evoHistory）─────────────────────────────────────────
 // 記錄桌寵「真正走過」的進化鏈（Child→…→當前），給 vpet tree 展示用。
 function _readConfig(charId) {
-    try { return JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, charId, 'config.json'), 'utf8')); }
+    try { return readCharConfig(charId); }
     catch(e) { return null; }
 }
 // from 的 evolvesTo 是否包含 to（= from 自然進化得到 to）
@@ -1985,7 +2001,8 @@ function composeOutput(statusLines, agumonLines, aguCol) {
 // ── 從 agumon-assets/<name>/ 載入角色定義 ────────────────────────
 function loadCharacter(name) {
     const dir    = path.join(ASSETS_DIR, name);
-    const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    // clone：config 會整份交給呼叫端，不能讓人改到快取裡那份
+    const config = structuredClone(readCharConfig(name));
     const bulletArtFile = path.join(dir, 'bullet-art.json');
     const cutinArtFile  = path.join(dir, 'cutin-art.json');
     return {
@@ -2533,6 +2550,7 @@ module.exports = {
     JOGRESS_FILE, loadJogress, jogressTarget, jogressCandidates, isJogressStep, settleJogress,
     recordAlbumChar,
     getDisplayName,
+    readCharConfig,
     getCharacterTags,
     getCharacterPower,
     getTierCap,

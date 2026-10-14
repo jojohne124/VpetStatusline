@@ -35,13 +35,14 @@ const FESTIVALS = [
     { id: 'christmas',  name: '聖誕節', month: 12, day: 25, acc: 'santa' },
     // 跨年：期間開頭跟聖誕節重疊，聖誕節當天以前算聖誕（見 active），12/26 起才是跨年
     { id: 'newyear',    name: '跨年',   month: 1,  day: 1,  acc: 'party' },
-    // 春節：除夕前一週起，過到初五
-    { id: 'lunarny',    name: '春節',   lunar: true, acc: 'chun', after: 4 },
+    // 春節：除夕前一週起，過到初五。feast：除夕以前（含除夕）營地／廣場改成圍爐（見 feastOn）
+    // 春節先不戴帽子：圍爐時一桌人加帽子太雜（ACC.chun 財神帽留著，要戴回來改這裡）
+    { id: 'lunarny',    name: '春節',   lunar: true, acc: null, after: 4, feast: true },
     { id: 'lantern',    name: '元宵',   lunar: true, acc: 'lantern' },
     { id: 'valentine',  name: '情人節', month: 2,  day: 14, acc: 'heart' },
     // 愚人節：只有當天。背景照平日（沒有節日背景），營地／廣場的角色全部變成百變怪
     //（見 swapChar）。4/1 落在兒童節的前一週裡 → 當天優先規則讓愚人節贏
-    { id: 'aprilfool',  name: '愚人節', month: 4,  day: 1,  acc: null, swap: 'ditto', lead: 0 },
+    { id: 'aprilfool',  name: '愚人節', month: 4,  day: 1,  acc: null, swap: 'ditto', lead: 0, bg: false },
     // 清明：掃墓的日子，不換造型，背景低調（毛毛雨＋柳枝）。只有當天和隔天 ——
     // 前一週都是兒童節；2028 兩個同一天，列在前面的清明贏（見 active 的平手規則）
     { id: 'qingming',   name: '清明',   lunar: true, acc: null, lead: 0, after: 1 },
@@ -86,6 +87,18 @@ function active(ms, override) {
         }
     }
     return best;
+}
+
+/**
+ * 圍爐：春節正日（初一）**以前**那一週（除夕前 6 天～除夕）。除夕起放假、大家不在公司，
+ * 所以圍爐放在放假前；初一～初五照常散步。
+ * preview = 用預覽／環境變數指定的節日 → 不看日期，直接圍爐（不然預覽看不到）。
+ */
+function feastOn(f, ms, preview) {
+    if (!f || !f.feast) return false;
+    if (preview) return true;
+    const w = windowOf(f, new Date(ms).getFullYear());
+    return !!w && ms >= w.start && ms < w.day;
 }
 
 // ── 配件點陣 ─────────────────────────────────────────────────────────
@@ -299,4 +312,4 @@ function swapChar(base, key) {
     return (h % 1000) < SHINY_RATE * 1000 ? base + '_shining' : base;
 }
 
-module.exports = { FESTIVALS, LEAD_DAYS, LUNAR, ACC, SHINY_RATE, active, windowOf, swapChar, dress, bbox, HAT, FLAG, PAL };
+module.exports = { FESTIVALS, LEAD_DAYS, LUNAR, ACC, SHINY_RATE, active, windowOf, swapChar, feastOn, dress, bbox, HAT, FLAG, PAL };

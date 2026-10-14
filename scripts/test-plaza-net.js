@@ -68,7 +68,15 @@ console.log('— 進場路線 —');
     ok(backwards === 0, `進場時有 ${backwards} 步沒有往場內走`);
     ok(notArrived === 0, `進場走完沒停在定位點：${notArrived} 個`);
     ok(leftField === 0, `進場之後又走出場外：${leftField} 個`);
-    ok(edges.every(n => n > 40), '四個邊沒有都用到：' + edges.join('/'));
+    // 上面是牆／天空（有透視的地板），不是入口：只從左、右、下進場
+    ok(edges[0] > 60 && edges[1] > 60 && edges[3] > 60 && edges[2] === 0, '進場的邊不對（應該只有左右下）：' + edges.join('/'));
+    // 最上面只能走到腳底踩在地平線（地板上緣）；手動模式往上按也一樣夾住
+    ok(F.minY + SP - 1 === W.PLAZA_HORIZON, '廣場走動範圍的上限不在地板上緣：minY=' + F.minY);
+    ok(W.manualPos({ mode: 'manual', x: 20, y: 20, facing: 'left', vx: 0, vy: -1, at: 0 }, 60000, F).y === F.minY, '手動往上走會走出地板');
+    // 營地也有地平線：粗格走、放大畫 → 畫出來腳底那列剛好踩在地平線（再上去一格就踩到天空）
+    const YF = W.YARD_FIELD, foot = (y) => P.yardToDraw(0, y).y + SP - 1;
+    ok(foot(YF.minY) >= W.PLAZA_HORIZON && foot(YF.minY - 1) < W.PLAZA_HORIZON, '營地走動範圍的上限不在地平線：minY=' + YF.minY + ' 腳底=' + foot(YF.minY));
+    ok(P.YARD_RENDER.w === 69 && P.YARD_RENDER.h === 54, '改了營地的 minY，畫布尺寸卻跟著變了');
     // 決定性：同一個 seed 每次算都一樣（每個 client 才會看到同一條進場路線）
     ok(JSON.stringify(W.entryWalk(42, F)) === JSON.stringify(W.entryWalk(42, F)), '同一個 seed 的進場路線不一樣');
     // 在畫面上也要完全看不到：畫布是細格（倍率 > 1），走路座標在外面，畫出來一定也在外面
@@ -380,6 +388,7 @@ async function main() {
     ok(!re.ok && re.error === C.UNREACHABLE, '主機沒開時的錯誤訊息不對：' + JSON.stringify(re));
 
     await battleTests();
+    await adminTests();
 
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
@@ -465,5 +474,78 @@ async function battleTests() {
         await until(() => { const m = E.roster().find(x => x.id === id(E)); return m && !m.battle; }, 2000);
     }
     await ps.close();
+}
+// ── 4. 管理（dev）：踢人、刪聊天 ─────────────────────────────────────
+async function adminTests() {
+    console.log('— 管理 —');
+    const TOKEN = 'test-admin-token';
+    const ps = S.createPlazaServer({ adminToken: TOKEN, kickBanMs: 400 });
+    await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
+    const url = 'http://127.0.0.1:' + ps.server.address().port;
+    const lost = {};
+    const mk = (tag) => C.create({ url, retryMs: 600, onLost: (why) => { lost[tag] = why; } });
+    const prof = (name) => ({ name, char: 'agumon', stage: 'Child', card: { power: 10, train: 0 } });
+    const A = mk('A'), B = mk('B');
+    await A.join(prof('管理員')); await B.join(prof('搗蛋鬼'));
+    await until(() => A.roster().length === 2 && B.roster().length === 2);
+    const bId = B.me().id;
+
+    // 金鑰不對／沒帶 → 拒絕，人還在
+    ok(!(await A.admin('kick', { token: 'wrong', target: bId })).ok, '金鑰不對也能踢人');
+    ok(!(await A.admin('kick', { target: bId })).ok, '沒帶金鑰也能踢人');
+    ok(!(await A.admin('chat', { token: 'wrong', all: true })).ok, '金鑰不對也能清聊天');
+    ok(ps.roster().some(m => m.id === bId), '金鑰不對，人卻不見了');
+    // 沒設金鑰的伺服器：管理整組關掉（就算 client 亂猜一個也一樣）
+    {
+        const ps2 = S.createPlazaServer({});
+        await new Promise(r => ps2.server.listen(0, '127.0.0.1', r));
+        const u2 = 'http://127.0.0.1:' + ps2.server.address().port;
+        const X = C.create({ url: u2 }), Y = C.create({ url: u2 });
+        await X.join(prof('甲')); await Y.join(prof('乙'));
+        const r = await X.admin('kick', { token: '', target: Y.me().id });
+        ok(!r.ok && /沒有開管理/.test(r.error || ''), '沒設金鑰的伺服器應該關掉管理：' + JSON.stringify(r));
+        await X.leave(); await Y.leave(); await ps2.close();
+    }
+
+    // 刪一則：大家的聊天室都少那一則，伺服器也沒了（之後進場的人拿到的是刪過的）
+    await B.say('不雅的話');
+    await until(() => A.chat().some(m => m.text === '不雅的話'));
+    const bad = A.chat().find(m => m.text === '不雅的話');
+    await sleep(S.CHAT_GAP_MS + 50);
+    await B.say('正常的話');
+    await until(() => A.chat().some(m => m.text === '正常的話'));
+    ok((await A.admin('chat', { token: TOKEN, seq: bad.seq })).ok, '刪聊天失敗');
+    ok(await until(() => !A.chat().some(m => m.seq === bad.seq) && !B.chat().some(m => m.seq === bad.seq)),
+       '刪掉的那則還留在大家的聊天室');
+    ok(!ps.chat.some(m => m.seq === bad.seq), '伺服器沒有真的刪掉（之後進場的人還看得到）');
+    ok(A.chat().some(m => m.text === '正常的話'), '刪一則卻把別則也刪了');
+    ok(!(await A.admin('chat', { token: TOKEN, seq: 999999 })).ok, '刪不存在的那則應該回失敗');
+    // 刪完再發言，大家還收得到（client 的 seq 去重不能卡住）
+    await sleep(S.CHAT_GAP_MS + 50);
+    await B.say('刪完之後');
+    ok(await until(() => A.chat().some(m => m.text === '刪完之後')), '刪過一則之後新的發言收不到');
+
+    // 清空：只剩一行系統訊息
+    ok((await A.admin('chat', { token: TOKEN, all: true })).ok, '清空聊天失敗');
+    ok(await until(() => A.chat().length === 1 && A.chat()[0].sys && B.chat().length === 1),
+       '清空後大家的聊天室沒清乾淨：' + JSON.stringify(A.chat()));
+    ok(ps.chat.length === 1, '伺服器沒清空');
+
+    // 踢人：本人被帶回前線（原因講清楚、不會一直重連），別人名單少一個，聊天有說
+    ok((await A.admin('kick', { token: TOKEN, target: bId })).ok, '踢人失敗');
+    ok(await until(() => lost.B === '被管理員移出廣場'), '被踢的人沒有回前線或原因不對：' + lost.B);
+    ok(!B.active(), '被踢之後 client 還以為自己在場上');
+    ok(await until(() => A.roster().length === 1), '別人的名單沒有少掉被踢的人');
+    ok(await until(() => A.chat().some(m => m.sys && /搗蛋鬼 被管理員移出廣場/.test(m.text))), '踢人沒有系統訊息');
+    ok(!A.chat().some(m => m.sys && /搗蛋鬼 離開了/.test(m.text)), '被踢還多報一句「離開了」');
+    // 被踢的名牌一陣子內進不來，過了就可以
+    const again = await B.join(prof('搗蛋鬼'));
+    ok(!again.ok && /管理員/.test(again.error || ''), '被踢之後馬上又進得來：' + JSON.stringify(again));
+    const C2 = mk('C2');
+    ok(!(await C2.join(prof('搗蛋鬼'))).ok, '換個 client 一樣要擋');
+    await sleep(450);
+    ok((await B.join(prof('搗蛋鬼'))).ok, '禁止時間過了還是進不來');
+    ok(!(await A.admin('kick', { token: TOKEN, target: 'nobody' })).ok, '踢不存在的人應該回失敗');
+    await A.leave(); await B.leave(); await ps.close();
 }
 main().catch((e) => { console.log('  ✗ 例外：' + e.stack); process.exit(1); });

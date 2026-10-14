@@ -133,7 +133,7 @@ console.log('— 覆寫檔要三個出口都吃到 —');
         try {
             const NAME = 'zzOv' + process.pid % 1000;
             // 刻意跟任何內建切法都不一樣，這樣「有沒有吃到」一眼看得出來
-            const rects = [[0, 9, 0, 11], [27, 36, 0, 11], [13, 22, 15, 24]];
+            const rects = [[0, 9, 2, 11], [27, 36, 2, 11], [13, 22, 15, 24]];   // y 從 2 起：上面是天空
             const r = Z.save({ n: 3, name: NAME, rects, setDefault: true, force: true });
             ok(r.ok, '前置存檔失敗：' + (r.error || ''));
 
@@ -205,9 +205,11 @@ console.log('— 前端座標換算 —');
                           render: { w: R.w, h: R.h, kx: R.kx, ky: R.ky } });
             // 整場（左上角能站遍全場）→ 身體剛好鋪滿營地畫布（營地就是這樣畫的）
             const full = g.__p.r2b([F.minX, F.maxX, F.minY, F.maxY]);
-            ok(full.x === 0 && full.y === 0, `整場的原點不對：(${full.x},${full.y})`);
-            ok(full.w === R.w && full.h === R.h,
-               `整場應該剛好鋪滿營地畫布 ${R.w}x${R.h}，得到 ${full.w}x${full.h}`);
+            // 上緣是地平線（腳踩在那裡），不是畫布頂
+            const top = PL.yardToDraw(F.minX, F.minY).y;
+            ok(full.x === 0 && full.y === top, `整場的原點不對：(${full.x},${full.y})，應該是 (0,${top})`);
+            ok(full.w === R.w && full.h === R.h - top,
+               `整場應該鋪滿營地畫布地平線以下 ${R.w}x${R.h - top}，得到 ${full.w}x${full.h}`);
 
             // **編輯器的框必須等於營地畫面上實際的區域**（回報過「走動範圍編輯器跟畫面
             // 不符」）。營地畫框用的是 plaza.yardToDraw，這裡逐區比對。

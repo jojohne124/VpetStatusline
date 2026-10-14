@@ -95,8 +95,9 @@ console.log('— 邊界 —');
     ok(ms < 50, `joinStep 傳錯時 posAt 花了 ${ms.toFixed(1)}ms，會拖垮 daemon`);
 
     // 上限之內的行為不能變（廣場的 joinStep 是伺服器發的，永遠在射程內）
-    // 期望值是「目前演算法」算出來的定值（2026-10-07 停留規則改過，由 31 改為 10）
-    ok(W.posAt({ seed, joinStep: 0 }, 50, null, F).x === 10,
+    // 期望值是「目前演算法」算出來的定值（2026-10-07 停留規則改過，由 31 改為 10；
+    // 2026-10-14 營地加了地平線、minY 0 → 2，場地變了，由 10 改為 9）
+    ok(W.posAt({ seed, joinStep: 0 }, 50, null, F).x === 9,
        '上限之內的走位被改掉了（決定性必須維持）');
 }
 
@@ -859,10 +860,10 @@ console.log('— 營地畫小一號（走路照舊、只換畫的格子）—');
     ok(Math.abs(minL - minR) <= 1, `左右留白不對稱（左 ${minL}、右 ${minR}）—— 角色會整群往一邊偏`);
     // 腳貼底：走到最下面時，腳離畫面下緣不超過 1 格（跟原本一樣踩在同一條地面上）
     ok(minB <= 1, `走到最下面時腳離下緣還有 ${minB} 格 —— 角色沒有貼地，看起來像浮在半空`);
-    // 上緣也要碰得到。第一版把落腳處多出來的空間全塞在上面，畫布最上面 5 格變成死區：
-    // 下排走得到畫布底，上排永遠碰不到畫布頂，拎起來放到上緣也被拉回來 —— 回報過。
-    // 只驗下緣的話抓不到（驗過）。
-    ok(minT <= 1, `走到最上面時頭離上緣還有 ${minT} 格 —— 上排的角色碰不到畫布頂（放也放不上去）`);
+    // 上緣：營地有地平線（草地／節日地板的上緣），走到最上面時腳底那列剛好踩在地平線，
+    // 不多不少。以前是「頭碰得到畫布頂」（第一版上面有 5 格死區，回報過）；
+    // 現在上面是天空，刻意走不上去，但也不能比地平線低（那又變成死區）。
+    ok(minT === W.PLAZA_HORIZON - S + 1, `走到最上面時頭離上緣 ${minT} 格，應該是 ${W.PLAZA_HORIZON - S + 1}（腳踩在地平線）`);
 
     // 合成出來的畫面真的是細格的大小，角色真的畫在換算後的位置
     const fakeCore = {
@@ -880,6 +881,27 @@ console.log('— 營地畫小一號（走路照舊、只換畫的格子）—');
     } else {
         skip++; console.log('  ⚠ 沒有 core 可以合成營地，合成那幾條跳過');
     }
+}
+
+console.log('— 對戰中：IDLE_1 ↔ ANGRY 循環 —');
+if (hasArt) {
+    const ser = (d) => JSON.stringify(d);
+    const angry = P.spriteDots(core, 'agumon', 0, 'right', 'ANGRY');
+    const idle0 = P.spriteDots(core, 'agumon', 0, 'right');
+    ok(ser(angry) !== ser(idle0), '亞古獸的 ANGRY 跟 IDLE_1 一樣，這節驗不出來');
+    // 偶數拍 IDLE_1、奇數拍 ANGRY，一直循環
+    const fr = [0, 1, 2, 3].map(t => ser(P.spriteDots(core, 'agumon', t, 'right', 'BATTLE')));
+    ok(fr[0] === ser(idle0) && fr[1] === ser(angry) && fr[2] === fr[0] && fr[3] === fr[1], '對戰中沒有 IDLE_1 ↔ ANGRY 循環');
+    // 廣場合成：對戰中的那隻照拍子換
+    const occ = (react) => ({ key: 'p:a', code: 'A', char: 'agumon', react, walk: { mode: 'manual', x: 20, y: 20, facing: 'right', vx: 0, vy: 0, at: 1e15 } });
+    const dotsOf = (out) => out.lines.join('');
+    const b0 = P.composePlazaLive(core, [occ('BATTLE')], 0, { nowMs: 1e15 }), b1 = P.composePlazaLive(core, [occ('BATTLE')], 1, { nowMs: 1e15 });
+    const a1 = P.composePlazaLive(core, [occ('ANGRY')], 1, { nowMs: 1e15 }), i0 = P.composePlazaLive(core, [occ(undefined)], 0, { nowMs: 1e15 });
+    ok(dotsOf(b0) === dotsOf(i0) && dotsOf(b1) === dotsOf(a1), '廣場合成時對戰中的那隻沒有演 IDLE_1 ↔ ANGRY');
+} else skip++;
+{
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/battle: !!m\.battle,\s*react: m\.battle \? 'BATTLE' : undefined,[^\n]*\n[\s\S]{0,400}\.\.\.\(happy\(m\) \|\| \{\}\)/.test(src), '廣場沒有把對戰中的人標成 BATTLE（或開心鈕被它蓋掉）');
 }
 
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));

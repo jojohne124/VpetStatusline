@@ -105,6 +105,10 @@ function create(opts = {}) {
                 chat.push(d);
                 if (chat.length > CHAT_KEEP) chat.splice(0, chat.length - CHAT_KEEP);
             }
+        } else if (event === 'chat-del' && d.seq) {
+            chat = chat.filter(m => m.seq !== d.seq);   // 管理員刪掉的
+        } else if (event === 'chat-clear') {
+            chat = [];
         } else if (event === 'leave' && d.id) {
             members.delete(d.id);
         } else if (event === 'profile' && d.id) {
@@ -134,7 +138,7 @@ function create(opts = {}) {
         } else if (event === 'walk' && d.id && members.has(d.id)) {
             members.get(d.id).walk = d.walk;
         } else if (event === 'kicked') {
-            lose(d.reason === 'replaced' ? '你在別處進入了廣場' : '被移出廣場');
+            lose(d.reason === 'replaced' ? '你在別處進入了廣場' : d.reason === 'admin' ? '被管理員移出廣場' : '被移出廣場');
         }
     }
 
@@ -259,6 +263,14 @@ function create(opts = {}) {
         return { ok: true };
     }
 
+    // 管理（dev）：踢人、刪聊天（seq）／清空（all）。token = 主機上的管理金鑰，伺服器驗
+    async function admin(what, body) {
+        const r = await request('POST', what === 'kick' ? '/admin/kick' : '/admin/chat', body);
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        return { ok: true };
+    }
+
     async function leave() {
         if (!me) return { ok: true };
         const id = me.id;
@@ -268,7 +280,7 @@ function create(opts = {}) {
     }
 
     return {
-        join, leave, rename, update, move, say, emote, invite, answer, active,
+        join, leave, rename, update, move, say, emote, invite, answer, admin, active,
         incoming: () => incoming, outgoing: () => outgoing,
         chat: () => chat.slice(),
         me: () => me,

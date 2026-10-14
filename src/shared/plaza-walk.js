@@ -110,12 +110,19 @@ const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
 // 幾乎一定會互相重疊。是刻意先試小的，不是算錯。
 // 第三個參數 0 = 不留名牌位：院子不顯示名字（要看是誰就右鍵），
 // 省下來的 2 dot 直接還給可走範圍。
-const YARD_FIELD  = makeField(52, 40, 0);
+// minY：營地也有地平線（PLAZA_HORIZON，草地／節日地板的上緣）。營地是粗格走、放大畫
+//（y 乘 ky ≈ 1.58，見 plaza.js 的 YARD_RENDER），minY = 2 → 畫出來腳底那列剛好踩在地平線。
+// 只動 minY：畫布尺寸和放大倍率都是用 w/h/maxY 算的，不會跟著變。
+const YARD_FIELD  = { ...makeField(52, 40, 0), minY: 2 };
 // 廣場（第二版）：畫布跟營地畫出來的一樣大（69x54 細格，見 plaza.js 的 YARD_RENDER），
 // 但**直接在細格上走** —— 一拍走 1 細格（6px）。營地是走在 52x40 的粗格再放大 1.47 倍畫，
 // 每一步要跳 1~2 個細格，廣場用同一套看起來「步伐很大」（回報過）。
 // 底部照廣場慣例留 LABEL_RESERVE 給名牌。69x54 必須跟 YARD_RENDER 一致，test-plaza-net 釘著。
-const PLAZA_LIVE_FIELD = makeField(69, 54);
+// 地平線：辦公室的牆腳＝節日地板的上緣（前端畫背景也用這個值）。廣場畫的是有透視的
+// 地板，腳踩到地板上面就像站在牆上 → 最上面只能走到「腳底那列剛好踩在地平線」，
+// 進場也不從上面進來（上面是牆／天空，不是入口）。
+const PLAZA_HORIZON = 18;
+const PLAZA_LIVE_FIELD = { ...makeField(69, 54), minY: PLAZA_HORIZON - SPRITE + 1, noTopEntry: true };
 
 // ── 營地分區 ─────────────────────────────────────────────────────────
 // 3 隻共用 37x25 的可站範圍時，有 73.7% 的拍數會有一對蓋掉對方 25% 以上的身體
@@ -304,7 +311,9 @@ function startPos(seed, field = PLAZA_FIELD) {
 const ENTRY_IN = 6;
 function entryWalk(seed, field = PLAZA_FIELD) {
     const { w, h, minX, maxX, minY, maxY } = field;
-    const edge = Math.floor(rand01(seed, -4) * 4) % 4;   // 0 左 1 右 2 上 3 下
+    // 0 左 1 右 2 上 3 下。noTopEntry（廣場）：上面不是入口，只從左、右、下進場
+    const edge = field.noTopEntry ? [0, 1, 3][Math.floor(rand01(seed, -4) * 3) % 3]
+                                  : Math.floor(rand01(seed, -4) * 4) % 4;
     const pick = (lo, hi) => lo + Math.min(hi - lo, Math.floor(rand01(seed, -5) * (hi - lo + 1)));
     const facing0 = rand01(seed, -6) < 0.5 ? 'left' : 'right';
     let origin, anchor;
@@ -603,7 +612,7 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
-    makeField, PLAZA_FIELD, YARD_FIELD, PLAZA_LIVE_FIELD,
+    makeField, PLAZA_FIELD, YARD_FIELD, PLAZA_LIVE_FIELD, PLAZA_HORIZON,
     ZONE_MARGIN, YARD_LAYOUTS, YARD_LAYOUT_DEFAULT, yardZones, yardLayoutNames,
     zoneAnchor, inZone, returnLeg,
     DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,

@@ -218,7 +218,7 @@ if (hasDitto && hasArt) {
 // daemon 有把換角色接到三個出口：營地合成、廣場每個人、營地拿起來那隻（都跟著節慶造型開關）
 {
     const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
-    ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
+    ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null,\s*feast \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
     ok(/swapSalt: args\.ds \|\| null,/.test(src) && /const ga=\{which:hit\.id,ds:yardSalt\}/.test(src), '營地拿起來的那隻沒帶進場亂數（拿起來會變另一隻）');
     ok(/qs\.push\('ds='\+yardSalt\);/.test(src), '營地畫面沒有把進場亂數送給 /yard');
     ok(/if\(v==='yard' && view!=='yard'\) yardSalt=Math\.random\(\)/.test(src), '切進營地沒有重抽進場亂數');
@@ -230,6 +230,140 @@ if (hasDitto && hasArt) {
     ok(!/CutInArt\s*=\s*sw/.test(src), '廣場對戰的 CutIn 應該照原圖');
     ok(/swap: fest && m\.costume !== false \? fest\.swap \|\| null : null,/.test(src), '廣場每個人沒有帶 swap（或沒跟著本人的開關）');
     ok(/swap: \(\(\) => \{ const f = festNow\(Date\.now\(\), args\.fest\); return f && readFest\(\)\.costume \? f\.swap \|\| null : null; \}\)\(\),/.test(src), '營地拿起來的那隻沒有帶 swap');
+}
+
+console.log('— 圍爐（春節前一週）—');
+{
+    // 期間：2027 春節 2/6 → 1/30（除夕前 6 天）～2/5（除夕）圍爐；初一起照常；不是春節不圍
+    const f27 = (m, d) => { const ms = at(2027, m, d, 12); return FEST.feastOn(FEST.active(ms), ms); };
+    ok(f27(1, 30) && f27(2, 5), '除夕前一週（1/30～2/5）應該圍爐');
+    ok(!f27(2, 6) && !f27(2, 10), '初一～初五（放假）不圍爐');
+    ok(!f27(1, 29), '春節期間以前不圍爐');
+    ok(!FEST.feastOn(FEST.active(at(2027, 12, 25, 12)), at(2027, 12, 25, 12)), '聖誕節不圍爐');
+    ok(FEST.feastOn(FEST.active(0, 'lunarny'), at(2027, 7, 1), true), '預覽春節應該直接看到圍爐');
+    ok(!FEST.feastOn(FEST.active(0, 'christmas'), at(2027, 7, 1), true), '預覽別的節日不該圍爐');
+
+    // 座位：每個人數都排得進畫布（含名牌那兩列）、面向桌子、人越多角色越小（但不小於 10）
+    let prev = 99, bad = [];
+    for (let n = 1; n <= 20; n++) {
+        const L = P.feastLayout(n), S = L.size;
+        if (S > prev) bad.push(n + ':變大'); prev = S;
+        if (!P.FEAST_SIZES.includes(S)) bad.push(n + ':尺寸');
+        for (const s of L.seats) {
+            if (s.x < 0 || s.x + S > 69 || s.y < 0 || s.y + S > 54 - 2) bad.push(n + ':出界');
+            const cx = s.x + S / 2;
+            if (Math.abs(cx - L.table.cx) > 1 && s.facing !== (cx < L.table.cx ? 'right' : 'left')) bad.push(n + ':沒面向桌子');
+        }
+        if (S > P.FEAST_SIZES[P.FEAST_SIZES.length - 1]) for (let i = 1; i < n; i++) {   // 最小號擠不下也照排
+            const a = L.seats[i - 1], b = L.seats[i];
+            if (a.back === b.back && Math.abs(a.x - b.x) < S * 0.7) bad.push(n + ':疊太多');
+        }
+        // 正左正右不坐人（跟桌子沒有前後關係）：每個腳底離桌子中線至少 sin(40°) 個半徑
+        const T = L.table;
+        for (const s of L.seats) {
+            const fy = s.y + S, fx = s.x + S / 2;
+            if (Math.abs(fx - T.cx) > T.rx * Math.sin(P.FEAST_ARC_DEG * Math.PI / 180) + 1) bad.push(n + ':坐在正側邊');
+            // 前排：腳在桌裙前面（不是站在桌上）；後排：腳在桌面後緣裡面或桌子外側
+            const edge = Math.abs(fx - T.cx) <= T.rx ? T.ry * Math.sqrt(1 - ((fx - T.cx) / T.rx) ** 2) : -1;
+            if (!s.back && edge >= 0 && fy <= T.cy + edge + 3) bad.push(n + ':前排站在桌上');
+            if (s.back && edge >= 0 && fy <= T.cy - edge) bad.push(n + ':後排沒被桌子擋到');
+        }
+        if (L.seats.filter(s => s.back).length !== Math.ceil(n / 2)) bad.push(n + ':前後排人數');
+    }
+    ok(!bad.length, '圍爐座位不對：' + bad.slice(0, 5).join(', '));
+    ok(P.feastLayout(6).size === 16, '6 個人不該縮小');
+    ok(P.feastLayout(20).size < 16, '20 個人應該縮小');
+
+    const occ = (n) => Array.from({ length: n }, (_, i) => ({ key: 'p:' + i, code: 'P' + i, char: 'agumon',
+        walk: { seed: 100 + i, joinStep: 0, origin: { x: 20, y: 20, facing: 'left' }, anchor: null } }));
+    const F = P.PLAZA_LIVE_FIELD;
+    if (hasArt) {
+        // 坐在座位上、縮到座位表的大小；名牌跟著縮小後的腳底
+        const n = 20, L = P.feastLayout(n);
+        const out = P.composePlazaLive(core, occ(n), 5, { feast: true, nowMs: 5 * 750 });
+        const seatOf = Object.fromEntries(out.placed.map(p => [p.key, p]));
+        ok(occ(n).every((o, i) => seatOf[o.key].x === L.seats[i].x && seatOf[o.key].y === L.seats[i].y), '圍爐沒有坐在座位上');
+        ok(out.placed.every(p => p.size === L.size), '圍爐沒有縮成座位表的大小');
+        ok(out.tags.every(t => { const p = seatOf[t.key]; return t.x === p.gx + L.size / 2 && t.y === p.gy + L.size; }), '名牌沒跟著縮小後的腳底');
+        // 縮小真的有縮：每隻畫出來的範圍不超過 size（量 owner）
+        const span = new Map();
+        out.owner.forEach((row, y) => row.forEach((z, x) => { if (z < 0) return; const s = span.get(z) || { x0: 99, x1: -1 }; s.x0 = Math.min(s.x0, x); s.x1 = Math.max(s.x1, x); span.set(z, s); }));
+        ok([...span.values()].every(s => s.x1 - s.x0 + 1 <= L.size), '角色沒有真的縮小');
+        // 桌子：圍爐才有；不圍爐跟以前一樣
+        const red = (ls) => ls.join('').includes('38;2;190;38;42') || ls.join('').includes('48;2;190;38;42');
+        const tableIn = (o) => (o.layer || []).some(it => it.k === 1 && it.pal.includes('#be262a'));
+        ok(tableIn(out), '圍爐沒有畫桌子');
+        const plainOut = P.composePlazaLive(core, occ(3), 5, { nowMs: 5 * 750 });
+        ok(!red(plainOut.lines) && !plainOut.layer, '不圍爐也畫了桌子／有圍爐圖層');
+        // 縮小不丟像素：圍爐圖層裡每隻都是 16x16 原圖＋倍率 size/16（不是最近點縮過的小圖），
+        // 而且角色和桌子都不再畫進 lines（不然縮小版會從原圖底下透出來）
+        const pets = out.layer.filter(it => it.k !== 1);
+        ok(pets.length === n && pets.every(it => it.w === 16 && it.h === 16 && it.k === L.size / 16), '圍爐角色不是原圖＋縮放倍率：' + JSON.stringify(pets.slice(0, 1).map(it => [it.w, it.h, it.k])));
+        const orig = P.spriteDots(core, 'agumon', 5, out.placed.find(p => p.key === 'p:0').facing, undefined);
+        const unpack = (it) => Array.from({ length: it.h }, (_, y) => Array.from({ length: it.w }, (_, x) => { const c = it.px.charCodeAt(y * it.w + x); return c === 46 ? null : it.pal[c - 48]; }));
+        const hex = (d) => d.map(r => r.map(c => c && '#' + c.map(v => v.toString(16).padStart(2, '0')).join('')));
+        const p0 = out.layer.find(it => it.k !== 1 && it.x === out.placed.find(p => p.key === 'p:0').dx);
+        ok(p0 && JSON.stringify(unpack(p0)) === JSON.stringify(hex(orig)), '圍爐圖層的角色跟原圖不一樣（像素被縮掉了？）');
+        ok(!red(out.lines) && !out.lines.join('').includes('38;2'), '圍爐的角色／桌子還畫在 lines 裡');
+        ok(out.layer.findIndex(it => it.k === 1) === out.tableZ, '圍爐圖層裡桌子的順序跟 tableZ 不一致');
+        // 後排被桌子擋住下半身（坐在桌後）：最上面那個座位的腳底那一列有桌子的顏色蓋在牠身上
+        const L3 = P.feastLayout(4), o4 = occ(4);
+        const o3 = P.composePlazaLive(core, o4, 5, { feast: true, nowMs: 5 * 750 });
+        const back = o3.placed.find(p => p.key === 'p:1');   // 座位 1 = 正上方（從最左邊順時針）
+        const front = o3.placed.find(p => p.key === 'p:3');  // 座位 3 = 正下方
+        // 畫的順序：後排在桌子之前（桌子蓋住下半身）、前排在桌子之後（身體蓋在桌上）
+        ok(back.y === L3.seats[1].y && back.z < o3.tableZ && front.z >= o3.tableZ, '後排沒被桌子擋住／前排被桌子蓋住（tableZ=' + o3.tableZ + '）');
+        // 而且桌面真的伸到後排的腳底後面（不然排在前面也擋不到）
+        const T3 = L3.table;
+        ok(T3.cy - T3.ry < back.y + L3.size, '桌面後緣沒伸到後排的腳底（看起來像站在桌子後面）');
+        // 剛進場（畫面外）→ 從那裡走過來，幾秒後到座位；已經在場上的人第一眼就坐好
+        const caches = new Map();
+        const walker = { key: 'p:new', code: 'NEW', char: 'agumon', walk: { seed: 5, joinStep: require('../src/shared/plaza-walk.js').stepAt(1000), origin: { x: -20, y: 10, facing: 'right' }, anchor: { x: 10, y: 10 } } };
+        const seat = P.feastLayout(2).seats[1];
+        const t0 = P.composePlazaLive(core, [occ(1)[0], walker], 5, { feast: true, caches, nowMs: 1000 }).placed.find(p => p.key === 'p:new');
+        const t1 = P.composePlazaLive(core, [occ(1)[0], walker], 5, { feast: true, caches, nowMs: 1500 }).placed.find(p => p.key === 'p:new');
+        let t9 = null;
+        for (let k = 2; k <= 20; k++) t9 = P.composePlazaLive(core, [occ(1)[0], walker], 5, { feast: true, caches, nowMs: 1000 + k * 500 }).placed.find(p => p.key === 'p:new');
+        ok(t0.x === -20, '剛進場的人沒有從畫面外走過來（直接瞬移到座位）');
+        ok(t1.x > t0.x && t1.facing === 'right', '走去座位的時候沒有往座位走／面向不對');
+        ok(t9.x === seat.x && t9.y === seat.y, '走了 10 秒還沒到座位：' + JSON.stringify([t9.x, t9.y, seat]));
+        const sat = P.composePlazaLive(core, occ(2), 5, { feast: true, caches: new Map(), nowMs: 1000 }).placed.find(p => p.key === 'p:1');
+        ok(sat.x === P.feastLayout(2).seats[1].x, '已經在場上的人第一眼沒有直接坐好');
+        // 手動模式的睡著不算（圍爐大家都醒著）
+        const sleepy = { ...walker, key: 'p:z', walk: { mode: 'manual', x: 20, y: 20, facing: 'left', vx: 0, vy: 0, at: -1e9 } };
+        ok(!P.composePlazaLive(core, [sleepy], 5, { feast: true, nowMs: 1000 }).placed[0].sleeping, '圍爐時手動模式放著太久還是睡著了');
+        void F;
+    }
+    // 營地：yardOccupants 一樣走 composePlaza，圍爐座位不經過營地的走路換算
+    if (hasArt) {
+        const ranch = { pets: [1, 2, 3].map(i => ({ id: 'r' + i, state: { characterId: 'agumon' } })) };
+        const y = P.composeYard(core, ranch, {}, P.yardJoinStep() + 3, { feast: true, nowMs: 1000 });
+        const L = P.feastLayout(3);
+        ok([1, 2, 3].every((k, i) => { const p = y.placed.find(q => q.key === 'ranch:r' + k); return p.dx === L.seats[i].x && p.dy === L.seats[i].y; }), '營地圍爐的位置不是座位（被走路座標換算過了？）');
+    }
+    // daemon：營地、廣場都接上；前端圍爐時不能拎、沒有自動／手動、WASD 不動
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/const feast = festOpt\.costume && festFeast\(fest, Date\.now\(\), festQ\);/.test(src) && /swapSalt: [^\n]*,\s*feast \}\);/.test(src), '營地沒有接圍爐');
+    ok(/const feast = me\.costume !== false && festFeast\(fest, nowS, festQ\);\s*const out = plaza\.composePlazaLive\(core, occ, step,\s*\{[^}]*feast \}\);/.test(src), '廣場沒有接圍爐');
+    ok(/const festFeast = \(f, ms, q\) => FEST\.feastOn\(f, ms, !IS_RELEASE && !!\(q \|\| process\.env\.VPET_FESTIVAL\)\);/.test(src), 'release 版也吃圍爐預覽');
+    ok(/if\(lastYard&&lastYard\.feast\) return;/.test(src), '圍爐時營地還能拎走');
+    // 廣場的 dev 節日預覽：只有這個畫面（/plaza?fest=），release 沒有
+    ok(/const festQ = new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('fest'\);\s*const fest = festNow\(Date\.now\(\) \+ plazaClient\.skew\(\), festQ\);/.test(src), '廣場不吃節日預覽');
+    ok(/\$\{IS_RELEASE \? '' : `\s*<div class="form" id="plazadevrow"[^>]*>\s*<label[^>]*><input type="checkbox" id="plazadev">[\s\S]{0,200}<label class="k devonly"[^>]*>節日預覽 <span class="devtag">dev<\/span><select id="plazafestsel">/.test(src), '廣場沒有 dev 節日預覽下拉（或 release 也有）');
+    // dev 開關和節日預覽放在對話輸入框下方（使用者要求）
+    const ci = src.indexOf('<input id="chatin"'), dr = src.indexOf('id="plazadevrow"');
+    ok(ci > 0 && dr > ci && src.indexOf('id="plazadev"') > ci && src.indexOf('id="plazafestsel"') > ci, '廣場的 dev 開關／節日預覽不在對話輸入框下方');
+    // 春節先不戴帽子（圍爐一桌人加帽子太雜）
+    ok(FEST.active(at(2027, 2, 1, 12)).acc === null && FEST.active(at(2027, 2, 8, 12)).acc === null, '春節還戴著帽子');
+    ok(/fetch\('\/plaza'\+\(pfs&&pfs\.value\?'\?fest='\+encodeURIComponent\(pfs\.value\):''\)/.test(src), '廣場畫面沒有把預覽送給 /plaza');
+    ok(/plazamode'\)\.style\.display = plazaFeast \? 'none' : ''/.test(src), '圍爐時還有自動／手動鈕');
+    ok(/plazaMode!=='manual'\|\|plazaFeast\|\|/.test(src), '圍爐時 WASD 還會送移動');
+    ok(/s=p\.size\|\|S;/.test(src) && /size: p\.size \|\| plaza\.SPRITE/.test(src), '營地點擊沒用縮小後的大小');
+    // 圍爐圖層：營地、廣場都送 layer，前端畫完 lines 接著畫
+    ok(/lines: out \? out\.lines : null, layer: out \? out\.layer : null/.test(src) && /lines: out\.lines, layer: out\.layer/.test(src), '營地／廣場沒有送圍爐圖層');
+    ok(/if\(y\.lines\)\{ draw\(y\.lines\); drawLayer\(y\.layer\); \}/.test(src) && /draw\(p\.lines\); drawLayer\(p\.layer\);/.test(src)
+       && /draw\(lastYard\.lines\); drawLayer\(lastYard\.layer\);/.test(src), '前端沒有畫圍爐圖層');
+    ok(/const sw=it\.k\*DW, sh=it\.k\*DH/.test(src), '前端畫圍爐圖層沒有照倍率放大');
 }
 
 console.log(`\n結果：${pass} passed, ${fail} failed`);

@@ -14,18 +14,21 @@
  *   （CLI 版 scripts/make-bg.js 仍用 sharp，那是不開瀏覽器時的替代路徑。）
  *
  * 角色縮圖只是預覽用的疊圖，不會被烘進底圖。
+ * 疊圖**只給現在養的那隻**：以前列出全部角色，等於把還沒進化到的角色全部暴雷（回報過）。
  */
 const http = require('http');
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const PORT        = 3002;
+const PORT        = Number(process.env.AGUMON_BG_PORT) || 3002;   // 測試用別的 port
 const REPO_ROOT   = path.resolve(__dirname, '..', '..');
 const INSTALL_DIR = path.join(os.homedir(), '.claude', 'agumon-statusline');
 const ASSETS_DIR  = path.join(INSTALL_DIR, 'assets');
 const CHARS_ROOT  = path.join(REPO_ROOT, 'characters');
 const BG_FILE     = path.join(INSTALL_DIR, 'bg.png');
+// 跟 agumon-core 同一個規則：AGUMON_STATE_DIR 可覆蓋（測試不碰使用者真的存檔）
+const STATE_DIR   = process.env.AGUMON_STATE_DIR || path.join(INSTALL_DIR, 'state');
 
 const HTML_FILE = path.join(__dirname, 'bg_editor.html');
 
@@ -47,16 +50,13 @@ function charDir(id) {
     return null;
 }
 
-function listChars() {
+// 現在養的那隻（color-state.json 的 characterId）。讀不到（還沒開始養）就是起始的亞古獸
+function currentChar() {
     try {
-        const raw = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'roster.json'), 'utf8'));
-        const ids = Array.isArray(raw) ? raw : (raw.members || raw.roster || []);
-        if (ids.length) return ids.slice().sort();
+        const id = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'color-state.json'), 'utf8')).characterId;
+        if (id && charDir(id)) return id;
     } catch (e) {}
-    try {
-        return fs.readdirSync(ASSETS_DIR, { withFileTypes: true })
-                 .filter(d => d.isDirectory()).map(d => d.name).sort();
-    } catch (e) { return []; }
+    return 'agumon';
 }
 
 // 回傳 idle 幀的 cell 陣列（半格：每格 [tr,tg,tb,br,bg,bb]，-1 = 該半格透明）
@@ -80,10 +80,11 @@ function json(res, code, obj) {
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
-    if (url.pathname === '/chars') return json(res, 200, { chars: listChars() });
+    // 只列現在養的那隻；/sprite 也不接受別的 id（不然改網址就看得到全部）
+    if (url.pathname === '/chars') return json(res, 200, { chars: [currentChar()] });
 
     if (url.pathname === '/sprite') {
-        const id = url.searchParams.get('char') || 'agumon';
+        const id = currentChar();
         try {
             const s = spriteCells(id);
             return s ? json(res, 200, s) : json(res, 404, { error: 'no art for ' + id });

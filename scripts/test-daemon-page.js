@@ -118,11 +118,28 @@ function renderProbe(js, html, daemonSrc) {
                    + 'drawZones:(z,ctx)=>{zoneBoxes=z;showZones=true;drawZones(ctx);},'
                    + 'yardSprite:(s)=>{yardSprite=s;},'
                    + 'fest:(id,bg)=>{festState.id=id;festState.bg=bg;},'
+                   // 常駐背景（營地草地、辦公室）也畫在同一個幀迴圈：測天氣／拎起時先關掉，不然算到它的 fillRect
+                   + 'noScene:()=>{sceneDraw=function(){};},outdoor:(v)=>{plazaOutdoor=v;},'
                    + 'K:{LIFT_DOTS,LIFT_MS,FALL_MS,CW,CH,LONGPRESS_MS}};';
     try { vm.runInContext(js + epilogue, g, { timeout: 5000 }); }
     catch (e) { ok(false, '頁面 script 執行就爆了：' + e.message); return; }
     ok(!!g.__p, '抓不到前端的內部狀態（探針壞了，不是頁面壞了）');
     if (!g.__p) return;
+    // 常駐背景：營地有草地；廣場室內＝整片天氣層不畫（雨只在落地窗外），室外照舊
+    {
+        const frame = (v, sky) => { g.__p.view(v); g.__p.sky(sky, false, false); calls.length = 0; raf(1000); const n = {}; for (const c of calls) n[c] = (n[c] || 0) + 1; return n; };
+        ok((frame('yard', 'clear').fillRect || 0) > 50, '營地沒有畫草地');
+        // 背景 10fps：下一幀（17ms 後）不重畫，過了 100ms 才重畫
+        const at = (t) => { calls.length = 0; raf(t); return calls.filter(c => c === 'fillRect').length; };
+        at(5000);
+        ok(at(5017) === 0 && at(5120) > 50, '背景每一幀都在重畫（應該 10fps）');
+        g.__p.outdoor(false);
+        ok(!frame('plaza', 'rain').lineTo, '辦公室室內還在畫整片的雨（雨應該只在窗外）');
+        g.__p.outdoor(true);
+        ok((frame('plaza', 'rain').lineTo || 0) > 0, '辦公室室外沒有天氣層');
+        g.__p.outdoor(false);
+    }
+    g.__p.noScene();
     g.__p.view('yard');
 
     // 每種天氣都要能畫完一整幀而不丟例外
@@ -279,7 +296,7 @@ function renderProbe(js, html, daemonSrc) {
         const py = (js.match(/async function pollYard\(\)\{[\s\S]*?\n\}/) || [''])[0];
         // 找的是**呼叫**（帶大括號那句）—— dragHandoff 那行的註解裡就寫著 draw(y.lines)，
         // 只找字串的話會找到註解，中間插什麼都測不到（驗過，是假綠）
-        const ih = py.indexOf('dragHandoff(y);'), idr = py.indexOf('{ draw(y.lines); }', ih);
+        const ih = py.indexOf('dragHandoff(y);'), idr = py.indexOf('{ draw(y.lines); drawLayer(y.layer); }', ih);
         // 去掉註解再看（那行的註解本身就寫著「中間不能有 await」）
         ok(ih > 0 && idr > ih && !/\bawait\b/.test(py.slice(ih, idr).replace(/\/\/[^\n]*/g, '')),
            'pollYard 的換手跟畫新畫面不在同一個 task 裡 —— 中間會有一幀兩邊對不上');
@@ -572,7 +589,7 @@ setTimeout(async () => {
             // 實跑 setDevUi：off → body 掛 nodev、預覽歸回自動並觸發 change；on → 拿掉
             const fnSrc = (js.match(/function setDevUi\(on\)\{[\s\S]*?\n\}/) || [''])[0];
             const els = { wxsel: { value: 'rain' }, festsel: { value: 'halloween' }, wxcold: { checked: true },
-                          wxnight: { checked: false }, zonebox: { checked: true } };
+                          wxnight: { checked: false }, zonebox: { checked: true }, plazadev: { checked: true } };
             const fired = [];
             for (const [k, e] of Object.entries(els)) e.dispatchEvent = () => fired.push(k);
             let cls = null;
@@ -586,6 +603,13 @@ setTimeout(async () => {
                && fired.sort().join() === 'festsel,wxcold,wxsel,zonebox', 'dev介面 off 沒把預覽歸回自動：' + fired.join());
             setDevUi(true);
             ok(cls === null, 'dev介面 on 沒有拿掉 nodev');
+            ok(els.plazadev.checked === true, 'dev介面 on，廣場的勾選框沒跟著勾');
+            setDevUi(false);
+            ok(els.plazadev.checked === false, 'dev介面 off，廣場的勾選框沒跟著取消');
+            // 廣場的 dev 開關：在廣場下方那列，本身不能掛 devonly（關掉之後要能再打開）
+            const pdl = (html.match(/<div id="plazabar"[\s\S]*?<label[^>]*><input type="checkbox" id="plazadev">/) || [''])[0];
+            ok(pdl && !/devonly[^<]*<input type="checkbox" id="plazadev"/.test(pdl.slice(-200)), '廣場沒有 dev 開關，或它被 devonly 藏住（關了打不開）');
+            ok(/getElementById\('plazadev'\)\.addEventListener\('change',e=>setDevUi\(e\.target\.checked\)\)/.test(js), '廣場的 dev 開關沒接到 setDevUi');
         }
 
         // 常見成因：字串字面值裡混進真正的換行。單獨檢出來，訊息才看得懂在說什麼。
@@ -925,9 +949,11 @@ setTimeout(async () => {
             // 真的起一個廣場伺服器 + 一個指向它的 daemon（隔離的 state 目錄）
             const fs2 = require('fs'), os2 = require('os');
             const PS = require('../src/daemon/plaza-server.js');
-            const ps = PS.createPlazaServer({ graceMs: 500, battleMs: 4000 });
+            const ps = PS.createPlazaServer({ graceMs: 500, battleMs: 4000, adminToken: 'page-admin-token' });
             await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
             const SD = fs2.mkdtempSync(path.join(os2.tmpdir(), 'vpet-plaza-'));
+            // 管理金鑰放在隔離目錄（先不寫檔：測「沒有金鑰」的錯誤），不碰真的 ~/.vpet
+            const ADMIN_KEY = path.join(SD, 'plaza-admin.key');
             fs2.writeFileSync(path.join(SD, 'pvp.json'), JSON.stringify({ code: '測試員' }));
             fs2.writeFileSync(path.join(SD, 'hook.json'), JSON.stringify({ ts: 1 }));
             const P4 = PORT + 4;
@@ -935,6 +961,7 @@ setTimeout(async () => {
                 [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
                 { env: { ...process.env, AGUMON_DAEMON_PORT: String(P4), AGUMON_STATE_DIR: SD,
                          VPET_PLAZA_URL: 'http://127.0.0.1:' + ps.server.address().port,
+                         VPET_PLAZA_ADMIN_KEY: ADMIN_KEY,
                          VPET_FESTIVAL: 'halloween' },   // 節日固定，不看今天幾號
                   stdio: 'ignore' });
             const cmd = async (action, args = {}) => JSON.parse(await post(P4, '/cmd', { action, args }));
@@ -994,9 +1021,41 @@ setTimeout(async () => {
                 ok(JSON.parse(await getOn(P4, '/plaza')).festCostume === false, '/plaza 的造型勾選框沒跟著關');
                 ok(JSON.parse(fs2.readFileSync(path.join(SD, 'festival.json'), 'utf8')).costume === false, '節日造型的開關沒存起來');
                 ok((await cmd('festCostume', { on: 'true' })).ok && ps.roster()[0].costume === true, '開回節日造型失敗');
+                // 廣場的 dev 節日預覽：?fest= 只換這個畫面；預覽春節 → 圍爐；關掉節慶造型 → 變回散步
+                const pv = JSON.parse(await getOn(P4, '/plaza?fest=lunarny'));
+                ok(pv.festival && pv.festival.id === 'lunarny' && pv.feast === true, '/plaza?fest=lunarny 沒有預覽成春節圍爐：' + JSON.stringify([pv.festival, pv.feast]));
+                ok(JSON.parse(await getOn(P4, '/plaza')).feast === false, '萬聖節也在圍爐');
+                ok((await cmd('festCostume', { on: 'false' })).ok, '關節日造型失敗');
+                ok(JSON.parse(await getOn(P4, '/plaza?fest=lunarny')).feast === false, '關了節慶造型，廣場還在圍爐');
+                ok(JSON.parse(await getOn(P4, '/yard?fest=lunarny')).feast === false, '關了節慶造型，營地還在圍爐');
+                ok((await cmd('festCostume', { on: 'true' })).ok, '開回節日造型失敗');
+                ok(JSON.parse(await getOn(P4, '/yard?fest=lunarny')).feast === true, '營地預覽春節沒有圍爐');
+                ok(/<select id="plazafestsel">/.test(html), '廣場沒有 dev 節日預覽');
                 const fy = JSON.parse(await getOn(P4, '/yard?fest=doubleten'));
                 ok(fy.festival && fy.festival.id === 'doubleten' && fy.festCostume === true, '/yard?fest= 預覽沒生效：' + JSON.stringify(fy.festival));
                 ok(/<canvas id="fest"><\/canvas><canvas id="pet"/.test(html), '節日背景畫布不在角色畫布下面');
+                // 廣場的常駐背景（辦公室）：墊在節日背景底下、只在廣場、每人自己選（存在瀏覽器）
+                ok(/<canvas id="scene"><\/canvas><canvas id="fest">/.test(html) && /#scene\{[^}]*z-index:0\}/.test(html)
+                   && /body\.scene\.plaza #scene,body\.scene\.yard #scene\{display:block\}/.test(html), '常駐背景畫布不在節日背景底下／不只在廣場顯示');
+                // 辦公室常駐、不能關（沒有選單），節日有背景時讓給節日（互斥）
+                ok(!/id="plazascene"/.test(html), '廣場還有背景選單（辦公室應該常駐）');
+                const sjs = (html.match(/<script>([\s\S]*)<\/script>/) || [])[1] || '';
+                ok(/sceneDraw\(ts\);[^\n]*\n\s*festDraw\(ts\);/.test(sjs) && /if\(view==='plaza' && !festState\.hasBg\) return plazaOutdoor \? 'outdoor' : 'office';/.test(sjs),
+                   '辦公室不是常駐，或節日背景跟辦公室沒有互斥');
+                ok(/for\(const id of \['scene','fest','festfront'\]\)/.test(sjs), '常駐背景畫布沒有跟角色畫布對位');
+                ok(/festState\.hasBg = !!\(f && f\.bg !== false\);/.test(sjs), '節日有沒有背景沒接上');
+                // 地平線跟走路共用同一個值（走動範圍的上限＝地板上緣）
+                ok(new RegExp('const PLAZA_HORIZON=' + require('../src/shared/plaza-walk.js').PLAZA_HORIZON + ';').test(sjs), '前端的地平線跟走動範圍不是同一個值');
+                ok(JSON.parse(await getOn(P4, '/plaza?fest=halloween')).festival.bg === true
+                   && JSON.parse(await getOn(P4, '/plaza?fest=aprilfool')).festival.bg === false, '/plaza 沒帶節日有沒有背景（愚人節應該沒有）');
+                // 節日地板：只在廣場鋪；每個有背景的節日都有自己的地板
+                ok(/\n  festFloor\(g,ts,W,H,festState\.id\);/.test(sjs), '節日地板沒鋪（營地、廣場都要）');
+                // 營地：節日背景顯示中換成節日的地板，草地收起來（互斥）
+                ok(/if\(view==='yard'\) return festShown\(\) && festState\.hasBg \? '' : 'yard';/.test(sjs), '營地的節日地板跟草地沒有互斥');
+                ok(/<button id="plazaio" style="float:right"/.test(html), '室內／室外鈕沒有靠右');
+                const ff = (sjs.match(/function festFloor\([\s\S]*?\n\}/) || [''])[0];
+                const noFloor = require('../src/shared/festival.js').FESTIVALS.filter(f => f.bg !== false && !ff.includes("id==='" + f.id + "'")).map(f => f.id);
+                ok(ff && !noFloor.length, '這些節日沒有地板：' + noFloor.join(','));
                 // 掛在鏡頭前的（雙十彩旗、春節燈籠）畫在前景畫布：DOM 排在角色後面、同一層 → 疊在角色上
                 ok(/<canvas id="pet"[^>]*><\/canvas><canvas id="festfront"><\/canvas>/.test(html) && /#festfront\{[^}]*z-index:1\}/.test(html),
                    '節日前景畫布不在角色畫布上面');
@@ -1058,6 +1117,59 @@ setTimeout(async () => {
                 ok(js.includes('ci.value.slice(0,a)+e+ci.value.slice(z)'), '表情符號不是插在游標位置');
                 ok(/function drawBubbles/.test(js) && /drawBubbles\(p\.tags, p\.chat, p\.serverNow\)/.test(js), '沒有畫對話泡泡');
                 ok(/document\.createTextNode\('：'\+m\.text\)/.test(js), '聊天內容不是用純文字放進頁面（別人打的字會被當成 HTML）');
+
+                // 管理（dev）：刪聊天、清空、踢人。頁面有管理列、每則有刪除鈕、點角色選單有踢出
+                {
+                    ok(/<div class="form devonly" id="plazaadmin"[\s\S]*?id="admwho"[\s\S]*?id="admkick"[\s\S]*?id="admclear"/.test(html), '廣場沒有管理列（dev）');
+                    ok(/const PLAZA_ADMIN=true;/.test(js), 'dev 版沒開管理');
+                    ok(/renderChat\(p\.chat\);\s*renderAdmin\(p\.members\);/.test(js) && /function renderAdmin\(list\)/.test(js), '管理列的名單沒有跟著廣場刷新');
+                    ok(/del\.className='del devonly'[\s\S]*?sendCmd\('plazaChatDel',\{seq:String\(m\.seq\)\}\)/.test(js), '聊天每則沒有刪除鈕');
+                    ok(/const sig=list\.map\(m=>m\.seq\)\.join\(','\);\s*if\(sig===chatShown\) return;/.test(js), '聊天只看最後一則有沒有變（刪中間那則畫面不會更新）');
+                    ok(/k\.className='danger devonly'[\s\S]*?adminKick\(String\(t\.key\)\.slice\(2\), t\.text\)/.test(js), '點角色的選單沒有踢出（dev）');
+                    const PC = require('../src/daemon/plaza-client.js');
+                    const troll = PC.create({ url: 'http://127.0.0.1:' + ps.server.address().port });
+                    ok((await troll.join({ name: '搗蛋鬼', char: 'gabumon', stage: 'Child', card: { power: 1, train: 0 } })).ok, '搗蛋鬼進不了廣場');
+                    await troll.say('洗版洗版');
+                    let bad = null;
+                    for (let i = 0; i < 30 && !bad; i++) {
+                        bad = (JSON.parse(await getOn(P4, '/plaza')).chat || []).find(m => m.text === '洗版洗版');
+                        if (!bad) await wait(100);
+                    }
+                    ok(bad, '/plaza 沒收到搗蛋鬼的發言');
+                    const q0 = JSON.parse(await getOn(P4, '/plaza'));
+                    ok((q0.members || []).some(m => m.name === '搗蛋鬼') && !(q0.members || []).some(m => m.name === q0.me),
+                       '/plaza 的管理名單不對（要有別人、不含自己）：' + JSON.stringify(q0.members));
+                    const nokey = await cmd('plazaChatDel', { seq: String(bad.seq) });
+                    ok(!nokey.ok && /找不到管理金鑰/.test(nokey.error || ''), '沒有管理金鑰應該講清楚：' + JSON.stringify(nokey));
+                    fs2.writeFileSync(ADMIN_KEY, 'wrong-token\n');
+                    const wrong = await cmd('plazaChatDel', { seq: String(bad.seq) });
+                    ok(!wrong.ok && /金鑰不對/.test(wrong.error || ''), '金鑰不對應該被伺服器擋：' + JSON.stringify(wrong));
+                    fs2.writeFileSync(ADMIN_KEY, 'page-admin-token\n');
+                    ok((await cmd('plazaChatDel', { seq: String(bad.seq) })).ok, '刪聊天失敗');
+                    let gone = false;
+                    for (let i = 0; i < 30 && !gone; i++) {
+                        gone = !(JSON.parse(await getOn(P4, '/plaza')).chat || []).some(m => m.seq === bad.seq);
+                        if (!gone) await wait(100);
+                    }
+                    ok(gone, '刪掉的那則還在 /plaza');
+                    ok((await cmd('plazaChatClear')).ok, '清空聊天失敗');
+                    ok(!(await cmd('plazaKick', { target: q0.me ? ps.roster().find(m => m.name !== '搗蛋鬼').id : '' })).ok, '可以踢自己');
+                    const tid = ps.roster().find(m => m.name === '搗蛋鬼').id;
+                    const kk = await cmd('plazaKick', { target: tid });
+                    ok(kk.ok, '踢人失敗：' + JSON.stringify(kk));
+                    let out = false;
+                    for (let i = 0; i < 30 && !out; i++) {
+                        out = !(JSON.parse(await getOn(P4, '/plaza')).members || []).some(m => m.id === tid);
+                        if (!out) await wait(100);
+                    }
+                    ok(out && !troll.active(), '被踢的人還在廣場');
+                    // release：管理列、刪除鈕、名單、指令全擋（dev 版測不到 release 的頁面，只能看原始碼）
+                    const dsrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+                    ok(/if \(PLAZA_ADMIN_CMDS\.has\(action\)\) \{\s*if \(IS_RELEASE\) return \{ ok: false/.test(dsrc), 'release 版沒擋管理指令');
+                    ok(/\$\{IS_RELEASE \? '' : `\s*<div class="form devonly" id="plazaadmin"/.test(dsrc), 'release 版的頁面會出現管理列');
+                    ok(/const PLAZA_ADMIN=\$\{IS_RELEASE \? 'false' : 'true'\}/.test(dsrc), 'release 版的聊天／選單會出現管理鈕');
+                    ok(/members: IS_RELEASE \? undefined :/.test(dsrc), 'release 版的 /plaza 會帶管理名單');
+                }
 
                 // 對戰：另一個玩家（這裡直接用 client）邀請 daemon 這邊 → 頁面看到邀請 → 接受 →
                 // daemon 在前線開演、/plaza 帶出演出畫面 → 演完不留痕跡（不計戰績、心情不變）

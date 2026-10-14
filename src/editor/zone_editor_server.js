@@ -136,7 +136,8 @@ function measure(zones, trials = 12, steps = 1500) {
         const sum = [...heat[i].values()].reduce((a, b) => a + b, 0);
         if (sum) hot = Math.max(hot, Math.max(...heat[i].values()) / sum * cells);
     });
-    const all = R.w * R.h;   // 營地畫布（細格）
+    // 營地畫布（細格）扣掉地平線以上那段：那裡是天空，本來就站不上去（見 YARD_FIELD.minY）
+    const all = R.w * (R.h - toDraw(F.minX, F.minY).y);
     return {
         overlapPct: 100 * bad / tot,          // 嚴重重疊（一對蓋掉 >= 25% 身體）的拍數比例
         avgOverlap: area / pairs,

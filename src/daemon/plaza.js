@@ -115,6 +115,13 @@ function spriteDots(core, charId, step, facing, react) {
     const a = loadArt(core, charId);
     if (!a) return null;
     const F = a.F || {};
+    // BATTLE（廣場對戰中）：IDLE_1 跟 ANGRY 一拍一換，一直循環 —— 兩隻對峙。
+    // 沒有 ANGRY 幀的角色退回 IDLE_1（跟前線的戰鬥演出同一個退法，見 core 的 safeF）
+    if (react === 'BATTLE') {
+        const angry = F.ANGRY != null ? F.ANGRY : F.IDLE_1;
+        const rows = core.getFacingRows(a.art, (step % 2 === 0 ? F.IDLE_1 : angry) ?? 0, facing, a.rightOffset);
+        return rows ? cellsToDots(rows) : null;
+    }
     const forced = react && F[react] != null ? F[react] : null;
     const frameIdx = forced != null ? forced : (step % 2 === 0 ? F.IDLE_1 : F.IDLE_2);
     const rows = core.getFacingRows(a.art, frameIdx ?? 0, facing, a.rightOffset);
@@ -190,6 +197,147 @@ const PLAZA_LIVE_FIELD = W.PLAZA_LIVE_FIELD;
 const PLAZA_RENDER = { w: PLAZA_LIVE_FIELD.w, h: PLAZA_LIVE_FIELD.h, kx: 1, ky: 1 };
 const plazaToDraw = (x, y) => ({ x, y });
 
+// ── 圍爐（春節前一週，docs/festival-spec.md「圍爐」）──────────────────────
+// 營地與廣場的大家不散步，圍著畫面中間的圓桌坐一圈。座位照名單順序（廣場＝進場順序，
+// 每台收到的順序一樣）平均排在桌邊的橢圓上；人多擠不下就把角色縮小（FEAST_SIZES）。
+// 營地畫出來跟廣場一樣大（69x54 細格），座位直接用**畫的座標**，不經過走路。
+// 換座位（有人進出）／剛進場從畫面外走過來，是各台自己內插的表演 —— 終點大家一樣。
+const FEAST_W = 69, FEAST_H = 54;
+const FEAST_SIZES = [16, 14, 12, 10];   // 再小就認不出是誰了
+const FEAST_SPEED = 12;                  // 走去座位的速度（dot/秒）
+
+// 座位貼著桌緣分兩排，正左正右不坐人 —— 角色只有左右兩個面向，坐在正側邊的那隻跟桌子
+// 沒有前後關係，看起來桌子在牠頭上或腳下（回報過）：
+//   後排：腳在桌面後緣往內 2 dot → 下半身被桌子擋住，坐在桌後、面對我們
+//   前排：腳在桌裙前面再往前 0.45 隻 → 身體下半截在桌子前面，坐在桌前（不是站在桌上，回報過）
+// 桌子是扁的橢圓（俯視的圓桌），座位只用前後各 ±FEAST_ARC_DEG 的範圍，依 x 平均分。
+const FEAST_ARC_DEG = 50;
+const FEAST_SKIRT = 3;   // 桌裙高度（feastTable 畫的）
+/** 這個角色大小的桌子 { cx, cy, rx, ry }：上面留頭和帽子、下面留前排和名牌，左右讓兩端的人不出界 */
+function feastTableOf(S) {
+    const top = S + 3, frontFoot = FEAST_H - W.LABEL_RESERVE;
+    const ry = Math.floor((frontFoot - Math.round(S * 0.45) - FEAST_SKIRT - top) / 2);
+    const cx = FEAST_W / 2, sin = Math.sin(FEAST_ARC_DEG * Math.PI / 180);
+    return { cx, cy: top + ry, rx: Math.min(30, Math.floor((cx - S / 2 - 1) / sin)), ry };
+}
+// 一排 m 個座位的腳底 x：人少時靠中間（間距 1.1 隻），人多就攤到 ±ARC 的範圍
+function feastRowXs(T, m, S) {
+    if (m <= 0) return [];
+    if (m === 1) return [T.cx];
+    const X = T.rx * Math.sin(FEAST_ARC_DEG * Math.PI / 180);
+    const half = Math.min(X, (m - 1) * S * 1.1 / 2);
+    return Array.from({ length: m }, (_, k) => T.cx - half + 2 * half * k / (m - 1));
+}
+// 第 i 個座位（角色左上角）。順序：後排由左到右，再前排由右到左（順時針一圈）。
+// 單數時後排多一個 —— 只有一個人就坐在桌子後面看著我們。面向桌子中線（正中那隻左右交錯）。
+function feastSeats(n, S) {
+    const T = feastTableOf(S), nb = Math.ceil(n / 2), nf = n - nb, out = [];
+    const seat = (fx, back, i) => {
+        const e = T.ry * Math.sqrt(Math.max(0, 1 - ((fx - T.cx) / T.rx) ** 2));   // 這個 x 的桌緣離中線多遠
+        const fy = back ? T.cy - e + 2 : T.cy + e + FEAST_SKIRT + Math.round(S * 0.45);
+        const facing = fx < T.cx - 0.5 ? 'right' : fx > T.cx + 0.5 ? 'left' : (i % 2 ? 'left' : 'right');
+        out.push({ x: Math.round(fx - S / 2), y: Math.round(fy - S), facing, back });
+    };
+    feastRowXs(T, nb, S).forEach((fx) => seat(fx, true, out.length));
+    feastRowXs(T, nf, S).reverse().forEach((fx) => seat(fx, false, out.length));
+    return out;
+}
+// 同一排相鄰兩個座位左右錯開不到 0.7 隻 → 擠不下，換小一號（最小那號就算擠也照排）
+function feastFits(n, S) {
+    const s = feastSeats(n, S);
+    for (let i = 1; i < n; i++) {
+        if (s[i].back === s[i - 1].back && Math.abs(s[i].x - s[i - 1].x) < S * 0.7) return false;
+    }
+    return true;
+}
+/** n 個人的圍爐：{ size, seats, table:{cx,cy,rx,ry} }。角色越小桌子越大 */
+function feastLayout(n) {
+    const S = FEAST_SIZES.find(s => feastFits(n, s)) || FEAST_SIZES[FEAST_SIZES.length - 1];
+    return { size: S, seats: feastSeats(n, S), table: feastTableOf(S) };
+}
+
+// 最近點縮放（像素風，不內插）
+function scaleDots(d, k) {
+    if (k === 1 || !d || !d.length) return d;
+    const h = d.length, w = d[0].length, H = Math.max(1, Math.round(h * k)), Wd = Math.max(1, Math.round(w * k));
+    const out = [];
+    for (let y = 0; y < H; y++) {
+        const src = d[Math.min(h - 1, Math.floor((y + 0.5) / k))], row = [];
+        for (let x = 0; x < Wd; x++) row.push(src[Math.min(w - 1, Math.floor((x + 0.5) / k))]);
+        out.push(row);
+    }
+    return out;
+}
+
+// dot 圖 → 精簡的傳輸格式 { w, h, pal:['#rrggbb'…], px }：px 一個字一個 dot，'.' = 透明，
+// 其餘 = 色盤第 (字碼 - 48) 個。圍爐圖層一拍要送二十幾張圖，直接送 [r,g,b] 陣列太肥。
+function packDots(d) {
+    const pal = [], idx = new Map();
+    let px = '';
+    for (const row of d) for (const c of row) {
+        if (!c) { px += '.'; continue; }
+        const hex = '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+        if (!idx.has(hex)) { idx.set(hex, pal.length); pal.push(hex); }
+        px += String.fromCharCode(48 + idx.get(hex));
+    }
+    return { w: d.length ? d[0].length : 0, h: d.length, pal, px };
+}
+
+// 圓桌＋火鍋。回傳 dot 圖與它左上角在畫布上的位置；step 讓熱氣飄動
+const TB = {
+    cloth: [190, 38, 42], clothHi: [214, 64, 60], trim: [232, 182, 70], skirt: [128, 22, 30], skirtLo: [96, 16, 24],
+    potRim: [70, 74, 82], potIn: [44, 46, 52], soup: [222, 96, 40], soupHi: [246, 150, 70],
+    tofu: [245, 240, 225], veg: [80, 170, 80], meat: [236, 140, 150],
+    plate: [235, 235, 240], steam: [225, 228, 235],
+};
+function feastTable(t, step) {
+    const { rx, ry } = t, SK = FEAST_SKIRT, UP = 7;   // SK：桌裙高度；UP：熱氣往上飄的空間
+    const w = rx * 2 + 1, h = ry * 2 + 1 + SK + UP;
+    const dots = []; for (let y = 0; y < h; y++) dots.push(new Array(w).fill(null));
+    const put = (x, y, c) => { if (y >= 0 && y < h && x >= 0 && x < w) dots[y][x] = c; };
+    const inE = (x, y, a, b) => (x * x) / (a * a) + (y * y) / (b * b) <= 1;
+    // 桌裙：桌面下緣往下延伸（只有前半圈看得到）
+    for (let x = -rx; x <= rx; x++) {
+        const yb = Math.round(ry * Math.sqrt(Math.max(0, 1 - (x * x) / (rx * rx))));
+        for (let k = 1; k <= SK; k++) put(x + rx, yb + k + ry + UP, k === SK ? TB.skirtLo : TB.skirt);
+    }
+    // 桌面＋金邊（外圈一格）
+    for (let y = -ry; y <= ry; y++) for (let x = -rx; x <= rx; x++) {
+        if (!inE(x, y, rx + 0.5, ry + 0.5)) continue;
+        const edge = !inE(x, y, rx - 0.6, ry - 0.6);
+        put(x + rx, y + ry + UP, edge ? TB.trim : (y < -ry / 3 && x < 0 ? TB.clothHi : TB.cloth));
+    }
+    // 火鍋：中間一圈鍋，裡面是湯和料
+    const pa = Math.max(3, Math.round(rx * 0.3)), pb = Math.max(2, Math.round(pa * 0.55));
+    const pcy = ry + UP - 1;
+    for (let y = -pb - 1; y <= pb + 1; y++) for (let x = -pa - 1; x <= pa + 1; x++) {
+        if (!inE(x, y, pa + 1.5, pb + 1.5)) continue;
+        const inner = inE(x, y, pa - 0.3, pb - 0.3);
+        put(x + rx, y + pcy, inner ? ((x + y + step) % 5 === 0 ? TB.soupHi : TB.soup) : TB.potRim);
+    }
+    for (let x = -pa; x <= pa; x++) put(x + rx, pcy + pb + 2, TB.potIn);   // 鍋身
+    const food = [[-2, 0, TB.tofu], [1, -1, TB.veg], [2, 1, TB.meat], [-1, 1, TB.veg], [0, 0, TB.tofu]];
+    for (const [fx, fy, c] of food) if (inE(fx, fy, pa - 1, pb - 0.5)) put(fx + rx, fy + pcy, c);
+    // 盤子：沿著桌面一圈擺幾盤菜（桌子大才擺得多）
+    const nPlate = rx >= 20 ? 8 : rx >= 14 ? 6 : 4;
+    const dishes = [TB.veg, TB.meat, TB.tofu, TB.soupHi];
+    for (let i = 0; i < nPlate; i++) {
+        const a = Math.PI / nPlate + 2 * Math.PI * i / nPlate;
+        const px = Math.round(Math.cos(a) * (rx * 0.66)), py = Math.round(Math.sin(a) * (ry * 0.62));
+        for (let dx = -1; dx <= 1; dx++) put(px + dx + rx, py + ry + UP, TB.plate);
+        put(px + rx, py + ry + UP, dishes[i % dishes.length]);
+    }
+    // 熱氣：三縷，兩拍一換
+    const ph = step % 2;
+    for (const [sx, s0] of [[-2, 0], [0, 1], [2, 0]]) {
+        for (let k = 0; k < 3; k++) {
+            const yy = pcy - pb - 3 - k * 2 - ((s0 + ph) % 2);
+            put(sx + ((k + ph + s0) % 2) + rx, yy, TB.steam);
+        }
+    }
+    return { dots, x: Math.round(t.cx - rx - 0.5), y: Math.round(t.cy - ry) - UP, base: t.cy };
+}
+
 /** 真的廣場：在場名單（伺服器發的）→ 畫面。原住民（NPC）先不放。 */
 function composePlazaLive(core, occupants, step, opts = {}) {
     return composePlaza(core, occupants, step, { ...opts, npc: false, field: PLAZA_LIVE_FIELD, textLabels: false });
@@ -233,11 +381,55 @@ function composePlaza(core, occupants, step, opts = {}) {
                       sleeping: !!p.sleeping, react });
     }
 
+    // 2b. 圍爐：位置換成座位（畫的座標），角色縮成座位表決定的大小。不睡覺（手動模式的
+    //     睡著是「放著太久」，圍爐大家都坐著，不算）。
+    const feast = opts.feast ? feastLayout(placed.length) : null;
+    if (feast) {
+        const t = opts.nowMs != null ? opts.nowMs : Date.now();
+        placed.forEach((p, i) => {
+            const seat = feast.seats[i], ck = 'feast:' + p.key;
+            let cur = caches.get(ck);
+            if (!cur) {
+                // 第一次看到：從畫面外走進來的（廣場剛進場）就從那裡走過來，其他人直接坐好
+                const g = render ? render.toDraw(p.x, p.y) : { x: p.x, y: p.y };
+                const off = g.x + W.SPRITE <= 0 || g.x >= bw || g.y + W.SPRITE <= 0 || g.y >= bh;
+                cur = off ? { x: g.x, y: g.y, t } : { x: seat.x, y: seat.y, t };
+            }
+            const dt = Math.min(1000, Math.max(0, t - cur.t)) / 1000;
+            const dx = seat.x - cur.x, dy = seat.y - cur.y, d = Math.hypot(dx, dy);
+            const k = d > 0 ? Math.min(1, FEAST_SPEED * dt / d) : 0;
+            const nx = cur.x + dx * k, ny = cur.y + dy * k;
+            caches.set(ck, { x: nx, y: ny, t });
+            const moving = Math.hypot(seat.x - nx, seat.y - ny) > 0.5;
+            p.x = Math.round(nx); p.y = Math.round(ny); p.size = feast.size; p.seated = true;
+            p.facing = moving ? (dx < 0 ? 'left' : dx > 0 ? 'right' : p.facing) : seat.facing;
+            p.moving = moving; p.sleeping = false; p.react = all[i].react;
+            p.seatBack = moving ? null : seat.back;
+        });
+    }
+
     // 3. y 小的先畫 -> y 大的（比較靠近觀眾）蓋在上面。
     //    y 相同時用 key 排序，讓每個 client 的疊法一致（不然兩邊看到的遮擋會相反）。
     placed.sort((a, b) => (a.y - b.y) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
+    // 圍爐的桌子也參加前後排序：腳在桌子中線後面的先畫（桌子擋住下半身），前面的後畫
+    const table = feast ? feastTable(feast.table, step) : null;
+    // 圍爐的角色和桌子不畫進 dot 緩衝，改成一層「原圖＋縮放倍率」交給前端畫（layer）：
+    // 縮小時不丟像素 —— 16x16 原圖整張送過去，前端每個像素畫成 k 個 dot 大（回報過：
+    // 最近點縮放把眼睛、輪廓吃掉）。順序就是前後關係。owner 還是照縮小後的範圍算
+    //（名牌遮擋、點擊判定用），所以另外畫在一張不輸出的緩衝上。
+    const layer = feast ? [] : null;
+    const ghost = feast ? dots.map(r => new Array(r.length).fill(null)) : null;
+    let tableDrawn = !table, tableZ = null;   // tableZ：桌子前面畫了幾隻（= 坐在桌後的）
+    const drawTable = (z) => {
+        if (tableDrawn) return;
+        layer.push({ x: table.x, y: table.y, k: 1, ...packDots(table.dots) });
+        tableDrawn = true; tableZ = z;
+    };
+
     placed.forEach((p, i) => {
+        // 坐好的照座位分排（弧的兩端腳的高度很接近桌子中線，用 y 判會判錯邊）；走動中看腳在中線前後
+        if (!tableDrawn && (p.seatBack != null ? !p.seatBack : p.y + (p.size || W.SPRITE) > table.base)) drawTable(i);
         // 換角色（愚人節的百變怪）：跟配件同一套 —— o.swap 優先（廣場本人決定），沒有就用整場的
         // 營地另外帶 swapSalt（每次進營地換一個）→ 進出一次重抽一次變色版
         const swap = p.swap !== undefined ? p.swap : opts.swap;
@@ -256,16 +448,27 @@ function composePlaza(core, occupants, step, opts = {}) {
         // 跳躍只影響**畫在哪**，不影響上面那個 y 排序，也不影響名牌（名牌釘在腳下的
         // 地面位置）。跳起來就切到別人前面、名牌跟著飛，兩個都不對。
         // 貼著上緣時往上頂會超出畫面 -> 夾住，那一下就看不到跳（很少見，可接受）。
-        p.jumpDy = p.jump ? Math.min(p.jump, p.y - field.minY) : 0;
+        p.jumpDy = p.jump ? Math.min(p.jump, p.y - (p.seated ? 0 : field.minY)) : 0;
+        // 圍爐：縮小（配件一起縮），座位本來就是畫的座標 → 不再換算
+        const k = p.size ? p.size / W.SPRITE : 1, full = sp, fox = aox, foy = aoy;
+        if (k !== 1 && sp) {
+            sp = scaleDots(sp, k); aox = Math.round(aox * k); aoy = Math.round(aoy * k);
+            if (p.accTop) p.accTop = Math.round(p.accTop * k);
+        }
+        const toDraw = render && !p.seated ? render.toDraw : (x, y) => ({ x, y });
         // dx/dy = **畫出來**的位置（細格；含跳躍）。前端的命中判定要用這個。
-        const at = render ? render.toDraw(p.x, p.y - p.jumpDy) : { x: p.x, y: p.y - p.jumpDy };
+        const at = toDraw(p.x, p.y - p.jumpDy);
         p.dx = at.x; p.dy = at.y;
         // 地面位置（不含跳躍）：名牌釘在這裡的腳下，要跟畫面同一套座標
-        const g = render ? render.toDraw(p.x, p.y) : { x: p.x, y: p.y };
+        const g = toDraw(p.x, p.y);
         p.gx = g.x; p.gy = g.y;
-        if (sp) blit(dots, sp, at.x + aox, at.y + aoy, owner, i);
+        if (sp && layer) {
+            blit(ghost, sp, at.x + aox, at.y + aoy, owner, i);
+            layer.push({ x: at.x + fox * k, y: at.y + foy * k, k, ...packDots(full) });
+        } else if (sp) blit(dots, sp, at.x + aox, at.y + aoy, owner, i);
         p.z = i;                                 // 繪製順序 = 前後關係
     });
+    drawTable(placed.length);   // 全部都坐在後面（或沒人）
 
     // 4. dot -> cell -> ANSI，名牌另外走文字層（見下）
     //    天氣**不在這裡**：做過「依天氣把角色調色」，實際看了拿掉 —— 16x16 的點陣圖
@@ -278,9 +481,9 @@ function composePlaza(core, occupants, step, opts = {}) {
     if (opts.textLabels === false) {
         // owner：每個 dot 是誰畫的（繪製順序 z，-1 = 空）。前端畫名牌時用它把「被站在前面的角色
         // 蓋住的部分」挖掉 —— 名牌的前後關係才會跟角色一樣（回報過：重疊時後排的名字浮在前排身上）。
-        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me), owner };
+        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me), owner, tableZ, layer };
     }
-    return { lines: renderWithLabels(cells, labels), placed, labels };
+    return { lines: renderWithLabels(cells, labels), placed, labels, layer };
 }
 
 /**
@@ -297,11 +500,11 @@ function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
     const rows = new Map();
     for (const p of placed) {
         if (!p.code) continue;
-        const wide = vis(p.code);
+        const wide = vis(p.code), S = p.size || W.SPRITE;   // 圍爐會縮小
         // gx/gy = 畫出來的地面位置（composePlaza 給的）；直接呼叫的測試沒有，退回走路座標
         const px = p.gx != null ? p.gx : p.x, py = p.gy != null ? p.gy : p.y;
         const col0 = Math.max(0, Math.min(field.w - wide,
-                     px + Math.floor((W.SPRITE - wide) / 2)));
+                     px + Math.floor((S - wide) / 2)));
 
         // 名牌**一律標在腳下**（固定位置，不會忽上忽下）。腳下是慣例 ——
         // PvP 的名牌就在腳下，玩家對這個位置有既有預期。
@@ -313,7 +516,7 @@ function buildLabels(placed, core, me, owner, field = W.PLAZA_FIELD) {
         //   3. 一律頭上 → 幾乎不會被遮擋（擋住我的人必定 y 比我大，構不到我頭頂
         //      那一列），顯示率 97~100%，但不合慣例。
         //   4. 一律腳下 + 場地底部保留一列（本版）→ 位置固定又合慣例。
-        const row = Math.floor((py + W.SPRITE) / 2);
+        const row = Math.floor((py + S) / 2);
         if (row < 0 || row > lastRow) continue;
 
         // 遮擋逐「字」判斷，不是整條名牌一起消失。切在字的邊界上，不會出現半個字。
@@ -377,7 +580,7 @@ function nameTags(placed, labels, me) {
         // 所有人看到的顏色一律相同：有選就用選的，沒選就是同一個預設色。
         // 以前沒選時「自己黃、別人白」—— 結果自己看到的跟別人看到的不一樣（回報過）。
         color: p.color || NAME_DEFAULT_COLOR,
-        x: p.gx + W.SPRITE / 2, y: p.gy + W.SPRITE,
+        x: p.gx + (p.size || W.SPRITE) / 2, y: p.gy + (p.size || W.SPRITE),
         sleeping: !!p.sleeping, top: p.gy + (p.accTop || 0),   // 睡著時前端在頭上畫 z；含節日配件的高度
         battling: !!p.battle,                         // 對戰中：前端在頭上畫 ⚔
         happy: p.react === 'HAPPY',                   // 開心鈕演出中（測試用來確認大家都看得到）
@@ -609,6 +812,7 @@ module.exports = {
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
     YARD_RENDER, yardToDraw, yardFromDraw,
     PLAZA_RENDER, plazaToDraw, PLAZA_LIVE_FIELD, composePlazaLive,
+    FEAST_SIZES, FEAST_ARC_DEG, feastLayout, feastTable, scaleDots, packDots,
     yardZones: W.yardZones, zoneAnchor: W.zoneAnchor, ZONE_MARGIN: W.ZONE_MARGIN,
     yardLayoutNames: W.yardLayoutNames, YARD_LAYOUT_DEFAULT: W.YARD_LAYOUT_DEFAULT,
     YARD_LAYOUTS_FILE, loadYardLayouts, yardLayoutsFor, yardZonesFor,

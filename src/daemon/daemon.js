@@ -79,6 +79,8 @@ const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
 const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit']);
+// 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
+const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
 // UI 上要露出的快捷鈕（一鍵、不用填參數）。**只影響版面，不影響功能** ——
 // 沒列在這裡的指令照樣能用（CLI `vpet <cmd>`，或直接 POST /cmd），只是不佔畫面。
@@ -503,7 +505,10 @@ function writeFest(patch) {
 // 現在是哪個節日。VPET_FESTIVAL=halloween 可以在非節日期間預覽（營地另有 ?fest=）。
 // release 不吃預覽：節日背景與造型開關只在活動期間出現
 const festNow = (ms, q) => FEST.active(ms, IS_RELEASE ? null : (q || process.env.VPET_FESTIVAL || null));
-const festView = (f) => (f ? { id: f.id, name: f.name, acc: f.acc } : null);
+// bg：這個節日有沒有背景（愚人節沒有 → 廣場照樣顯示自己選的常駐背景）
+const festView = (f) => (f ? { id: f.id, name: f.name, acc: f.acc, bg: f.bg !== false } : null);
+// 圍爐（春節前一週）：營地／廣場大家圍著圓桌坐。預覽／VPET_FESTIVAL 指定春節時不看日期
+const festFeast = (f, ms, q) => FEST.feastOn(f, ms, !IS_RELEASE && !!(q || process.env.VPET_FESTIVAL));
 // 名牌沿用 `vpet code`（state/pvp.json 的 code）。沒設過就請 CLI 產一個 —— 規則只在 CLI 那份。
 function plazaName() {
     const read = () => { try { return JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')).code || null; } catch (e) { return null; } };
@@ -1004,6 +1009,26 @@ function applyCommand(action, args = {}) {
         if (!args.text) return { ok: false, error: '沒有內容' };
         return plazaClient.say(args.text).then(r => (r.ok ? { ok: true, action } : r));
     }
+    // 廣場管理（dev）：踢人、刪聊天。release 不給；伺服器那邊另外要管理金鑰（主機上的檔）才認
+    if (PLAZA_ADMIN_CMDS.has(action)) {
+        if (IS_RELEASE) return { ok: false, error: '此版本未提供此指令' };
+        if (!plazaClient.active()) return { ok: false, error: '不在廣場' };
+        const token = PlazaServer.loadAdminToken();
+        if (!token) return { ok: false, error: '找不到管理金鑰（' + PlazaServer.ADMIN_KEY_FILE + '）：要在跑 plaza-host 的那台、或把那個檔複製過來' };
+        if (action === 'plazaKick') {
+            const m = plazaClient.roster().find(x => x.id === args.target);
+            if (!m) return { ok: false, error: '對方已經不在廣場了' };
+            if (m.id === plazaClient.me().id) return { ok: false, error: '不能踢自己' };
+            return plazaClient.admin('kick', { token, target: m.id })
+                .then(r => (r.ok ? { ok: true, action, output: '已把 ' + m.name + ' 移出廣場（' + PlazaServer.KICK_BAN_MS / 60000 + ' 分鐘內不能再進來）' } : r));
+        }
+        if (action === 'plazaChatDel') {
+            const seq = Number(args.seq);
+            if (!Number.isInteger(seq) || seq <= 0) return { ok: false, error: '要指定哪一則' };
+            return plazaClient.admin('chat', { token, seq }).then(r => (r.ok ? { ok: true, action, output: '已刪除' } : r));
+        }
+        return plazaClient.admin('chat', { token, all: true }).then(r => (r.ok ? { ok: true, action, output: '聊天記錄已清空' } : r));
+    }
     if (action === 'plazaMove') {
         const vx = Number(args.vx), vy = Number(args.vy);
         return plazaClient.move({ vx, vy }).then(r => (r.ok ? { ok: true, action } : r));
@@ -1197,6 +1222,9 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 節日背景：墊在角色畫布**下面**（角色畫布清空的地方是透明的）。只在營地／廣場。
      角色畫布要 position + z-index 才壓得過它；只對營地／廣場加，家裡的 letterbox 不受影響。 */
   #fest{position:absolute;display:none;pointer-events:none;z-index:0}
+  /* 廣場的常駐背景（辦公室…）：同一層、DOM 排在節日背景前面 → 墊在節日背景底下 */
+  #scene{position:absolute;display:none;pointer-events:none;z-index:0}
+  body.scene.plaza #scene,body.scene.yard #scene{display:block}
   /* 節日前景：跟角色同一層、DOM 排在角色後面 → 疊在角色上面；天氣（z2）再蓋在它上面 */
   #festfront{position:absolute;display:none;pointer-events:none;z-index:1}
   body.yard #pet,body.plaza #pet{position:relative;z-index:1}
@@ -1276,6 +1304,12 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
            color:#c9d1d9;word-break:break-all;scrollbar-color:#30363d #0d1117}
   #chatlog .sys{color:#8b949e;font-style:italic}
   #chatlog .who{font-weight:600}
+  /* 管理（dev）：每則後面的刪除鈕，滑過那一列才出現 */
+  #chatlog .del{display:none;margin-left:6px;padding:0 5px;border:1px solid #30363d;border-radius:4px;
+                background:#21262d;color:#f85149;font-size:11px;cursor:pointer}
+  #chatlog div:hover .del{display:inline}
+  #plazaadmin select{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
+                     padding:3px 5px;font:inherit;font-size:12px;max-width:150px}
   #chatin{width:268px !important}
   /* 表情符號面板：點 😀 開，點選插入到游標位置 */
   #emojipick{display:none;position:absolute;z-index:40;background:#161b22;border:1px solid #30363d;
@@ -1284,6 +1318,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #emojipick button{background:none !important;border:0 !important;font-size:18px;line-height:1;
                     padding:4px 0 !important;border-radius:4px;cursor:pointer}
   #emojipick button:hover{background:#30363d !important}
+  #plazabar input[type=checkbox]{width:auto;padding:0;vertical-align:middle}   /* 不吃上面輸入框的 120px */
   #plazabar input[type=color]{width:34px;height:24px;padding:1px;vertical-align:middle;cursor:pointer}
   /* 廣場對戰：疊在廣場上的一層（壓暗 + 中間是前線的戰鬥畫面），不換畫面 */
   #battlebox{position:absolute;inset:0;z-index:4;display:none;align-items:center;justify-content:center;
@@ -1305,7 +1340,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage"><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1343,6 +1378,7 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
     <div id="plazabar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
       <button id="plazamode" title="自動：隨機散步／手動：WASD 或方向鍵移動">🚶 自動</button>
       <button id="plazahappy" title="跳一下，大家都看得到">😄 開心</button>
+      <button id="plazaio" style="float:right" title="辦公室的室內／室外（只影響你自己的畫面）">🏢 室內</button>
       <div id="plazainvite"></div>
       <div class="form" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
@@ -1353,6 +1389,17 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
         <button id="chatemoji" title="表情符號">😀</button><input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
         <div id="emojipick"></div>
       </div>
+${IS_RELEASE ? '' : `      <div class="form" id="plazadevrow" style="margin-top:4px">
+        <label class="k" title="跟進階指令的「🛠 dev介面」是同一個開關"><input type="checkbox" id="plazadev"> dev 介面 <span class="devtag">dev</span></label>
+        <label class="k devonly" title="只影響你自己的畫面">節日預覽 <span class="devtag">dev</span><select id="plazafestsel">
+          <option value="">自動（依日期）</option>
+${FEST.FESTIVALS.map(f => `          <option value="${f.id}">${f.name}</option>`).join('\n')}
+        </select></label>
+      </div>
+`}${IS_RELEASE ? '' : `      <div class="form devonly" id="plazaadmin" style="margin-top:4px">
+        <span class="lbl">🛡 管理 <span class="devtag">dev</span></span><select id="admwho"></select><button id="admkick">踢出</button>
+        <button id="admclear">清空聊天</button>
+      </div>`}
     </div>
     <div id="cmdmsg"></div>
     <details id="adv"><summary>⚙ 進階指令</summary>
@@ -1426,6 +1473,21 @@ function parseAnsi(line){
     idx++;
   }
   return cells;
+}
+// 圍爐圖層（composePlaza 的 layer）：原圖照縮放倍率畫在 dot 格上，縮小不丟像素。
+// 一個原圖像素 = k 個 dot（k = 角色大小/16）→ 10/12/14 號是 5/6/7 px 見方。
+function drawLayer(layer){
+  if(!layer||!layer.length) return;
+  const g=document.getElementById('pet').getContext('2d'), DW=CW, DH=CH/2;
+  for(const it of layer){
+    const sw=it.k*DW, sh=it.k*DH, x0=it.x*DW, y0=it.y*DH;
+    for(let i=0;i<it.px.length;i++){
+      const c=it.px.charCodeAt(i); if(c===46) continue;
+      const cx=i%it.w, cy=(i-cx)/it.w;
+      g.fillStyle=it.pal[c-48];
+      g.fillRect(Math.round(x0+cx*sw), Math.round(y0+cy*sh), Math.ceil(sw), Math.ceil(sh));
+    }
+  }
 }
 function draw(petLines, target){
   const cv=target||document.getElementById('pet'),ctx=cv.getContext('2d');
@@ -1573,7 +1635,7 @@ function syncWx(){
   const w=pet.offsetWidth, h=pet.offsetHeight;
   wx.style.left=pet.offsetLeft+'px'; wx.style.top=pet.offsetTop+'px';
   if(wx.width!==w||wx.height!==h){ wx.width=w; wx.height=h; }
-  for(const id of ['fest','festfront']){
+  for(const id of ['scene','fest','festfront']){
     const fe=document.getElementById(id);
     fe.style.left=pet.offsetLeft+'px'; fe.style.top=pet.offsetTop+'px';
     if(fe.width!==w||fe.height!==h){ fe.width=w; fe.height=h; }
@@ -1666,9 +1728,12 @@ function wxGust(g,x,y,s){
 
 function wxDraw(ts){
   requestAnimationFrame(wxDraw);
+  sceneDraw(ts);  // 廣場的常駐背景
   festDraw(ts);   // 節日背景：同一個幀迴圈
   const cv=document.getElementById('wx');
   if((view!=='yard'&&view!=='plaza')||!cv.width||!cv.height){ wxLast=ts; return; }
+  // 室內（辦公室）：天氣只在落地窗外（sceneWeather），整片的天氣層清掉
+  if(sceneIndoor()){ cv.getContext('2d').clearRect(0,0,cv.width,cv.height); wxLast=ts; return; }
   const dt=Math.min(0.1,(ts-wxLast)/1000)||0; wxLast=ts;
   const w=cv.width, h=cv.height, g=cv.getContext('2d');
   if(!wxParts||wxParts.w!==w||wxParts.h!==h) wxParts=wxBuild(w,h);
@@ -1819,7 +1884,9 @@ setInterval(hudTick,1000);
 // 一個 dot = CW x CH/2，跟角色同一套格子，所以裝飾跟角色一樣是方塊像素。
 // 每一幀由 wxDraw 順手呼叫（蝙蝠拍翅、煙火要動），不另開一條 requestAnimationFrame 迴圈。
 // 開關：廣場一律顯示；營地看「節日背景」勾選框（daemon 存的，換分頁也記得）。
-const festState={id:null, bg:true};
+const festState={id:null, bg:true, hasBg:false};
+// 廣場的地平線：辦公室的牆腳、節日地板的上緣都在這裡（角色走到最上面時腳剛好踩在這）
+const PLAZA_HORIZON=${PW.PLAZA_HORIZON};
 // 蝙蝠不能用深色：營地底色是 rgb(24,24,24)，深紫疊上去幾乎看不見（截圖確認過）
 const FEST_PAL={K:'#8a68b4',O:'#f0922a',Y:'#ffd84a',G:'#4f8a3a',R:'#de2028',W:'#ffffff',
   D:'#f2c94c',N:'#2f7d3e',P:'#8b5a2b',B:'#4a8cff',Q:'#5a6472',H:'#f0508c',A:'#3d7fd6',a:'#7fb8ff',
@@ -1912,6 +1979,317 @@ function festRise(g,ts,W,H,n,art,h,alpha,mapOf){
     festPix(g,art,x,y,alpha*(y<H*0.25?Math.max(0,y/(H*0.25)):1),mapOf&&mapOf(i));
   }
 }
+// ── 常駐背景（跟節日無關，一直都在）──────────────────────────────────
+// 墊在節日背景下面的另一張畫布。
+//   廣場：辦公室，常駐、不能關（角色的走動範圍照它的地平線限制，見 plaza-walk 的
+//         PLAZA_HORIZON）。分室內／室外，每個人自己選（存在這台瀏覽器）：
+//         室內 = 整面落地窗，天氣只出現在窗外（整片的天氣層關掉 —— 室內下雨很怪，回報過）；
+//         室外 = 公司門口，天氣層照舊。節日有背景時換成節日的（互斥，節日優先）。
+//   營地：一片草地，上面是天空和遠方的樹林。節日（有開節慶造型）換成節日的地板。
+let plazaOutdoor=false;
+try{ plazaOutdoor=localStorage.getItem('vpet.plazaOutdoor')==='1'; }catch(e){}
+function sceneRect(g,x,y,w,h,c,a){
+  g.globalAlpha=a==null?1:a; g.fillStyle=c;
+  g.fillRect(Math.round(x)*CW, Math.round(y)*(CH/2), w*CW, h*(CH/2)); g.globalAlpha=1;
+}
+// 現在要畫哪一種：'office' / 'outdoor' / 'yard' / ''（不畫）
+function sceneKind(){
+  // 營地：節日背景顯示中就換成節日的（地板一起換，互斥），否則是草地
+  if(view==='yard') return festShown() && festState.hasBg ? '' : 'yard';
+  if(view==='plaza' && !festState.hasBg) return plazaOutdoor ? 'outdoor' : 'office';
+  return '';
+}
+// 室內：天氣只在窗外，整片的天氣層不畫
+function sceneIndoor(){ return sceneKind()==='office'; }
+// 背景只要 10fps：上面的動畫都很慢（植物搖、程式碼捲、雲飄、窗外的雨），每幀重畫
+// 只是讓 GPU 多合成一張整面的畫布。換場景、畫布尺寸變了（變尺寸會清空）就立刻重畫。
+const SCENE_MS=100;
+let sceneAt=-1e9, sceneKey='';
+function sceneDraw(ts){
+  const cv=document.getElementById('scene');
+  const kind=sceneKind();
+  document.body.classList.toggle('scene', !!kind);
+  if(!kind||!cv.width||!cv.height){ sceneKey=''; return; }
+  const key=kind+'|'+cv.width+'x'+cv.height;
+  if(key===sceneKey && ts-sceneAt<SCENE_MS && ts>=sceneAt) return;
+  sceneAt=ts; sceneKey=key;
+  const g=cv.getContext('2d'), W=Math.floor(cv.width/CW), H=Math.floor(cv.height/(CH/2));
+  g.clearRect(0,0,cv.width,cv.height);
+  if(kind==='office') sceneOffice(g,ts,W,H);
+  else if(kind==='outdoor') sceneOutdoor(g,ts,W,H);
+  else sceneYard(g,ts,W,H);
+}
+// 錯縫鋪磚（y0 以下）：w×h 一塊，奇數排錯開半塊，最上一列和最左一行是縫
+function sceneBricks(g,W,H,y0,w,h,cols,seam){
+  for(let y=y0,r=0;y<H;y+=h,r++){
+    const off=r%2?Math.floor(w/2):0;
+    for(let x=-off,k=0;x<W;x+=w,k++){
+      sceneRect(g,x,y,w,h,cols[Math.floor(festRnd(r*31+k)*cols.length)]);
+      sceneRect(g,x,y,1,h,seam); sceneRect(g,x,y,w,1,seam);
+    }
+  }
+}
+// 草地（y0 以下）：底色＋一撮一撮的草（固定位置，微微搖）
+function sceneGrass(g,ts,W,H,y0,base,tuft,n){
+  sceneRect(g,0,y0,W,H-y0,base);
+  for(let i=0;i<n;i++){
+    const x=Math.floor(festRnd(i+400)*W), y=y0+1+Math.floor(festRnd(i+500)*(H-y0-1));
+    sceneRect(g,x+(Math.sin(ts/1400+i)>0.6?1:0),y,1,1,tuft); sceneRect(g,x+1,y,1,1,tuft,0.6);
+  }
+}
+function sceneMix(a,b,t){
+  const p=(h,i)=>parseInt(h.substr(1+i*2,2),16);
+  let o='#';
+  for(let i=0;i<3;i++) o+=Math.round(p(a,i)+(p(b,i)-p(a,i))*t).toString(16).padStart(2,'0');
+  return o;
+}
+// 天空（y0～y1）：跟著天氣、日夜換顏色，上深下淺
+function sceneSky(g,W,y0,y1){
+  const sky=wxState.sky, night=wxState.night;
+  const c = night ? ['#0d1322','#1a2440'] : sky==='clear' ? ['#3c6fa6','#76a6d4']
+          : sky==='cloudy' ? ['#535e6b','#717c89'] : sky==='rain' ? ['#404a56','#55606b'] : ['#2c343e','#404853'];
+  for(let y=y0;y<=y1;y++) sceneRect(g,0,y,W,1,sceneMix(c[0],c[1],(y-y0)/Math.max(1,y1-y0)));
+}
+// 遠方的大樓（x0～x1，底在 base）：白天被霧氣染淡，晚上剩剪影和亮著的窗
+function sceneCity(g,ts,x0,x1,base){
+  const sky=wxState.sky, night=wxState.night;
+  const col = night ? '#1b2232' : sky==='clear' ? '#4b5d74' : '#4c545f';
+  for(let x=x0,i=0;x<x1;i++){
+    const w=3+Math.floor(festRnd(i+600)*4), h=3+Math.floor(festRnd(i+700)*7);
+    sceneRect(g,x,base-h+1,Math.min(w,x1-x),h,col);
+    // 晚上：窗戶排成格子（隔一格一扇），亮不亮各自決定，偶爾有人關燈／開燈
+    if(night) for(let ly=base-h+2;ly<base;ly+=2) for(let lx=x+1;lx<x+w-1&&lx<x1;lx+=2){
+      if(festRnd(lx*31+ly*7+Math.floor(ts/9000+lx))<0.35) sceneRect(g,lx,ly,1,1,'#ffd84a',0.5);
+    }
+    x+=w+(festRnd(i+800)<0.3?1:0);
+  }
+}
+// 窗外的天氣（y0～y1 這一段）：雲、雨、閃電、寒風。室內版的天氣全在這裡
+function sceneWeather(g,ts,W,y0,y1){
+  const sky=wxState.sky, night=wxState.night, hh=y1-y0+1;
+  if(night && sky==='clear'){
+    for(let i=0;i<10;i++) sceneRect(g,Math.floor(festRnd(i+900)*W),y0+Math.floor(festRnd(i+950)*(hh*0.5)),1,1,'#ffffff',0.3+0.4*(0.5+0.5*Math.sin(ts/700+i)));
+  }
+  // 雲：晴天兩朵白的慢慢飄，壞天氣多幾朵灰的、飄得快
+  const nC = sky==='clear' ? 2 : 5, cc = sky==='clear' ? '#e6eef7' : (night ? '#3a4352' : '#9aa3ad');
+  const sp = sky==='storm'||sky==='thunder' ? 2.5 : sky==='rain' ? 1.6 : 0.8;
+  for(let i=0;i<nC;i++){
+    const w=5+Math.floor(festRnd(i+30)*4), x=((ts/1000*sp*(0.6+festRnd(i)*0.6)+festRnd(i+40)*W)%(W+w+4))-w-2, y=y0+1+Math.floor(festRnd(i+50)*(hh*0.35));
+    sceneRect(g,x,y,w,1,cc,0.6); sceneRect(g,x+1,y-1,w-3,1,cc,0.5);
+  }
+  if(sky==='rain'||sky==='storm'||sky==='thunder'){
+    const n = sky==='rain' ? 26 : 44;
+    for(let i=0;i<n;i++){
+      const v=9+festRnd(i+60)*5, y=y0+((ts/1000*v+festRnd(i+70)*hh)%hh), x=festRnd(i+80)*W-(y-y0)*0.3;
+      sceneRect(g,x,y,1,1,'#a9c4d8',0.45); sceneRect(g,x-0.3,y+1<=y1?y+1:y,1,1,'#a9c4d8',0.3);
+    }
+  }
+  if(sky==='thunder'){
+    const e=ts%5600;
+    if(e<90||(e>160&&e<240)){
+      sceneRect(g,0,y0,W,hh,'#e4eeff',e<90?0.35:0.18);
+      const bx=Math.floor(festRnd(Math.floor(ts/5600))*(W-8))+4;
+      for(let y=y0,x=bx;y<y0+hh*0.7;y++){ sceneRect(g,x,y,1,1,'#ffffff',0.9); x+=(festRnd(y+bx)<0.5?-1:1); }
+    }
+  }
+  if(wxState.cold){
+    for(let i=0;i<4;i++){
+      const x=((ts/1000*(14+i*3)+festRnd(i+90)*W)%(W+10))-5, y=y0+2+Math.floor(festRnd(i+95)*(hh-4));
+      sceneRect(g,x,y,3,1,'#dfefff',0.35); sceneRect(g,x+3,y,2,1,'#dfefff',0.15);
+    }
+  }
+}
+// 辦公室（室內）：上面 18 dot 是一整面落地窗（角色走到最上面時腳剛好踩在窗腳），
+// 窗外是天空和遠方的大樓，天氣都在窗外。下面是地毯。
+// 顏色刻意壓暗、低彩度 —— 角色是 16x16 的小圖，背景一搶眼就分不出誰是誰。
+// 右上角是時間／天氣看板，那裡只放矮的東西（飲水機、盆栽）。
+function sceneOffice(g,ts,W,H){
+  const WALL=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  const sky=wxState.sky, night=wxState.night;
+  // 窗外：天空 → 大樓 → 天氣，再整片壓暗一點（室內看出去，也不讓窗外搶戲）
+  sceneSky(g,W,1,WALL-2);
+  sceneCity(g,ts,0,W,WALL-2);
+  sceneWeather(g,ts,W,1,WALL-2);
+  R(0,1,W,WALL-2,'#0d1117',0.22);
+  // 窗框：上樑、窗腳、四根直框；玻璃上幾道斜斜的反光
+  R(0,0,W,1,'#3a3f48'); R(0,WALL-1,W,1,'#4a3f33');
+  for(const x of [0,17,34,51,68]) R(x,1,1,WALL-2,'#454b55');
+  for(const x0 of [3,21,38,55]) for(let k=0;k<5;k++) R(x0+k,WALL-3-k,1,1,'#ffffff',0.06);
+  // 地毯拼塊：兩個很接近的顏色交錯
+  for(let y=WALL;y<H;y+=4) for(let x=0;x<W;x+=6)
+    R(x,y,6,4,((x/6+(y-WALL)/4)%2)?'#1f2227':'#23272d');
+  R(0,WALL,W,1,'#16181c',0.8);   // 窗腳的陰影
+  // 晴天白天：陽光從落地窗斜斜灑在地毯上
+  if(sky==='clear'&&!night&&new Date().getHours()<WX_SHAFT_END_HOUR){
+    for(const [a,b] of [[1,16],[18,33],[35,50],[52,67]])
+      for(let y=WALL;y<WALL+12;y++) R(a+(y-WALL)*0.8,y,b-a,1,'#ffeeb4',0.07*(1-(y-WALL)/12));
+  }
+  // 白板（有腳的那種，站在窗前）：藍色字、紅色圈、一條長條圖
+  R(2,4,14,8,'#8b949e'); R(3,5,12,6,'#d5d9df');
+  R(4,6,6,1,'#4a8cff'); R(4,8,4,1,'#4a8cff'); R(9,8,2,1,'#4a8cff');
+  R(11,6,3,1,'#de2028'); R(11,7,1,1,'#de2028'); R(13,7,1,1,'#de2028'); R(11,8,3,1,'#de2028');
+  for(const [x,h] of [[4,1],[6,2],[8,3]]) R(x,11-h,1,h,'#3fb950');
+  R(3,12,12,1,'#59606b'); R(3,13,1,4,'#59606b'); R(14,13,1,4,'#59606b');
+  // 掛鐘（掛在中間那根窗框上）：分針照真的時間轉
+  const now=new Date(), mA=(now.getMinutes()/60)*Math.PI*2, hA=((now.getHours()%12)/12+now.getMinutes()/720)*Math.PI*2;
+  R(33,3,3,5,'#c9d1d9'); R(32,4,5,3,'#c9d1d9'); R(33,4,3,3,'#eef0f3');
+  R(34,5,1,1,'#30363d');
+  R(34+Math.round(Math.sin(mA)),5-Math.round(Math.cos(mA)),1,1,'#30363d');
+  R(34+Math.round(Math.sin(hA)*0.6),5-Math.round(Math.cos(hA)*0.6),1,1,'#de2028');
+  // 窗前兩張辦公桌：螢幕上的程式碼一行一行往上捲，旁邊一杯咖啡
+  for(const dx0 of [18,37]){
+    R(dx0,14,14,1,'#7a6248'); R(dx0,15,14,1,'#5a4733');
+    R(dx0+1,16,1,1,'#3d3022'); R(dx0+12,16,1,1,'#3d3022');
+    R(dx0+4,9,7,5,'#1b1f24'); R(dx0+5,10,5,3,'#14283a');
+    for(let r=0;r<3;r++){
+      const k=Math.floor(ts/600)+r+dx0, len=1+Math.floor(festRnd(k)*4);
+      R(dx0+5+(festRnd(k+5)<0.4?1:0),10+r,Math.min(len,5),1, festRnd(k+3)<0.5?'#5fe08a':'#79c0ff',0.8);
+    }
+    R(dx0+7,13,1,1,'#30363d');
+    R(dx0+5,14,4,1,'#8b949e');   // 鍵盤
+    R(dx0+12,13,1,1,'#e6e6e6');   // 咖啡杯
+  }
+  // 盆栽
+  R(53,14,4,3,'#8b5a2b'); R(53,14,4,1,'#a06a34');
+  for(const [x,y,c] of [[54,10,'#3f8f3c'],[55,9,'#5fb04a'],[53,11,'#5fb04a'],[56,11,'#3f8f3c'],[54,12,'#5fb04a'],[55,12,'#3f8f3c'],[55,11,'#5fb04a'],[54,11,'#3f8f3c'],[56,10,'#5fb04a'],[53,12,'#3f8f3c'],[56,12,'#5fb04a']])
+    R(x+Math.round(Math.sin(ts/1800+x)*0.4),y,1,1,c);
+  // 飲水機：水桶偶爾冒一個泡泡上去
+  R(61,8,4,4,'#79c0ff',0.55); R(61,8,4,1,'#9fd3ff',0.6);
+  R(60,12,6,5,'#c9d1d9'); R(60,12,6,1,'#e6eaef');
+  R(61,14,1,1,'#de2028'); R(64,14,1,1,'#4a8cff'); R(61,16,4,1,'#8b949e');
+  const bub=(ts%4000)/4000; if(bub<0.6) R(62+(bub>0.3?1:0),11-Math.floor(bub/0.6*4),1,1,'#e6f3ff',0.9);
+}
+// 公司門口（室外）：左邊是公司大樓的玻璃門，後面一排樹籬和行道樹、遠方大樓，
+// 右邊一盞路燈（晚上會亮），地上是紅磚人行道。天氣交給整片的天氣層。
+function sceneOutdoor(g,ts,W,H){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a), night=wxState.night;
+  sceneSky(g,W,0,HZ-1);
+  sceneCity(g,ts,20,W,HZ-3);
+  R(0,0,W,HZ,'#0d1117',0.3);   // 室外也壓暗一點：天氣層的雲、光還會再疊上來
+  // 公司大樓：外牆、一格一格的窗（晚上有幾格還亮著）、玻璃自動門
+  R(0,0,20,HZ,'#353a43'); R(19,0,1,HZ,'#2b2f37');
+  for(let y=1;y<10;y+=3) for(let x=1;x<19;x+=3){
+    const lit=night ? festRnd(x*7+y)<0.4 : false;
+    R(x,y,2,2, lit ? '#ffd84a' : '#4b5d74', lit ? 0.7 : 0.8);
+  }
+  R(5,10,10,1,'#59606b');   // 雨遮
+  R(6,11,8,HZ-11,'#5d7a99',0.55); R(10,11,1,HZ-11,'#454b55'); R(6,11,8,1,'#454b55');
+  R(7,12,1,3,'#ffffff',0.12); R(11,12,1,3,'#ffffff',0.12);
+  // 樹籬＋兩棵行道樹（樹冠微微擺）
+  R(20,HZ-3,W-20,3,'#22392a'); for(let x=20;x<W;x+=2) R(x+(x%4?0:1),HZ-3,1,1,'#2d4a33');
+  for(const tx of [28,47]){
+    R(tx,HZ-8,1,5,'#4a3424');
+    const sw=Math.round(Math.sin(ts/1600+tx)*0.5);
+    R(tx-3+sw,HZ-12,7,4,'#2a4a30'); R(tx-2+sw,HZ-13,5,1,'#2a4a30'); R(tx-2+sw,HZ-11,2,1,'#3a6a40');
+  }
+  // 長椅（樹籬前）
+  R(34,HZ-3,9,1,'#7a6248'); R(34,HZ-2,9,1,'#5a4733'); R(35,HZ-1,1,1,'#3d3022'); R(41,HZ-1,1,1,'#3d3022');
+  // 紅磚人行道
+  sceneBricks(g,W,H,HZ,6,3,['#3a2a26','#3d2c28','#36281f'],'#2c201c');
+  R(0,HZ,W,1,'#16181c',0.7);
+  // 路燈：晚上亮，地上一圈暖光
+  R(62,3,1,HZ-3,'#59606b'); R(60,3,4,1,'#59606b');
+  R(60,4,2,1, night ? '#ffd84a' : '#8b949e');
+  if(night){ R(58,HZ,8,3,'#ffd84a',0.08); R(59,HZ+3,6,2,'#ffd84a',0.05); }
+}
+// 營地：地平線以上是天空、遠山和一排樹林，下面是草地，零星幾朵小花和石頭。
+// 天氣交給整片的天氣層（營地在戶外）。
+function sceneYard(g,ts,W,H){
+  const HZ=PLAZA_HORIZON, night=wxState.night;
+  sceneSky(g,W,0,HZ-1);
+  for(let x=0;x<W;x++){   // 遠山：兩層起伏
+    const h1=4+Math.round(2.5*Math.sin(x/7)+1.5*Math.sin(x/3.1+1));
+    sceneRect(g,x,HZ-h1,1,h1, night?'#151c26':'#3a4a52');
+  }
+  for(let x=0;x<W;x+=3){  // 樹林：一排圓圓的樹冠，微微擺
+    const h=3+Math.floor(festRnd(x+1800)*3), sw=Math.round(Math.sin(ts/1700+x)*0.4);
+    sceneRect(g,x+sw,HZ-h,3,h, night?'#121a15':'#22382a');
+    sceneRect(g,x+1+sw,HZ-h-1,1,1, night?'#121a15':'#22382a');
+  }
+  sceneRect(g,0,0,W,HZ,'#0d1117',0.3);   // 壓暗一點，天氣層的雲、光還會疊上來
+  sceneGrass(g,ts,W,H,HZ,'#1d281e','#273526',60);
+  for(let i=0;i<10;i++){
+    const x=Math.floor(festRnd(i+1600)*W), y=HZ+1+Math.floor(festRnd(i+1700)*(H-HZ-1));
+    sceneRect(g,x,y,1,1, i%3===0 ? '#d8d2b0' : i%3===1 ? '#c9b85a' : '#4a4f55', i%3===2 ? 0.8 : 0.55);
+  }
+}
+// 廣場的地板：每個節日一種，跟背景同一個氣氛。地平線跟辦公室的牆腳同高（PLAZA_HORIZON），
+// 上面留給天空的東西（煙火、月亮、星星）。顏色一律壓暗、低彩度 —— 角色站在上面要看得清楚。
+// 營地、廣場都鋪（營地的節日背景要開「顯示節慶造型」才會出現）。
+function festFloor(g,ts,W,H,id){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  const bricks=(w,h,cols,seam)=>sceneBricks(g,W,H,HZ,w,h,cols,seam);
+  const grass=(base,tuft,n)=>sceneGrass(g,ts,W,H,HZ,base,tuft,n);
+  const sprinkle=(n,seed,c,a)=>{ for(let i=0;i<n;i++) R(Math.floor(festRnd(i+seed)*W),HZ+1+Math.floor(festRnd(i+seed+97)*(H-HZ-1)),1,1,c,a); };
+  if(id==='doubleten'){
+    // 總統府前的石板廣場：大塊灰石板
+    bricks(10,5,['#2c2e33','#2f3136','#2a2c31'],'#25272b');
+  } else if(id==='halloween'){
+    // 紫灰色的石子路＋幾片橘色落葉
+    R(0,HZ,W,H-HZ,'#211c26');
+    for(let y=HZ+1,r=0;y<H;y+=3,r++) for(let x=(r%2)*2,k=0;x<W;x+=4,k++)
+      R(x,y,3,2,festRnd(r*17+k)<0.5?'#29232f':'#2d2633');
+    sprinkle(10,700,'#a05a1e',0.7);
+  } else if(id==='christmas'){
+    // 積雪的地面：一條條起伏的雪堆，偶爾閃一下
+    R(0,HZ,W,H-HZ,'#2a3039');
+    for(let y=HZ+2;y<H;y+=5) for(let x=0;x<W;x++){
+      const t=Math.sin(x/4+y)*1.2; R(x,y+Math.round(t),1,2,'#353c47');
+    }
+    for(let i=0;i<8;i++){ const a=Math.max(0,Math.sin(ts/500+i*2.3)); if(a>0.7) R(Math.floor(festRnd(i+800)*W),HZ+2+Math.floor(festRnd(i+900)*(H-HZ-3)),1,1,'#ffffff',a*0.6); }
+  } else if(id==='newyear'){
+    // 跨年晚會的廣場：深藍地磚，映著一點煙火的顏色
+    for(let y=HZ;y<H;y+=4) for(let x=0;x<W;x+=6) R(x,y,6,4,((x/6+(y-HZ)/4)%2)?'#1b2030':'#1f2536');
+    const cs=['#de2028','#5b8cff','#ffd84a','#f0508c'];
+    for(let i=0;i<6;i++){ const a=Math.max(0,Math.sin(ts/900+i*1.7)); R(Math.floor(festRnd(i+1000)*W),HZ+2+Math.floor(festRnd(i+1100)*(H-HZ-3)),2,1,cs[i%cs.length],a*0.25); }
+  } else if(id==='lunarny'){
+    // 三合院的青磚地＋滿地鞭炮紅紙屑
+    bricks(6,3,['#2a2d33','#2d3037','#282b30'],'#232529');
+    sprinkle(18,1200,'#b0151c',0.75);
+  } else if(id==='lantern'){
+    // 廟埕的大石板，地上映著燈籠的暖光（慢慢明暗）
+    bricks(12,6,['#2b2925','#2e2b27','#292723'],'#242220');
+    for(let i=0;i<3;i++){
+      const cx=Math.round(W*(0.2+0.3*i)), cy=HZ+8+i*7, a=0.07+0.03*Math.sin(ts/400+i);
+      R(cx-5,cy-1,10,3,'#ffb347',a); R(cx-3,cy-2,6,5,'#ffb347',a);
+    }
+  } else if(id==='valentine'){
+    // 木地板（帶一點玫瑰色）＋幾片花瓣
+    for(let y=HZ,r=0;y<H;y+=2,r++){
+      R(0,y,W,2,r%2?'#30262a':'#33292d'); R(0,y,W,1,'#2a2125',0.5);
+      for(let x=Math.floor(festRnd(r)*9);x<W;x+=9+Math.floor(festRnd(r+x)*6)) R(x,y,1,2,'#261e21');
+    }
+    sprinkle(8,1300,'#d86a95',0.55);
+  } else if(id==='qingming'){
+    // 濕濕的草地，中間一條石板小徑
+    grass('#1e2820','#27352a',40);
+    for(let y=HZ,k=0;y<H;y+=3,k++){
+      const x=Math.round(W/2-5+Math.sin(k*0.8)*4);
+      R(x,y,7,2,'#2c302f'); R(x+1,y,5,1,'#353a39',0.8);
+    }
+  } else if(id==='children'){
+    // 遊樂場的安全地墊：四色拼塊（都壓暗）
+    const cs=['#262c40','#283628','#3a2828','#36321f'];
+    for(let y=HZ,r=0;y<H;y+=4,r++) for(let x=0,k=0;x<W;x+=6,k++){ R(x,y,6,4,cs[(r+k)%4]); R(x,y,6,1,'#1c1e24',0.5); }
+  } else if(id==='dragonboat'){
+    // 河邊的木棧道（下緣的水面另外畫）
+    for(let y=HZ,r=0;y<H;y+=3,r++){
+      R(0,y,W,3,r%2?'#352a1f':'#3a2e22'); R(0,y,W,1,'#2a2118');
+      for(let x=(r*5)%11;x<W;x+=11) R(x,y+1,1,1,'#55452f');   // 釘子
+    }
+  } else if(id==='qixi'){
+    // 夜裡的草原，螢火蟲慢慢飄
+    grass('#172128','#1f2c33',36);
+    for(let i=0;i<7;i++){
+      const x=festRnd(i+1400)*W+Math.sin(ts/1300+i)*3, y=HZ+3+festRnd(i+1500)*(H-HZ-6)+Math.cos(ts/1700+i*2)*2;
+      R(x,y,1,1,'#d8ff7a',0.25+0.55*Math.max(0,Math.sin(ts/600+i*1.9)));
+    }
+  } else if(id==='midautumn'){
+    // 中秋烤肉的草皮，左下鋪一塊野餐墊
+    grass('#1f2a1f','#283728',36);
+    for(let y=0;y<4;y++) for(let x=0;x<12;x++) R(3+x,H-7+y,1,1,((x>>1)+(y>>1))%2?'#5a2a2a':'#8a8478',0.75);
+  }
+}
 // 節日背景現在有沒有在畫（廣場一律、營地看開關）
 function festShown(){ return !!festState.id && (view==='plaza' || (view==='yard' && festState.bg)); }
 function festDraw(ts){
@@ -1921,6 +2299,7 @@ function festDraw(ts){
   if(!on||!cv.width||!cv.height) return;
   const g=cv.getContext('2d'), W=Math.floor(cv.width/CW), H=Math.floor(cv.height/(CH/2));
   g.clearRect(0,0,cv.width,cv.height);
+  festFloor(g,ts,W,H,festState.id);   // 地板先鋪，其他東西疊在上面（營地、廣場都鋪）
   // 前景（疊在角色上面）：雙十彩旗、春節燈籠 —— 掛在鏡頭前的東西
   const fcv=document.getElementById('festfront'), gf=fcv.getContext('2d');
   gf.clearRect(0,0,fcv.width,fcv.height);
@@ -2037,7 +2416,7 @@ function festDraw(ts){
   } else if(festState.id==='qixi'){
     // 上半部星空：星星一閃一閃，兩顆十字亮星是牛郎、織女（銀河試過，一格 dot 太粗，看起來像灰塵）
     for(let i=0;i<22;i++){
-      const x=festRnd(i+100)*W, y=festRnd(i+200)*H*0.45;
+      const x=festRnd(i+100)*W, y=festRnd(i+200)*(view==='plaza'?PLAZA_HORIZON-1:H*0.45);   // 廣場：只在地平線上
       festDot(g,x,y,'#ffffff',0.25+0.45*(0.5+0.5*Math.sin(ts/(500+festRnd(i)*600)+i)));
     }
     const tw=0.75+0.25*Math.sin(ts/400);
@@ -2063,6 +2442,8 @@ function festDraw(ts){
 // 伺服器給的節日狀態 → 背景與勾選框。勾選框只在有節日時出現。
 function applyFestival(f, opts){
   festState.id = f ? f.id : null;
+  festState.hasBg = !!(f && f.bg !== false);
+  const io=document.getElementById('plazaio'); if(io) io.style.display = festState.hasBg ? 'none' : '';
   if(opts && opts.costume!=null) festState.bg = !!opts.costume;   // 營地背景跟造型同一顆開關
   document.querySelectorAll('.festname').forEach(el=>{ el.textContent = f ? f.name : ''; });
   // 營地、廣場同一顆，排在控制列最右（跟「顯示天氣日期」並排）
@@ -2129,7 +2510,7 @@ async function pollYard(){
   document.getElementById('tick').textContent='#'+y.step;
   applyWeather(y.weather);
   applyFestival(y.festival, {costume:y.festCostume});
-  if(y.lines){ draw(y.lines); }
+  if(y.lines){ draw(y.lines); drawLayer(y.layer); }
   else {
     // 空營地：仍然把畫布撐成完整的場地大小再清空。
     // 只 clearRect 不改尺寸的話，畫布會停在上一次畫過的家裡舞台（52 欄），
@@ -2236,8 +2617,8 @@ function yardHit(ev){
   const S=lastYard.sprite||16;
   // 由後往前找 = 從畫在最上層的那隻開始，跟眼睛看到的一致
   for(let i=lastYard.pets.length-1;i>=0;i--){
-    const p=lastYard.pets[i];
-    if(dx>=p.x&&dx<p.x+S&&dy>=p.y&&dy<p.y+S) return p;
+    const p=lastYard.pets[i], s=p.size||S;   // 圍爐會縮小
+    if(dx>=p.x&&dx<p.x+s&&dy>=p.y&&dy<p.y+s) return p;
   }
   return null;
 }
@@ -2248,7 +2629,7 @@ function yardHit(ev){
   const zb=document.getElementById('zonebox');
   if(zb) zb.addEventListener('change',()=>{
     showZones=zb.checked;
-    if(view==='yard'&&lastYard&&lastYard.lines) draw(lastYard.lines);
+    if(view==='yard'&&lastYard&&lastYard.lines){ draw(lastYard.lines); drawLayer(lastYard.layer); }
   });
 }
 
@@ -2323,12 +2704,14 @@ function plazaNoticeCheck(n){
   if(n && n.at>plazaNoticeSeen){ plazaNoticeSeen=n.at; flashCmdMsg(n.text,'#d29922'); }
 }
 async function pollPlaza(){
-  const p=await (await fetch('/plaza',{cache:'no-store'})).json();
+  const pfs=document.getElementById('plazafestsel');   // dev 節日預覽
+  const p=await (await fetch('/plaza'+(pfs&&pfs.value?'?fest='+encodeURIComponent(pfs.value):''),{cache:'no-store'})).json();
   if(!p.ok){ document.getElementById('err').textContent='⚠️ '+p.error; return; }
   plazaNoticeCheck(p.notice);
   if(!p.active){ setView('home'); return; }
-  plazaMode=p.mode||'auto';
+  plazaMode=p.mode||'auto'; plazaFeast=!!p.feast;
   document.getElementById('plazamode').textContent = plazaMode==='manual' ? '🎮 手動（WASD）' : '🚶 自動';
+  document.getElementById('plazamode').style.display = plazaFeast ? 'none' : '';   // 圍爐：大家坐著，沒有走路模式
   // 名牌輸入框：沒在打字時才跟著伺服器的名字走，不然會把正在輸入的字蓋掉
   const ni=document.getElementById('plazaname');
   if(ni && document.activeElement!==ni && ni.dataset.cur!==p.me){ ni.value=p.me; ni.dataset.cur=p.me; }
@@ -2341,11 +2724,12 @@ async function pollPlaza(){
   document.getElementById('kind').textContent='plaza';
   document.getElementById('tick').textContent='#'+p.step;
   document.getElementById('err').textContent='';
-  draw(p.lines);
+  draw(p.lines); drawLayer(p.layer);
   lastPlazaTags=p.tags||[]; lastPlazaMe=p.me;
   drawNameTags(p.tags, p.owner);
   drawBubbles(p.tags, p.chat, p.serverNow);
   renderChat(p.chat);
+  renderAdmin(p.members);
   renderInvite(p.invite);
   renderBattle(p.battle);
   syncWx();
@@ -2373,6 +2757,11 @@ function plazaClick(ev){
   b.disabled=!!t.battling;
   b.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2)}).then(()=>poll()); });
   el.append(b);
+  if(PLAZA_ADMIN){
+    const k=document.createElement('button'); k.className='danger devonly'; k.textContent='🚫 踢出廣場（dev）';
+    k.addEventListener('click',()=>{ closeCtx(); adminKick(String(t.key).slice(2), t.text); });
+    el.append(k);
+  }
   el.style.display='block';
   el.style.left=Math.min(ev.clientX, innerWidth-el.offsetWidth-8)+'px';
   el.style.top =Math.min(ev.clientY, innerHeight-el.offsetHeight-8)+'px';
@@ -2416,14 +2805,16 @@ function renderBattle(b){
 }
 
 // ── 聊天室 ──
-// 只有最後一則變了才重畫（每 250ms 重建一次會把使用者正在選取的文字洗掉）。
+// 內容變了才重畫（每 250ms 重建一次會把使用者正在選取的文字洗掉）。
+// 比整串 seq 而不是只比最後一則：管理員刪掉中間一則，最後一則沒變但要重畫。
 // 原本就捲在最底下才跟著捲到底；往上翻舊訊息時不要被拉回去。
-let chatShown=0;
+const PLAZA_ADMIN=${IS_RELEASE ? 'false' : 'true'};   // 開發版才有管理（踢人、刪聊天）
+let chatShown='';
 function renderChat(list){
   list=list||[];
-  const last=list.length ? list[list.length-1].seq : 0;
-  if(last===chatShown) return;
-  chatShown=last;
+  const sig=list.map(m=>m.seq).join(',');
+  if(sig===chatShown) return;
+  chatShown=sig;
   const box=document.getElementById('chatlog');
   const atBottom = box.scrollTop+box.clientHeight >= box.scrollHeight-4;
   box.textContent='';
@@ -2438,9 +2829,41 @@ function renderChat(list){
       who.style.color=m.color||'${plaza.NAME_DEFAULT_COLOR}'; who.textContent=m.name;
       row.append(who, document.createTextNode('：'+m.text));   // textContent：別人打的字不能當 HTML
     }
+    if(PLAZA_ADMIN){
+      const del=document.createElement('button'); del.className='del devonly'; del.textContent='刪除'; del.title='刪除這則（dev）';
+      del.addEventListener('click',()=>sendCmd('plazaChatDel',{seq:String(m.seq)}).then(()=>poll()));
+      row.append(del);
+    }
     box.append(row);
   }
   if(atBottom) box.scrollTop=box.scrollHeight;
+}
+// 管理列（dev）：踢人的下拉。名單沒變就不重建（不然正在選的會被洗掉）
+let adminShown=null;
+function renderAdmin(list){
+  const sel=document.getElementById('admwho');
+  if(!sel||!list) return;
+  const sig=list.map(m=>m.id+':'+m.name).join(',');
+  if(sig===adminShown) return;
+  adminShown=sig;
+  const keep=sel.value;
+  sel.textContent='';
+  const none=document.createElement('option'); none.value=''; none.textContent=list.length?'（選一個人）':'（沒有別人）'; sel.append(none);
+  for(const m of list){ const o=document.createElement('option'); o.value=m.id; o.textContent=m.name; sel.append(o); }
+  if(list.some(m=>m.id===keep)) sel.value=keep;
+}
+function adminKick(id,name){
+  if(!id||!confirm('把 '+name+' 移出廣場？（5 分鐘內不能再進來）')) return;
+  sendCmd('plazaKick',{target:id}).then(()=>poll());
+}
+if(document.getElementById('plazaadmin')){
+  document.getElementById('admkick').addEventListener('click',()=>{
+    const sel=document.getElementById('admwho');
+    adminKick(sel.value, sel.selectedIndex>=0 ? sel.options[sel.selectedIndex].textContent : '');
+  });
+  document.getElementById('admclear').addEventListener('click',()=>{
+    if(confirm('清空所有人的聊天記錄？')) sendCmd('plazaChatClear',{}).then(()=>poll());
+  });
 }
 // 對話泡泡：說話的人頭上顯示前 BUBBLE_CHARS 個字，BUBBLE_MS 後消失（規格 §七）
 const BUBBLE_MS=5000, BUBBLE_CHARS=12;
@@ -2717,8 +3140,9 @@ function setDevUi(on){
   document.body.classList.toggle('nodev', !on);
   try{ localStorage.setItem('vpet.devui', on ? '1' : '0'); }catch(e){}
   document.querySelectorAll('#devui button').forEach(b=>{ b.style.borderColor = (b.dataset.on==='1')===on ? '#58a6ff' : ''; });
+  const pd=document.getElementById('plazadev'); if(pd) pd.checked=on;   // 廣場那顆勾選框（同一個開關）
   if(on) return;
-  for(const [id,k] of [['wxsel','value'],['festsel','value'],['wxcold','checked'],['wxnight','checked'],['zonebox','checked']]){
+  for(const [id,k] of [['wxsel','value'],['festsel','value'],['plazafestsel','value'],['wxcold','checked'],['wxnight','checked'],['zonebox','checked']]){
     const el=document.getElementById(id);
     if(!el || !el[k]) continue;
     el[k] = k==='value' ? '' : false;
@@ -2727,6 +3151,7 @@ function setDevUi(on){
 }
 if(document.getElementById('devui')){
   document.querySelectorAll('#devui button').forEach(b=>b.addEventListener('click',()=>setDevUi(b.dataset.on==='1')));
+  document.getElementById('plazadev').addEventListener('change',e=>setDevUi(e.target.checked));
   let v=null; try{ v=localStorage.getItem('vpet.devui'); }catch(e){}
   setDevUi(v!=='0');
 }
@@ -2797,8 +3222,18 @@ for(const [id,act] of [['festcos2','festCostume']]){
 // ── 廣場：自動／手動（WASD）──
 // 只在「方向真的改變」時送一次（按下、放開、換方向），按住不放不重送 ——
 // 位置是大家用同一個公式算的（見 plaza-walk 的 manualPos），伺服器只要知道方向何時改變。
-let plazaMode='auto';
+let plazaMode='auto', plazaFeast=false;
 // 演完（${PlazaServer.EMOTE_MS}ms）才能再按：伺服器也會擋，但連按只會換來一排「還在開心中」
+{
+  // 室內／室外：只換自己看到的背景（存在這台瀏覽器）。節日有背景時藏起來（用不到）
+  const io=document.getElementById('plazaio');
+  const show=()=>{ io.textContent = plazaOutdoor ? '🌳 室外' : '🏢 室內'; };
+  show();
+  io.addEventListener('click',()=>{
+    plazaOutdoor=!plazaOutdoor; show();
+    try{ localStorage.setItem('vpet.plazaOutdoor', plazaOutdoor ? '1' : '0'); }catch(e){}
+  });
+}
 document.getElementById('plazahappy').addEventListener('click',e=>{
   const b=e.currentTarget; b.disabled=true;
   setTimeout(()=>{ b.disabled=false; }, ${PlazaServer.EMOTE_MS});
@@ -2826,7 +3261,7 @@ function plazaSteer(){
 const typing=()=>{ const a=document.activeElement; return a && (a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT'); };
 addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
-  if(view!=='plaza'||plazaMode!=='manual'||!PLAZA_KEYS[k]||typing()) return;
+  if(view!=='plaza'||plazaMode!=='manual'||plazaFeast||!PLAZA_KEYS[k]||typing()) return;
   e.preventDefault();                       // 方向鍵不要捲動頁面
   if(!plazaKeys.has(k)){ plazaKeys.add(k); plazaSteer(); }
 });
@@ -2933,6 +3368,7 @@ function dropAt(id, x, y){
 
 document.getElementById('pet').addEventListener('mousedown',ev=>{
   if(ev.button!==0||view!=='yard'||drag) return;   // 還在落下就別又抓一隻
+  if(lastYard&&lastYard.feast) return;               // 圍爐：大家坐在位子上，不能拎走（點一下摸摸照舊）
   const hit=yardHit(ev); if(!hit) return;
   ev.preventDefault();                     // 避免拖出瀏覽器原生的「拖曳選取」
   const at=evDot(ev);
@@ -3018,15 +3454,19 @@ const server = http.createServer((req, res) => {
             // field 就換 → posAt 的 epoch 跟著變 → 舊快取自動作廢，不用另外清。
             const zoneLayout = new URL(req.url, 'http://x').searchParams.get('zl') || null;
             // ?fest=halloween → 預覽節日（同 ?w=，只影響這次請求）
-            const fest  = festNow(Date.now(), new URL(req.url, 'http://x').searchParams.get('fest'));
+            const festQ = new URL(req.url, 'http://x').searchParams.get('fest');
+            const fest  = festNow(Date.now(), festQ);
             const festOpt = readFest();
+            // 圍爐跟著「顯示節慶造型」：關掉就變回平常散步
+            const feast = festOpt.costume && festFeast(fest, Date.now(), festQ);
             const alive = new Set((ranch.pets || []).map(p => p.id));
             const out   = plaza.composeYard(core, ranch, st, step,
                                             { caches: yardCaches, react: yardReactMap(alive),
                                               layout: zoneLayout,
                                               acc: fest && festOpt.costume ? fest.acc : null,
                                               swap: fest && festOpt.costume ? fest.swap || null : null,
-                                              swapSalt: new URL(req.url, 'http://x').searchParams.get('ds') || null });
+                                              swapSalt: new URL(req.url, 'http://x').searchParams.get('ds') || null,
+                                              feast });
             // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -3063,7 +3503,7 @@ const server = http.createServer((req, res) => {
                 const lo = D(z.minX, z.minY), hi = D(z.maxX, z.maxY), an = plaza.zoneAnchor(z), a = D(an.x, an.y);
                 return { minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, anchor: { x: a.x, y: a.y } };
             });
-            body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones,
+            body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones, feast,
                      inPlaza: plazaClient.active(),   // 別的分頁進了廣場 → 這個分頁也要跟進去
                      weather: { ...wx, ...WX.describe(wx) },
                      festival: festView(fest), festCostume: festOpt.costume,
@@ -3072,12 +3512,12 @@ const server = http.createServer((req, res) => {
                      layout: zoneLayout || zoneInfo.def,
                      layouts: zoneInfo.names,
                      kept: (ranch.pets || []).length,
-                     lines: out ? out.lines : null,
+                     lines: out ? out.lines : null, layer: out ? out.layer : null,
                      // y 回傳**畫出來**的位置（含跳躍位移），不是地面的 y ——
                      // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
                      pets: out ? out.placed.map(p => ({
                          id: p.ranchId, name: p.name, char: p.char, zoneIdx: p.zoneIdx,
-                         x: p.dx, y: p.dy, ...info(p.ranchId),
+                         x: p.dx, y: p.dy, size: p.size || plaza.SPRITE, ...info(p.ranchId),
                      })) : [] };
         } catch (e) {
             body = { ok: false, error: e.message };
@@ -3088,7 +3528,7 @@ const server = http.createServer((req, res) => {
     }
     // 廣場畫面。跟院子一樣每次請求現算（20 人約 0.3ms）。
     // 不在廣場時回 active:false + 最近一次被帶回前線的原因，前端據此切回前線並顯示。
-    if (req.url === '/plaza') {
+    if (req.url === '/plaza' || req.url.startsWith('/plaza?')) {
         let body;
         try {
             if (!plazaClient.active()) {
@@ -3096,8 +3536,10 @@ const server = http.createServer((req, res) => {
             } else {
                 const me = plazaClient.me();
                 const list = plazaClient.roster();
-                // 節日用伺服器時間判斷：大家同一刻換裝、同一刻掛上背景
-                const fest = festNow(Date.now() + plazaClient.skew());
+                // 節日用伺服器時間判斷：大家同一刻換裝、同一刻掛上背景。
+                // ?fest=<id> = dev 預覽（只影響這個畫面，別人看到的不變；release 的 festNow 不吃）
+                const festQ = new URL(req.url, 'http://x').searchParams.get('fest');
+                const fest = festNow(Date.now() + plazaClient.skew(), festQ);
                 // 開心鈕：照營地摸摸的演法（yard-touch 的 REACT_MS / JUMP_MS / JUMP_H），
                 // 用伺服器時間算相位 → 大家看到同一下跳。走路不停（走法是大家共用的公式，
                 // 一個人停下來要改伺服器的走法，跳一下不值得）。
@@ -3111,6 +3553,7 @@ const server = http.createServer((req, res) => {
                 const occ = list.map(m => ({
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
                     battle: !!m.battle,
+                    react: m.battle ? 'BATTLE' : undefined,   // 對戰中：IDLE_1 ↔ ANGRY 循環（開心鈕演出照樣蓋過去）
                     acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
                     swap: fest && m.costume !== false ? fest.swap || null : null,
                     ...(happy(m) || {}),
@@ -3118,11 +3561,13 @@ const server = http.createServer((req, res) => {
                 const step = plazaClient.step();
                 // 場地與畫法比照營地（69x54 細格、角色 16 細格），原住民先不放。
                 // 手動模式用毫秒算位置（每秒 4 格），要給校正過的伺服器時間
+                // 圍爐是這台自己畫的場景 → 看本人的「顯示節慶造型」：關掉就看到大家散步
+                const feast = me.costume !== false && festFeast(fest, nowS, festQ);
                 const out = plaza.composePlazaLive(core, occ, step,
-                    { caches: plazaCaches, me: me.name, nowMs: Date.now() + plazaClient.skew() });
+                    { caches: plazaCaches, me: me.name, nowMs: Date.now() + plazaClient.skew(), feast });
                 const mine = list.find(m => m.id === me.id);
                 body = { ok: true, active: true, step, me: me.name, notice: plazaNotice,
-                         mode: mine && mine.mode === 'manual' ? 'manual' : 'auto',
+                         mode: mine && mine.mode === 'manual' ? 'manual' : 'auto', feast,
                          // 對戰邀請：別人邀我（要回覆）／我邀別人（等回覆）
                          invite: (() => {
                              const inc = plazaClient.incoming(), out = plazaClient.outgoing();
@@ -3138,11 +3583,13 @@ const server = http.createServer((req, res) => {
                          festival: festView(fest), festCostume: me.costume !== false,
                          // 天氣比照營地：用這台 daemon 抓到的（內網大家在同一個城市，各抓各的一樣）
                          weather: (() => { const w = weatherFor(null); return { ...w, ...WX.describe(w) }; })(),
-                         names: list.map(m => m.name), lines: out.lines, tags: out.tags,
+                         names: list.map(m => m.name), lines: out.lines, layer: out.layer, tags: out.tags,
                          // owner 一列一個字串：'.' = 沒人，其餘 = '0' + z（20 人以內不會超出可見字元）
                          owner: out.owner.map(r => r.map(z => (z < 0 ? '.' : String.fromCharCode(48 + z))).join('')),
                          // 聊天：最近 50 則；serverNow 給前端判斷對話泡泡還要不要顯示（5 秒）
-                         chat: plazaClient.chat(), serverNow: Date.now() + plazaClient.skew() };
+                         chat: plazaClient.chat(), serverNow: Date.now() + plazaClient.skew(),
+                         // 管理列（dev）的踢人下拉：release 不給
+                         members: IS_RELEASE ? undefined : list.filter(m => m.id !== me.id).map(m => ({ id: m.id, name: m.name })) };
             }
         } catch (e) {
             body = { ok: false, error: e.message };

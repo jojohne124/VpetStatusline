@@ -20,6 +20,7 @@
 const http   = require('http');
 const crypto = require('crypto');
 const fs     = require('fs');
+const os     = require('os');
 const path   = require('path');
 const W      = require('../shared/plaza-walk.js');
 
@@ -40,6 +41,20 @@ const INVITE_MS    = 30000;     // 邀請多久沒回就當作拒絕
 // 與 daemon 輪詢的延遲。這段期間兩隻停在原地、旁觀的人看到頭上的 ⚔。
 const BATTLE_MS    = 18000;
 const FIELD        = W.PLAZA_LIVE_FIELD;   // 廣場的走路場地（大小比照營地畫面，見 plaza-walk）
+// 管理（踢人、刪聊天）：要帶管理金鑰。金鑰是主機上的一個檔，plaza-host 第一次啟動時產生；
+// 開發版 daemon 讀同一個檔（同一台機器）。只留在主機，不進 repo、不出貨。
+const ADMIN_KEY_FILE = process.env.VPET_PLAZA_ADMIN_KEY || path.join(os.homedir(), '.vpet', 'plaza-admin.key');
+const KICK_BAN_MS  = 5 * 60 * 1000;   // 被踢的名牌多久不能再進來（不然對方馬上又進來，踢了等於沒踢）
+
+// 讀管理金鑰；create = 沒有就產生一把（只有 plaza-host 主程式會這樣叫）。讀不到 = null（管理功能關閉）
+function loadAdminToken(file = ADMIN_KEY_FILE, create = false) {
+    try { const t = fs.readFileSync(file, 'utf8').trim(); if (t) return t; } catch (e) {}
+    if (!create) return null;
+    const t = crypto.randomBytes(24).toString('hex');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, t + '\n', { mode: 0o600 });
+    return t;
+}
 
 // 輸入一律不信任。名牌沿用 `vpet code` 的規則（statusline-cheat 的 validId），
 // 角色 id 是檔名那一套字元。
@@ -59,6 +74,9 @@ function createPlazaServer(opts = {}) {
     const inviteMs = opts.inviteMs ?? INVITE_MS;
     const battleMs = opts.battleMs ?? BATTLE_MS;
     const rand     = opts.rand     || Math.random;   // 測試可以固定勝負
+    const adminToken = opts.adminToken || null;      // null = 管理功能關閉
+    const kickBanMs  = opts.kickBanMs ?? KICK_BAN_MS;
+    const banned = new Map();    // 名牌（小寫）-> 解禁時間
 
     const members = new Map();   // id -> { id, name, char, stage, card, walk, stream, lostAt, chatAt }
     const chat = [];             // 最近 CHAT_KEEP 則：{ seq, at, from, name, color, text } 或 { seq, at, sys:true, text }
@@ -97,7 +115,7 @@ function createPlazaServer(opts = {}) {
         for (const inv of [...invites.values()]) if (inv.from === id || inv.to === id) closeInvite(inv, 'left');
         broadcast('leave', { id, reason });
         // 同名取代＝同一個人換了一台 daemon 進來，不是真的離開，不報
-        if (reason !== 'replaced') sys(`${m.name} 離開了`);
+        if (reason !== 'replaced' && reason !== 'kicked') sys(`${m.name} 離開了`);
         log(`離場：${m.name}（${reason}）。在場 ${members.size} 人`);
     }
 
@@ -106,6 +124,10 @@ function createPlazaServer(opts = {}) {
         if (!validName(name))  return { status: 400, body: { ok: false, error: '名牌不合法（1~16 個中英數字）' } };
         if (!validChar(char))  return { status: 400, body: { ok: false, error: '角色 id 不合法' } };
         if (!validStage(stage)) return { status: 400, body: { ok: false, error: '階級不合法' } };
+        const ban = banned.get(name.toLowerCase());
+        if (ban && ban > now()) {
+            return { status: 403, body: { ok: false, error: `你被管理員移出廣場，${Math.ceil((ban - now()) / 60000)} 分鐘後再來` } };
+        }
         // 同名：後進的取代先進的（同一個人開了兩個 daemon 也是這樣）。
         // 先進的那個要被明確告知，否則它會以為只是斷線、一直重連。
         for (const m of [...members.values()]) {
@@ -312,6 +334,46 @@ function createPlazaServer(opts = {}) {
         return { status: 200, body: { ok: true, at: t } };
     }
 
+    // ── 管理（dev）──────────────────────────────────────────────────────
+    // 金鑰比對用固定時間比較（先雜湊成同長度）。沒設金鑰 = 整組關掉。
+    const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
+    function authed(body) {
+        if (!adminToken) return { status: 403, body: { ok: false, error: '這台廣場沒有開管理功能（沒有管理金鑰）' } };
+        if (!body || typeof body.token !== 'string' || !crypto.timingSafeEqual(sha(body.token), sha(adminToken))) {
+            return { status: 403, body: { ok: false, error: '管理金鑰不對' } };
+        }
+        return null;
+    }
+    // 踢人：通知本人（它就不會當成斷線一直重連）→ 移出名單 → 名牌 kickBanMs 內不能再進
+    function adminKick(body) {
+        const deny = authed(body); if (deny) return deny;
+        const m = members.get(body.target);
+        if (!m) return { status: 404, body: { ok: false, error: '對方已經不在廣場了' } };
+        banned.set(m.name.toLowerCase(), now() + kickBanMs);
+        send(m, 'kicked', { reason: 'admin' });
+        remove(m.id, 'kicked');
+        sys(`${m.name} 被管理員移出廣場`);
+        log(`管理：踢出 ${m.name}`);
+        return { status: 200, body: { ok: true } };
+    }
+    // 刪一則（seq）或清空全部（all:true）。大家的聊天室跟著刪，進場／重連拿到的也是刪過的
+    function adminChat(body) {
+        const deny = authed(body); if (deny) return deny;
+        if (body.all === true) {
+            chat.length = 0;
+            broadcast('chat-clear', {});
+            sys('聊天記錄已被管理員清除');
+            log('管理：清空聊天');
+            return { status: 200, body: { ok: true } };
+        }
+        const i = chat.findIndex(e => e.seq === body.seq);
+        if (i < 0) return { status: 404, body: { ok: false, error: '找不到這則（可能已經被洗掉了）' } };
+        const [e] = chat.splice(i, 1);
+        broadcast('chat-del', { seq: e.seq });
+        log(`管理：刪除聊天 #${e.seq}（${e.sys ? '系統' : e.name}）`);
+        return { status: 200, body: { ok: true } };
+    }
+
     function openEvents(req, res, id) {
         const m = members.get(id);
         if (!m) {
@@ -379,6 +441,12 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'POST' && u.pathname === '/move') {
             return readBody(req, (j) => { const r = move(j); reply(res, r.status, r.body); });
         }
+        if (req.method === 'POST' && u.pathname === '/admin/kick') {
+            return readBody(req, (j) => { const r = adminKick(j); reply(res, r.status, r.body); });
+        }
+        if (req.method === 'POST' && u.pathname === '/admin/chat') {
+            return readBody(req, (j) => { const r = adminChat(j); reply(res, r.status, r.body); });
+        }
         if (req.method === 'POST' && u.pathname === '/leave') {
             return readBody(req, (j) => { if (j && typeof j.id === 'string') remove(j.id, 'leave'); reply(res, 200, { ok: true }); });
         }
@@ -409,12 +477,15 @@ function createPlazaServer(opts = {}) {
 }
 
 module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
-                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS };
+                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
 
 if (require.main === module) {
     const port = parseInt(process.env.VPET_PLAZA_PORT || String(DEFAULT_PORT), 10);
     const ts = () => new Date().toTimeString().slice(0, 8);
-    const p = createPlazaServer({ log: (m) => console.log(`[${ts()}] ${m}`) });
+    let adminToken = null;
+    try { adminToken = loadAdminToken(ADMIN_KEY_FILE, true); }
+    catch (e) { console.log('管理金鑰讀寫失敗，管理功能關閉：' + e.message); }
+    const p = createPlazaServer({ log: (m) => console.log(`[${ts()}] ${m}`), adminToken });
     p.server.listen(port, '0.0.0.0', () => {
         const os = require('os');
         const ips = Object.values(os.networkInterfaces()).flat()
@@ -423,6 +494,7 @@ if (require.main === module) {
         console.log(`   主機名稱：${os.hostname()}　IP：${ips.join(', ') || '-'}`);
         console.log(`   其他人的 daemon 預設連 http://${os.hostname()}:${port}`);
         console.log('   （防火牆要放行這個 port 的 inbound TCP；Ctrl+C 結束 = 全場回前線）');
+        if (adminToken) console.log(`   管理金鑰：${ADMIN_KEY_FILE}（開發版 daemon 讀這個檔才能踢人／管聊天；不要外流）`);
     });
     p.server.on('error', (e) => { console.log('廣場伺服器起不來：' + e.message); process.exit(1); });
 }

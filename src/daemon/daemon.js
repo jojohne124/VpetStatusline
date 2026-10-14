@@ -126,9 +126,8 @@ const UI_FORMS = [
     { label: '📋 營地清單', action: 'ranch',     fields: [], scope: 'both' },
     { label: '📥 收進營地', action: 'keep',      fields: [], scope: 'both',
       confirm: '會把現役收進營地，並抽一隻新的桌寵。收進去的隨時可以換回來。確定嗎？' },
-    { label: '🔄 換出營地', action: 'swap',      fields: [['which', '編號或角色名']], scope: 'both' },
-    { label: '🗑 放生',     action: 'release',   fields: [['which', '編號或角色名']], scope: 'both',
-      confirm: '放生會**永久刪除**那一隻，救不回來。確定嗎？' },
+    // 換出／放生的兩列拿掉了：營地裡對那隻按右鍵就有（不用先查編號再打字）。
+    // swap / release 指令本身留著 —— 右鍵選單送的就是它們，CLI 也照樣能打。
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
     { label: '⛺ 走動範圍', action: 'zoneedit',  fields: [], scope: 'both', dev: true },
     { label: '🩺 doctor',   action: 'doctor',    fields: [], scope: 'both' },

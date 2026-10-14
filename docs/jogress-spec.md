@@ -129,7 +129,7 @@ force.ranchTriggerTs = Date.now()
   > 合體進化會**永久消耗**營地的 `#2 LadyDevimon`（救不回來），
   > 前線的 `Angewomon` 會變成 `Mastemon`。確定嗎？
 
-- 有多組候選時要能選 —— 一顆鈕配一個下拉（沿用「換出營地」那種 `fields` 形式），
+- 有多組候選時要能選 —— 一顆鈕配一個下拉（`fields` 形式），
   不要只做「第一組」：營地兩隻 LadyDevimon 的情況下那會變成擲骰子。
 
 ## 可達性：圖鑑與路線編輯器

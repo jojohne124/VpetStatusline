@@ -146,6 +146,24 @@ console.log('— swap —');
     ok(ranch.pets[0].id !== 'aaa11', 'id 沒有換新（同一個 id 會跟已取出的那隻撞號）');
 }
 
+console.log('— swap 只動被換的那一格 —');
+{
+    // 院子的走動區域照名單索引分（plaza.js yardOccupants）。換中間那隻，
+    // 其他隻的位置（索引）與 id（走路 seed）都不能變，否則全營地一起瞬移。
+    const mk = (id, ch) => ({ id, keptAt: 1, state: core.snapshotPet({ characterId: ch }) });
+    fs.writeFileSync(RANCH, JSON.stringify({ v: 1, cap: 8,
+        pets: [mk('p1', 'agumon'), mk('p2', 'gabumon'), mk('p3', 'palmon'), mk('p4', 'tentomon')] }));
+    const st = { characterId: 'greymon' };
+    core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'swap', id: 'p2' } }, RANCH);
+    const pets = core.loadRanch(RANCH).pets;
+    ok(st.characterId === 'gabumon', 'swap 沒叫出指定那隻');
+    ok(pets.length === 4, 'swap 之後數量變了');
+    ok(pets[1].state.characterId === 'greymon', '收進去那隻沒放回原本那一格（第 2 格是 ' + pets[1].state.characterId + '）');
+    ok(pets[1].id !== 'p2', '原地放回卻沿用舊 id（撞號）');
+    ok(pets[0].id === 'p1' && pets[2].id === 'p3' && pets[3].id === 'p4',
+       '其他隻的順序變了（全營地會換區瞬移）：' + pets.map(p => p.id).join(','));
+}
+
 // ── 5. 上限與 release ──────────────────────────────────────────────────
 console.log('— 寫檔失敗不可以靜默 —');
 {

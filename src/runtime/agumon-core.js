@@ -454,8 +454,10 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
         const i = ranch.pets.findIndex(p => p.id === op.id);
         if (i < 0) return { op: 'swap', ok: false, reason: 'notfound' };
         const incoming = ranch.pets[i];
-        ranch.pets.splice(i, 1);
-        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        // 收進去的那隻**原地**放回同一格，不是刪掉再接到最後面：院子的走動區域是照名單的
+        // 索引分的（plaza.js yardOccupants），後面的每一隻都往前挪一格的話，
+        // 換一隻會讓全營地的人同時換區、瞬移。id 照樣換新（撞號，見 ranch-spec）。
+        ranch.pets[i] = { id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) };
         saveRanch(ranch, ranchFile);
         restorePet(st, incoming.state);
         return { op: 'swap', ok: true, to: st.characterId };

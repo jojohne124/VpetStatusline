@@ -1355,6 +1355,21 @@ setTimeout(async () => {
     } catch (e) {
         fail++; console.log('  ✗ 例外：' + e.message);
     }
+    // ── 營地第二頁 ──
+    {
+        const dsrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+        // 營地畫完的下一句必須就是「空營地」的 else。中間插過一行 if(story) storyPlace()，
+        // else 變成接在它後面 → 沒開對話框時營地每次畫完就被清空（所有人的營地都看不到角色）。
+        ok(/if\(y\.lines\)\{ draw\(y\.lines\); drawLayer\(y\.layer\); \}\s*else \{/.test(dsrc),
+           'pollYard 畫完營地後面接的不是「空營地」的 else（營地會被清空）');
+        // 台詞整包塞進頁面的 <script>：不能有反引號和 ${
+        const talk = require('../src/daemon/page2-talk.js');
+        const flat = JSON.stringify(talk);
+        ok(!/[`]|\$\{/.test(flat), '營地第二頁的台詞裡有反引號或 ${（會弄壞 daemon 頁面）');
+        ok(typeof talk.notice === 'string' && Array.isArray(talk.standoff) && talk.win && talk.lose && talk.unlocked,
+           '營地第二頁的台詞少了段落');
+        ok(!/momentai/i.test(flat), '台詞不要 Momentai（使用者要求拿掉）');
+    }
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     done(fail ? 1 : 0);
 }, 100);

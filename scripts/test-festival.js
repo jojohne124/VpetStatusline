@@ -359,8 +359,8 @@ console.log('— 圍爐（春節前一週）—');
     ok(/plazamode'\)\.style\.display = plazaFeast \? 'none' : ''/.test(src), '圍爐時還有自動／手動鈕');
     ok(/plazaMode!=='manual'\|\|plazaFeast\|\|/.test(src), '圍爐時 WASD 還會送移動');
     ok(/s=p\.size\|\|S;/.test(src) && /size: p\.size \|\| plaza\.SPRITE/.test(src), '營地點擊沒用縮小後的大小');
-    // 圍爐圖層：營地、廣場都送 layer，前端畫完 lines 接著畫
-    ok(/lines: out \? out\.lines : null, layer: out \? out\.layer : null/.test(src) && /lines: out\.lines, layer: out\.layer/.test(src), '營地／廣場沒有送圍爐圖層');
+    // 圍爐圖層：營地、廣場都送 layer，前端畫完 lines 接著畫（營地第二頁的對峙另外畫，所以 lines 前面可以多一段 sto）
+    ok(/lines: (?:sto \? sto\.lines : )?out \? out\.lines : null, layer: out \? out\.layer : null/.test(src) && /lines: out\.lines, layer: out\.layer/.test(src), '營地／廣場沒有送圍爐圖層');
     ok(/if\(y\.lines\)\{ draw\(y\.lines\); drawLayer\(y\.layer\); \}/.test(src) && /draw\(p\.lines\); drawLayer\(p\.layer\);/.test(src)
        && /draw\(lastYard\.lines\); drawLayer\(lastYard\.layer\);/.test(src), '前端沒有畫圍爐圖層');
     ok(/const sw=it\.k\*DW, sh=it\.k\*DH/.test(src), '前端畫圍爐圖層沒有照倍率放大');

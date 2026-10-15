@@ -804,7 +804,62 @@ function composeYard(core, ranch, activeState, step, opts = {}) {
                                            render: { w: YARD_RENDER.w, h: YARD_RENDER.h, toDraw: yardToDraw } });
 }
 
+// ── 營地第二頁（docs/yard-page2-spec.md）──────────────────────────────
+// 每頁就是「一個 ≤4 隻的營地」：第 1～4 隻在第一頁、第 5～8 隻在第二頁，各自用既有的
+// 1～4 隻切法、各自合成。走路、分區、摸摸、拎起來、右鍵全部原封不動 —— 只是名單換成那一頁的。
+// 每隻只在自己那頁走（第一版不跨頁）。換頁的鏡頭滑行在前端（拿兩頁的畫面並排平移）。
+const YARD_PAGE_SIZE = 4;
+
+/** 分頁後的名單。解鎖且超過 4 隻才分頁；圍爐（opts.feast）大家坐同一桌，不分頁。 */
+function yardPages(ranch, opts = {}) {
+    const pets = (ranch && ranch.pets) || [];
+    if (opts.feast || !(ranch && ranch.page2At) || pets.length <= YARD_PAGE_SIZE) return [pets];
+    const out = [];
+    for (let i = 0; i < pets.length; i += YARD_PAGE_SIZE) out.push(pets.slice(i, i + YARD_PAGE_SIZE));
+    return out;
+}
+/** 第 page 頁的「營地」（同一個 ranch，只是 pets 換成那頁的）。頁碼超出就夾住。 */
+function yardPageRanch(ranch, page, opts = {}) {
+    const pages = yardPages(ranch, opts);
+    const k = Math.max(0, Math.min(pages.length - 1, page | 0));
+    return { ...ranch, pets: pages[k] };
+}
+/** 這隻在第幾頁（找不到回 0）。拎起來／放下要用牠那一頁的名單算區域。 */
+function yardPageOf(ranch, id, opts = {}) {
+    const k = yardPages(ranch, opts).findIndex(ps => ps.some(p => p.id === id));
+    return k < 0 ? 0 : k;
+}
+
+// 第二階段的對峙（規格「表演」）：我方站左側面向右、生氣；敵人站右側面向左、待機兩幀交替。
+// 不走路 —— 位置寫死，畫在營地的細格上（跟 composeYard 同一張畫布大小）。
+// enemyDx：敵人往右挪多少細格（輸了退場用，挪出畫面就不畫）。
+const STANDOFF_SLOTS = [{ x: 18, y: 8 }, { x: 2, y: 16 }, { x: 18, y: 26 }, { x: 2, y: 34 }];
+function composeYardStandoff(core, pets, enemyId, step, opts = {}) {
+    const bw = YARD_RENDER.w, bh = YARD_RENDER.h, S = W.SPRITE;
+    const dots = [], owner = [];
+    for (let y = 0; y < bh; y++) { dots.push(new Array(bw).fill(null)); owner.push(new Array(bw).fill(-1)); }
+    const placed = pets.slice(0, STANDOFF_SLOTS.length).map((p, i) => ({
+        id: p.id, char: p.state && p.state.characterId, x: STANDOFF_SLOTS[i].x, y: STANDOFF_SLOTS[i].y,
+        facing: 'right', react: 'ANGRY',
+    }));
+    const ex = bw - S - 4 + (opts.enemyDx || 0), ey = Math.round((bh - S) / 2);
+    const all = ex < bw ? [...placed, { id: null, char: enemyId, x: ex, y: ey, facing: 'left', react: null }] : placed;
+    all.sort((a, b) => a.y - b.y);
+    all.forEach((p, i) => {
+        const sp = p.char ? spriteDots(core, p.char, step, p.facing, p.react) : null;
+        if (sp) blit(dots, sp, p.x, p.y, owner, i);
+    });
+    const cells = dotsToCells(dots, bw);
+    return {
+        lines: renderWithLabels(cells, new Map()),
+        // 前端的命中判定（選一隻出戰）：畫出來的位置，跟 /yard 的 pets 同一套座標
+        pets: placed.map(p => ({ id: p.id, char: p.char, x: p.x, y: p.y, size: S })),
+        enemy: ex < bw ? { x: ex, y: ey, size: S } : null,
+    };
+}
+
 module.exports = {
+    YARD_PAGE_SIZE, yardPages, yardPageRanch, yardPageOf, composeYardStandoff,
     PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD, SPRITE: W.SPRITE,
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,

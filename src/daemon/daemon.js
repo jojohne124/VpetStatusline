@@ -46,6 +46,7 @@ const FEST  = require('../shared/festival.js');   // 特殊節日（docs/festiva
 const wxSrc = require('./weather-source.js');
 const PlazaClient = require('./plaza-client');
 const HELP  = require('./help-tips');      // 教學的說明表（docs/tutorial-spec.md）
+const P2TALK = require('./page2-talk');    // 營地第二頁事件的台詞（docs/yard-page2-spec.md）
 const PlazaServer = require('./plaza-server');   // 只拿常數（聊天字數上限），不在 daemon 裡起伺服器     // 廣場（docs/plaza-spec.md）：連內網主機的那一端
 
 const {
@@ -79,7 +80,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit']);
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev']);
 // 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
 const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
@@ -607,7 +608,8 @@ async function plazaRename(name) {
 
 // 在廣場裡不能做的事（規格 §六）。伺服器端也要擋：/cmd 是公開端點，只藏按鈕不夠。
 const PLAZA_BLOCKED_CMDS = new Set(['yard', 'yardPet', 'yardGrab', 'yardDrop', 'pet', 'battle', 'evolve',
-    'switch', 'reset', 'keep', 'swap', 'release', 'jogress', 'pvp', 'drop', 'sleep']);
+    'switch', 'reset', 'keep', 'swap', 'release', 'jogress', 'pvp', 'drop', 'sleep',
+    'page2Fight', 'page2GiveUp', 'page2Dev']);
 
 // 天氣。daemon 唯一的對外連線（見 weather-source.js 開頭的規則）——
 // get() 永遠立刻回傳快取，需要更新時在背景抓，/yard 這條路徑不等網路。
@@ -698,7 +700,9 @@ function doTick() {
         let ranchInfo = null, jogress = null;
         try {
             const ranchNow = core.loadRanch();
-            ranchInfo = { kept: (ranchNow.pets || []).length, cap: core.ranchCap() };
+            ranchInfo = { kept: (ranchNow.pets || []).length, cap: core.ranchCap(ranchNow),
+                          // 營地第二頁第一階段：「牠逃到營地了」在前線跳一次（看過就記 seen）
+                          page2Notice: !!(ranchNow.page2Quest && !ranchNow.page2Quest.seen) };
             jogress = jogressInfo(ranchNow, st);
         } catch (e) {}
         latest = {
@@ -827,6 +831,112 @@ const yardTouch = YT.create({
 });
 const yardPetTouch = (id) => ({ ok: true, action: 'yardPet', mood: yardTouch.pet(id) });
 const yardReactMap = (alive) => yardTouch.react(alive);
+
+// 圍爐中嗎（跟 /yard 同一套判斷；festQ = dev 的節日預覽）。圍爐不分頁，拎起來要用整份名單。
+function yardFeastNow(festQ) {
+    const fest = festNow(Date.now(), festQ || null);
+    return !!(readFest().costume && festFeast(fest, Date.now(), festQ || null));
+}
+
+// ── 營地第二頁的事件（docs/yard-page2-spec.md「表演」）────────────────
+// 進度全在 ranch.json（page2Quest → page2Fight → page2Result），前端只負責演：
+//   page2Quest  打贏 Diablomon 後的待觸發（seen = 前線提示看過了）
+//   page2Fight  挑好一隻、開打（勝負在開打那一刻就決定，跟一般戰鬥一樣）
+//   page2Result 打完／放棄的結果，前端演完結果那段（對話、鏡頭、空降）再 page2Ack 清掉
+let page2ForceWin = null;   // dev：下一場強制勝／敗（null = 照機率）
+
+function page2StartFight(which) {
+    const ranch = core.loadRanch();
+    if (!ranch.page2Quest) return { ok: false, error: '現在沒有挑戰' };
+    if (ranch.page2Fight) return { ok: false, error: '已經在打了' };
+    const pet = (ranch.pets || []).find(p => p.id === which);
+    const cid = pet && pet.state && pet.state.characterId;
+    if (!cid) return { ok: false, error: '這隻不在營地裡' };
+    const F = core.PAGE2_FINAL, seed = Date.now();
+    // 營地裡的桌寵以收進去時的戰力（凍結的 state）算勝率，跟一般戰鬥同一條公式
+    const win = page2ForceWin != null ? page2ForceWin
+              : core.seedRand01(seed) < core.computeWinProb(cid, pet.state, F);
+    page2ForceWin = null;
+    ranch.page2Fight = { id: which, char: cid, win, version: core.pickBattleVersion(cid, F),
+                         startStep: plazaStep() + 1 };
+    ranch.page2Quest.seen = true;
+    core.saveRanch(ranch);
+    return { ok: true, action: 'page2Fight' };
+}
+
+// 打完了 → 結算。/yard 每次都先跑這個，所以關掉分頁、中途切回前線都照結果處理。
+const PAGE2_EXIT_DOTS = 6;   // 退場：每拍往右幾細格（約 4 拍退出畫面）
+function page2Settle(ranch, step) {
+    const r = ranch.page2Result;
+    // 敵人站在離右緣 SPRITE+4 細格的地方（composeYardStandoff），挪超過這段就整隻出畫面了
+    if (r && !r.win && r.exitStep && (step - r.exitStep) * PAGE2_EXIT_DOTS >= plaza.SPRITE + 4) {
+        delete ranch.page2Result;   // 退出畫面了 → 營地回到平常
+        core.saveRanch(ranch);
+        return true;
+    }
+    const f = ranch.page2Fight;
+    if (!f || step - f.startStep < core.battleLength(f.version)) return false;
+    delete ranch.page2Fight;
+    let keramonId = null;
+    if (f.win) keramonId = core.page2Grant(ranch);
+    else delete ranch.page2Quest;          // 輸了：從打 Diablomon 重來
+    ranch.page2Result = { win: !!f.win, keramonId, step, at: Date.now() };
+    core.saveRanch(ranch);
+    return true;
+}
+
+// 營地 Armagemon 戰的一拍（蓋在營地畫面上，跟廣場對戰同一個 battlebox）
+function page2FightLines(f, step) {
+    const elapsed = step - f.startStep;
+    if (elapsed < 0) return null;
+    let me, en;
+    try { me = loadCharacter(f.char); en = loadCharacter(core.PAGE2_FINAL); } catch (e) { return null; }
+    const frame = core.decideBattleFrame(elapsed, f.win, core.PAGE2_FINAL, me.charDef.F, f.version === 2);
+    return composeBattleScene({
+        frame, shared: loadShared(),
+        meArt: tryLoadArt(me.artFile), enemyArt: tryLoadArt(en.artFile),
+        meBulletArt: tryLoadArt(me.bulletArtFile), enemyBulletArt: tryLoadArt(en.bulletArtFile),
+        meCutInArt: tryLoadArt(me.cutinArtFile), enemyCutInArt: tryLoadArt(en.cutinArtFile),
+        meRightOffset: me.charDef.RIGHT_OFFSET, enemyRightOffset: en.charDef.RIGHT_OFFSET,
+    });
+}
+
+// 這一刻營地該演什麼（null = 平常）。standoff = 要畫對峙畫面；enemyDx = 敵人退場位移
+function page2Event(ranch, step) {
+    const r = ranch.page2Result;
+    if (r) {
+        // 輸了／放棄：老師講完（page2Ack 記下 exitStep）Armagemon 才往右退場，我方繼續站著；
+        // 贏了直接回平常的營地（前端帶去第二頁）
+        return r.win ? { stage: 'result', win: true, keramonId: r.keramonId }
+                     : { stage: 'result', win: false, gaveUp: !!r.gaveUp, standoff: true, exiting: !!r.exitStep,
+                         enemyDx: r.exitStep ? Math.max(0, step - r.exitStep) * PAGE2_EXIT_DOTS : 0 };
+    }
+    const f = ranch.page2Fight;
+    if (f) return { stage: 'fight', standoff: true, battle: { lines: page2FightLines(f, step) },
+                    fighter: { id: f.id, name: core.getDisplayName(f.char) } };
+    // 營地空了就沒人能出戰 → 先不觸發，等有桌寵再說
+    if (ranch.page2Quest && (ranch.pets || []).length) return { stage: 'standoff', standoff: true };
+    return null;
+}
+
+// dev：預覽用（release 由 DEV_ONLY 擋掉）。PAGE2_ENABLED 關著也能用 —— 這就是「做一版但不實裝」的入口
+function page2Dev(act) {
+    const ranch = core.loadRanch();
+    if (act === 'quest') {
+        delete ranch.page2Fight; delete ranch.page2Result;
+        ranch.page2Quest = { at: Date.now(), seen: false };
+    } else if (act === 'unlock') {
+        if (core.page2Unlocked(ranch)) return { ok: false, error: '已經解鎖了' };
+        core.page2Grant(ranch);
+    } else if (act === 'reset') {
+        delete ranch.page2Quest; delete ranch.page2Fight; delete ranch.page2Result; delete ranch.page2At;
+    } else if (act === 'win' || act === 'lose') {
+        page2ForceWin = act === 'win';
+        return { ok: true, action: 'page2Dev', output: '下一場 Armagemon 戰：強制' + (act === 'win' ? '勝' : '敗') };
+    } else return { ok: false, error: '不認得的 dev 動作：' + act };
+    core.saveRanch(ranch);
+    return { ok: true, action: 'page2Dev', output: '營地第二頁：' + act };
+}
 let touchTimes = [];
 let sulkUntil  = 0;
 let forceSleeping = false;   // 由每拍的 doTick 更新（vpet sleep 狀態）
@@ -1048,7 +1158,9 @@ function applyCommand(action, args = {}) {
     // 若走輪詢讓伺服器每幀重畫，就得把 /yard 拉到 60fps（15 KB x 60），完全不划算。
     if (action === 'yardGrab') {
         if (!args.which) return { ok: false, error: '要指定是哪一隻' };
-        const ranch = core.loadRanch();
+        // 分頁後區域是照「那一頁的名單」切的 → 用牠那一頁的名單算，位置才對得上畫面
+        const full = core.loadRanch(), pageOpt = { feast: yardFeastNow(args.fest) };
+        const ranch = plaza.yardPageRanch(full, plaza.yardPageOf(full, args.which, pageOpt), pageOpt);
         const r = yardReactMap().get(args.which);
         const sp = plaza.yardSpriteFor(core, ranch, args.which, plazaStep(), {
             joinStep: (r && r.anchor ? r.anchor.step : plaza.yardJoinStep())
@@ -1087,6 +1199,31 @@ function applyCommand(action, args = {}) {
         const at = plaza.yardToDraw(cx, cy);
         return { ok: true, action: 'yardDrop', x: at.x, y: at.y };
     }
+
+    // ── 營地第二頁的事件（docs/yard-page2-spec.md）──
+    if (action === 'page2Seen') {
+        const ranch = core.loadRanch();
+        if (ranch.page2Quest && !ranch.page2Quest.seen) { ranch.page2Quest.seen = true; core.saveRanch(ranch); }
+        return { ok: true, action };
+    }
+    if (action === 'page2Fight') return page2StartFight(args.which);
+    if (action === 'page2GiveUp') {
+        const ranch = core.loadRanch();
+        if (!ranch.page2Quest || ranch.page2Fight) return { ok: false, error: '現在沒有可以放棄的挑戰' };
+        delete ranch.page2Quest;   // 放棄視同戰敗：從打 Diablomon 重來
+        ranch.page2Result = { win: false, gaveUp: true, step: plazaStep(), at: Date.now() };
+        core.saveRanch(ranch);
+        return { ok: true, action };
+    }
+    // 結果演完了。贏：直接清掉。輸／放棄：老師講完才讓 Armagemon 退場（規格的順序），
+    // 記下開始退場的那一拍，退出畫面後 page2Settle 自己清。
+    if (action === 'page2Ack') {
+        const ranch = core.loadRanch(), r = ranch.page2Result;
+        if (r && !r.win && !r.exitStep) { r.exitStep = plazaStep(); core.saveRanch(ranch); }
+        else if (r && r.win) { delete ranch.page2Result; core.saveRanch(ranch); }
+        return { ok: true, action };
+    }
+    if (action === 'page2Dev') return page2Dev(args.act);
 
     // 快路徑：純粹寫一個旗標的指令直接寫 force，省掉 140ms 的行程開銷。
     // 這些在 CLI 那邊也只是寫同樣的欄位，沒有額外邏輯，不會分叉。
@@ -1188,6 +1325,18 @@ function tutorFrames() {
             return px;
         });
     } catch (e) { console.log('   ⚠️ 教學老師的素材讀不到（說明照常，只是沒有老師）：' + e.message); return null; }
+}
+
+// 老師的 CutIn（營地第二頁事件的漫畫式對話框用）：32x16 的色碼，畫進小畫布再放大。
+function tutorCutin() {
+    try {
+        const { cutinArtFile } = core.loadCharacter(TUTOR_ID);
+        const art = JSON.parse(fs.readFileSync(cutinArtFile, 'utf8'));
+        const hex = (c, o) => c && c[o] >= 0 ? '#' + [c[o], c[o + 1], c[o + 2]].map(v => v.toString(16).padStart(2, '0')).join('') : '';
+        const px = [];
+        for (const row of art.frames[0]) { px.push(row.map(c => hex(c, 0))); px.push(row.map(c => hex(c, 3))); }
+        return px;
+    } catch (e) { console.log('   ⚠️ 老師的 CutIn 讀不到（對話照常，只是沒有圖）：' + e.message); return null; }
 }
 
 const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
@@ -1369,14 +1518,55 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #helpbox .who{font-size:11px;color:#a371f7}
   #helpbox .hd{font-weight:700;color:#e6edf3;margin-bottom:2px}
   #helpbox .ft{font-size:11px;color:#8b949e;margin-top:6px}
+  /* 營地第二頁事件：老師的 CutIn + 漫畫式對話框。dim = 壓黑擋住其他操作；
+     選一隻出戰時不壓黑（要能點到營地裡的桌寵），只留對話框。 */
+  #story{position:fixed;inset:0;z-index:9100;display:none;pointer-events:none}
+  #story.dim{background:rgba(1,4,9,.62);pointer-events:auto}
+  /* 老師在上、對話框在下（上下擺放） */
+  #storypanel{position:fixed;display:flex;flex-direction:column;align-items:center;gap:0;pointer-events:auto;cursor:pointer}
+  #storycv{width:192px;height:96px;flex:none;image-rendering:pixelated;background:#fff;
+           border:3px solid #111;box-shadow:4px 4px 0 #111;transform:rotate(-2deg)}
+  #storybubble{position:relative;margin-top:20px;background:#fff;color:#111;border:3px solid #111;border-radius:18px;
+               padding:10px 14px;min-width:220px;max-width:360px;box-shadow:4px 4px 0 #111;
+               font:700 14px/1.6 "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif}
+  /* 漫畫對話框的尾巴：往上指向老師 */
+  #storybubble::before{content:'';position:absolute;top:-20px;left:50%;margin-left:-11px;
+                       border:11px solid transparent;border-bottom:18px solid #111;border-top:0}
+  #storybubble::after{content:'';position:absolute;top:-13px;left:50%;margin-left:-7px;
+                      border:7px solid transparent;border-bottom:12px solid #fff;border-top:0}
+  #storybubble .nm{font-size:11px;color:#8250df;margin-bottom:2px}
+  #storybubble .btns{display:flex;gap:8px;margin-top:8px}
+  #storybubble .btns:empty{display:none}
+  #storybubble .btns button{font:700 13px/1 inherit;padding:6px 14px;border:2px solid #111;border-radius:8px;
+                            background:#ffd84a;color:#111;cursor:pointer;box-shadow:2px 2px 0 #111}
+  #storybubble .btns button.alt{background:#eee}
+  #storybubble .btns button.danger{background:#ff8a8a}
+  #storybubble .hint{font-size:11px;color:#777;margin-top:4px}
+  /* 選一隻出戰：滑過去的那隻亮框 */
+  #p2hl{position:absolute;display:none;z-index:3;pointer-events:none;outline:2px dashed #ffd84a;outline-offset:1px;border-radius:3px}
+  body.p2pick #pet{cursor:pointer}
+  /* 營地翻頁：舞台左下／右下角的箭頭（只在那個方向還有頁時出現）＋底部正中的頁碼點點，三個排在同一條線上。
+     疊在畫面上而不是放進文字列 —— 翻頁是「看隔壁」，箭頭就該長在畫面邊上；放角落不擋到中間走動的桌寵。 */
+  .pgarrow{position:absolute;bottom:6px;z-index:4;display:none;width:24px;height:24px;padding:0;
+           border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.45);color:#fff;
+           font:700 18px/20px ui-monospace,Consolas,monospace;text-align:center;cursor:pointer;opacity:.7;
+           transition:opacity .15s,background .15s}
+  .pgarrow:hover{opacity:1;background:rgba(0,0,0,.7)}
+  #pgprev{left:6px} #pgnext{right:6px}
+  #pgdots{position:absolute;left:0;right:0;bottom:15px;z-index:4;display:none;text-align:center;pointer-events:none;line-height:0}
+  #pgdots i{display:inline-block;width:7px;height:7px;margin:0 3px;border-radius:50%;background:rgba(255,255,255,.35);
+            box-shadow:0 0 2px rgba(0,0,0,.8)}
+  #pgdots i.on{background:#fff}
 </style></head><body>
 <div id="ctx"></div>
 <div id="helptoast">❓ 點想問的地方　（Esc 或右鍵離開）</div>
 <div id="helpdim"><div id="helphole"></div><div id="helpbox"><canvas id="helpcv" width="16" height="16"></canvas>
   <div style="flex:1;min-width:0"><div class="who">🎓 Terriermon 老師</div><div class="hd"></div><div class="bd"></div><div class="ft">點任何地方關閉</div></div></div></div>
+<div id="story"><div id="storypanel"><canvas id="storycv" width="32" height="16"></canvas>
+  <div id="storybubble"><div class="nm">🎓 Terriermon 老師</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1410,6 +1600,14 @@ ${IS_RELEASE ? '' : `<span class="devonly" data-help="yarddev">
 ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).join('\n')}
       </select></label>
       <label class="k"><input type="checkbox" id="zonebox"> 走動範圍 <span class="devtag">dev</span></label>
+      <label class="k">第二頁 <span class="devtag">dev</span><select id="p2dev">
+        <option value="">—</option>
+        <option value="quest">進第二階段</option>
+        <option value="win">下一場必勝</option>
+        <option value="lose">下一場必敗</option>
+        <option value="unlock">直接解鎖</option>
+        <option value="reset">重置</option>
+      </select></label>
       <label class="k">切法 <select id="zonelayout"><option value="">預設</option></select></label></span>`}
     </div>
     <div id="plazabar" style="display:none;margin-top:6px;font-size:12px;color:#8b949e">
@@ -1614,6 +1812,10 @@ let lastFetch=Date.now();
 // 只是「這個瀏覽器分頁在看哪裡」，不是 daemon 的狀態 —— 開兩個分頁可以一個看家、
 // 一個看院子，daemon 不需要知道。
 let view = 'home';
+// 營地第二頁（見下方「營地第二頁」那段）：目前看第幾頁、事件演到哪、空降中的那隻、對話框
+let yardPage=0, sliding=false;
+let p2Phase=null, p2WaitAt=0, p2NoticeShown=false, p2Drop=null;
+let story=null;   // { lines, i, done, typing, text }
 // 這個元素在目前的畫面要不要出現。廣場是例外：進去之後**只剩**廣場自己的東西
 // （規格 §六：在廣場不能切畫面、不能做會改變角色的事），'both' 的鈕也一律藏起來。
 // 廣場不是「這個分頁在看哪裡」而是 daemon 的狀態 —— 每個分頁都會被帶進去（見 poll）。
@@ -1625,6 +1827,9 @@ function inScope(sc){
 let yardSalt=Math.random().toString(36).slice(2,8);
 function setView(v){
   if(v==='yard' && view!=='yard') yardSalt=Math.random().toString(36).slice(2,8);
+  if(v!=='yard' && view==='yard'){ p2Reset(); if(v!=='plaza') renderBattle(null); }
+  if(v!=='yard'){ for(const id of ['pgprev','pgnext','pgdots']) document.getElementById(id).style.display='none'; }
+  if(v==='yard' && view!=='yard') yardPage=0;
   view = v;
   // 要在 poll() 之前換：下一次畫的就是這個畫面的大小
   // 廣場比照營地：同一張細格、同樣小一號的角色
@@ -1900,6 +2105,7 @@ function wxDraw(ts){
   }
   // 拿在手上的那隻畫在最後 = 蓋在天氣之上。牠在你手裡，雨不該蓋過牠。
   drawHeld(g);
+  drawDrop(g, ts);
 }
 requestAnimationFrame(wxDraw);
 
@@ -2521,11 +2727,17 @@ async function pollYard(){
   const fsel=document.getElementById('festsel');
   if(fsel&&fsel.value) qs.push('fest='+encodeURIComponent(fsel.value));
   qs.push('ds='+yardSalt);
+  if(yardPage) qs.push('pg='+yardPage);
+  if(p2Drop&&!p2Drop.release) qs.push('drop='+encodeURIComponent(p2Drop.id));
   const y = await (await fetch('/yard'+(qs.length?'?'+qs.join('&'):''),
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   if(y.inPlaza){ setView('plaza'); return; }
   lastYard=y;
+  if(y.page!=null) yardPage=y.page;   // 伺服器夾過的頁碼（例如放生後只剩一頁）
+  // 空降落地、伺服器那張已經畫上牠了 → 收掉前端自己畫的那份
+  if(p2Drop&&p2Drop.release&&!y.drop) p2Drop=null;
+  p2Sync(y);
   dragHandoff(y);   // 要跟下面的 draw(y.lines) 在同一個 task 裡（中間不能有 await）
   zoneBoxes = y.zones || null;
   if(y.sprite) yardSprite = y.sprite;
@@ -2543,6 +2755,7 @@ async function pollYard(){
   document.getElementById('yardinfo').textContent = y.kept
     ? '營地 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
     : '營地是空的 —— 進階區的「📥 收進營地」可以把現役收進來（隨時換得回去）';
+  pageNav(y.pages||1);
   document.getElementById('kind').textContent='yard';
   document.getElementById('tick').textContent='#'+y.step;
   applyWeather(y.weather);
@@ -2556,6 +2769,9 @@ async function pollYard(){
     cv.width=y.cols*CW; cv.height=y.rows*CH;
     cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
   }
+  // 舞台大小畫了才定（從前線切進來那一下還是前線的大小）→ 對話框每次畫完重新定位。
+  // ⚠️ 這行不能插在上面的 if/else 中間：插過一次，else 變成接在它後面，營地每次畫完就被清空。
+  if(story) storyPlace();
   syncWx();
 }
 
@@ -2671,6 +2887,7 @@ function yardHit(ev){
 }
 
 document.getElementById('pet').addEventListener('contextmenu',ev=>{
+  if(view==='yard'&&p2Phase){ ev.preventDefault(); return; }   // 營地事件中：右鍵選單不開
   const hit=yardHit(ev);
   if(!hit) return;
   ev.preventDefault();
@@ -3050,6 +3267,11 @@ async function poll(){
       if(s.plaza.active){ setView('plaza'); return; }
     }
     syncJogress(s.jogress);
+    // 營地第二頁第一階段：打贏 Diablomon 之後，下次在前線看到畫面時跳一次
+    if(view==='home'&&s.ranch&&s.ranch.page2Notice&&!storyOn()&&!p2NoticeShown){
+      p2NoticeShown=true;
+      storyOpen([{text:P2TALK.notice}], ()=>sendCmd('page2Seen'), {dim:true});
+    }
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
@@ -3110,7 +3332,8 @@ async function sendCmd(action,args){
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
     const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat'||action==='plazaAnswer'
-                 ||action==='plazaHappy'||action==='festCostume');   // 勾選框／開心鈕：畫面直接看得到
+                 ||action==='plazaHappy'||action==='festCostume'
+                 ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -3406,6 +3629,7 @@ function dropAt(id, x, y){
 
 document.getElementById('pet').addEventListener('mousedown',ev=>{
   if(ev.button!==0||view!=='yard'||drag) return;   // 還在落下就別又抓一隻
+  if(p2Phase) return;                                // 營地事件中：點擊是「選一隻出戰」，不摸也不拎
   if(lastYard&&lastYard.feast) return;               // 圍爐：大家坐在位子上，不能拎走（點一下摸摸照舊）
   const hit=yardHit(ev); if(!hit) return;
   ev.preventDefault();                     // 避免拖出瀏覽器原生的「拖曳選取」
@@ -3463,6 +3687,211 @@ setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Dat
 // 問號模式下的點擊**一律在捕獲階段攔下來**（preventDefault + stopImmediatePropagation）：
 // 想問「重抽」是什麼，不能真的重抽下去。mousedown 也要攔 —— 長壓拎起、下拉選單都從 mousedown 開始。
 // 說明文字在 help-tips.js（release 不帶 dev 條目），元素只標 data-help 代號。
+// ── 營地第二頁（docs/yard-page2-spec.md）────────────────────────────────
+// 進度在伺服器（ranch.json），這裡只負責演：/yard 的 event 告訴我們現在是哪一段。
+//   standoff 對峙 → 老師兩句 → 選一隻（亮框、確認）或放棄
+//   fight    戰鬥蓋在營地上（battlebox，跟廣場對戰同一個）
+//   result   贏：老師 → 鏡頭滑到第二頁 → Keramon 空降 → 老師；輸／放棄：老師 → Armagemon 退場
+const P2TALK=${JSON.stringify(P2TALK)};
+const TUTOR_CUT=${JSON.stringify(tutorCutin())};
+const STORY_TYPE_MS=28, SLIDE_MS=700, DROP_MS=650, DROP_BOUNCE_MS=220;
+// 狀態變數（yardPage / p2Phase / story…）宣告在 view 旁邊：setView、pollYard 會比這段更早被叫到
+function storyOn(){ return !!story; }
+function storyDrawCut(){
+  const cv=document.getElementById('storycv'), g=cv.getContext('2d');
+  g.clearRect(0,0,cv.width,cv.height);
+  if(!TUTOR_CUT) return;
+  cv.height=TUTOR_CUT.length; cv.width=TUTOR_CUT[0].length;
+  for(let y=0;y<TUTOR_CUT.length;y++) for(let x=0;x<TUTOR_CUT[y].length;x++){
+    const c=TUTOR_CUT[y][x]; if(!c) continue; g.fillStyle=c; g.fillRect(x,y,1,1);
+  }
+}
+// 對話框放在舞台下方（放不下就蓋在舞台上），左右夾在視窗內
+function storyPlace(){
+  const p=document.getElementById('storypanel'), st=document.getElementById('stage').getBoundingClientRect();
+  const W=document.documentElement.clientWidth, H=document.documentElement.clientHeight;
+  const pw=p.offsetWidth, ph=p.offsetHeight;
+  const left=Math.max(12, Math.min(W-pw-12, st.left+(st.width-pw)/2));
+  let top=st.bottom+10; if(top+ph>H-8) top=Math.max(8, st.bottom-ph-8);
+  p.style.left=left+'px'; p.style.top=top+'px';
+}
+function storyLine(){
+  const L=story.lines[story.i], bd=document.querySelector('#storybubble .bd'), bt=document.querySelector('#storybubble .btns');
+  bt.innerHTML='';
+  for(const b of (L.buttons||[])){
+    const el=document.createElement('button'); el.textContent=b.label; if(b.cls) el.className=b.cls;
+    el.addEventListener('click',ev=>{ ev.stopPropagation(); b.fn(); });
+    bt.appendChild(el);
+  }
+  document.querySelector('#storybubble .hint').style.display=(L.buttons&&L.buttons.length)?'none':'';
+  // 先放整段量好大小再定位，逐字打的時候框不會一直長高、跳位置（跟教學同一招）
+  bd.textContent=L.text; storyPlace();
+  story.text=L.text; let n=0; bd.textContent='';
+  clearInterval(story.typing);
+  story.typing=setInterval(()=>{ n++; bd.textContent=story.text.slice(0,n); if(n>=story.text.length){ clearInterval(story.typing); story.typing=null; } }, STORY_TYPE_MS);
+}
+function storyOpen(lines, done, opts){
+  storyClose();
+  story={ lines, i:0, done, typing:null, text:'' };
+  const o=document.getElementById('story');
+  o.classList.toggle('dim', !(opts&&opts.dim===false));
+  o.style.display='block';
+  storyDrawCut(); storyLine();
+}
+function storyClose(){
+  if(story) clearInterval(story.typing);
+  story=null; document.getElementById('story').style.display='none';
+}
+// 點一下：還在打字 → 一次顯示完；打完 → 下一句；最後一句 → 關掉再呼叫 done。有按鈕的那句只能按按鈕
+function storyAdvance(){
+  if(!story) return;
+  if(story.typing){ clearInterval(story.typing); story.typing=null; document.querySelector('#storybubble .bd').textContent=story.text; return; }
+  const L=story.lines[story.i]; if(L.buttons&&L.buttons.length) return;
+  if(story.i<story.lines.length-1){ story.i++; storyLine(); return; }
+  const done=story.done; storyClose(); if(done) done();
+}
+document.getElementById('story').addEventListener('click',ev=>{ ev.preventDefault(); storyAdvance(); });
+// 壓黑的時候其他地方一律點不到（捕獲階段攔下，跟教學的問號模式同一招）
+for(const t of ['mousedown','mouseup','click','dblclick','contextmenu','pointerdown']){
+  window.addEventListener(t, ev=>{
+    if(!story||!document.getElementById('story').classList.contains('dim')) return;
+    if(ev.target.closest&&ev.target.closest('#story')) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+  }, true);
+}
+window.addEventListener('resize',()=>{ if(story) storyPlace(); });
+
+function p2Reset(){ p2Phase=null; storyClose(); p2Hl(null); document.body.classList.remove('p2pick'); }
+function p2Hl(p){
+  const el=document.getElementById('p2hl'), pet=document.getElementById('pet');
+  if(!p){ el.style.display='none'; return; }
+  const S=p.size||16;
+  el.style.left=(pet.offsetLeft+p.x*CW)+'px'; el.style.top=(pet.offsetTop+p.y*(CH/2))+'px';
+  el.style.width=(S*CW)+'px'; el.style.height=(S*(CH/2))+'px'; el.style.display='block';
+}
+// 選一隻：不壓黑，只留對話框（附「放棄」）
+function p2Pick(){
+  p2Phase='pick'; document.body.classList.add('p2pick');
+  storyOpen([{ text:P2TALK.pick, buttons:[{ label:'放棄', cls:'alt', fn:p2GiveUpAsk }] }], null, {dim:false});
+}
+function p2Confirm(p){
+  p2Phase='confirm'; p2Hl(null); document.body.classList.remove('p2pick');
+  storyOpen([{ text:P2TALK.confirm.replace('{name}', p.name||'牠'), buttons:[
+    { label:'出戰', fn:()=>{ p2Phase='wait'; p2WaitAt=Date.now(); storyClose(); sendCmd('page2Fight',{which:p.id}); } },
+    { label:'再想想', cls:'alt', fn:p2Pick } ] }], null);
+}
+function p2GiveUpAsk(){
+  p2Phase='confirm'; p2Hl(null); document.body.classList.remove('p2pick');
+  storyOpen([{ text:P2TALK.giveUp, buttons:[
+    { label:'放棄', cls:'danger', fn:()=>{ p2Phase='wait'; p2WaitAt=Date.now(); storyClose(); sendCmd('page2GiveUp'); } },
+    { label:'再想想', cls:'alt', fn:p2Pick } ] }], null);
+}
+document.getElementById('pet').addEventListener('mousemove',ev=>{
+  if(view!=='yard'||p2Phase!=='pick') return;
+  p2Hl(yardHit(ev));
+});
+document.getElementById('pet').addEventListener('mouseleave',()=>{ if(p2Phase==='pick') p2Hl(null); });
+document.getElementById('pet').addEventListener('click',ev=>{
+  if(view!=='yard'||p2Phase!=='pick') return;
+  const h=yardHit(ev); if(h) p2Confirm(h);
+});
+// 每次 /yard 回來：照伺服器的事件階段推進表演
+function p2Sync(y){
+  const ev=y.event, stg=ev&&ev.stage;
+  renderBattle(stg==='fight' ? ev.battle : null);
+  if(!ev){ if(p2Phase&&p2Phase!=='reveal') p2Reset(); return; }
+  if(stg==='standoff'){
+    // 還沒開始（或上一輪的結果還在收尾就又觸發了）→ 從老師那兩句開始
+    if(!p2Phase||p2Phase==='exit'||p2Phase==='result'||p2Phase==='fight'){
+      p2Reset(); p2Phase='intro'; sendCmd('page2Seen'); storyOpen(P2TALK.standoff.map(t=>({text:t})), p2Pick); }
+    // 出戰／放棄送出後，伺服器還沒轉到下一段的那一兩次輪詢不算；等太久（指令失敗）才回到選擇
+    else if(p2Phase==='wait'&&Date.now()-p2WaitAt>3000) p2Pick();
+    return;
+  }
+  if(stg==='fight'){ if(p2Phase!=='fight'){ storyClose(); p2Hl(null); document.body.classList.remove('p2pick'); p2Phase='fight'; } return; }
+  // 退場中 / 重新整理後接到「已經在退場」：等伺服器把結果清掉（event 變 null）就回平常
+  if(stg==='result'&&!ev.win&&ev.exiting){ if(p2Phase!=='exit'){ storyClose(); p2Phase='exit'; } return; }
+  if(stg==='result'&&p2Phase!=='result'&&p2Phase!=='reveal'){
+    storyClose(); p2Hl(null); document.body.classList.remove('p2pick'); p2Phase='result';
+    if(ev.win) storyOpen([{text:P2TALK.win}], async ()=>{
+      p2Phase='reveal';
+      await sendCmd('page2Ack');
+      await slideToPage(ev.keramonPage||1, ev.keramonId);
+      if(p2Drop) p2Drop.t0=performance.now();
+      setTimeout(()=>storyOpen([{text:P2TALK.unlocked}], ()=>{ p2Phase=null; }), DROP_MS+DROP_BOUNCE_MS+300);
+    });
+    else storyOpen([{text:P2TALK.lose}], ()=>{ p2Phase='exit'; sendCmd('page2Ack'); });
+  }
+}
+// 換頁：拿目前這頁的畫面跟新的一頁並排，整片往左（右）滑。底下的畫布已經是新的一頁，
+// 滑完把這張拿掉就無縫接上。天氣層（z2）蓋在上面，滑的時候雨照樣下。
+function snapStage(){
+  const pet=document.getElementById('pet'), c=document.createElement('canvas');
+  c.width=pet.width; c.height=pet.height;
+  const g=c.getContext('2d');
+  for(const id of ['scene','fest','pet','festfront']){
+    const e=document.getElementById(id);
+    if(e.width&&getComputedStyle(e).display!=='none') g.drawImage(e,0,0,c.width,c.height);
+  }
+  return c;
+}
+async function slideToPage(to, dropId){
+  if(sliding||view!=='yard') return;
+  sliding=true;
+  const from=yardPage, A=snapStage();
+  yardPage=to;
+  if(dropId) p2Drop={ id:dropId, t0:0, release:false };
+  try{ await pollYard(); }catch(e){}
+  sceneDraw(performance.now()+1e6);
+  const B=snapStage(), pet=document.getElementById('pet'), W=A.width, dir=to>from?1:-1;
+  const ov=document.createElement('canvas'); ov.width=W*2; ov.height=A.height;
+  const g=ov.getContext('2d');
+  if(dir>0){ g.drawImage(A,0,0); g.drawImage(B,W,0); } else { g.drawImage(B,0,0); g.drawImage(A,W,0); }
+  ov.style.cssText='position:absolute;z-index:1;pointer-events:none;image-rendering:pixelated;max-width:none;'
+    +'left:'+pet.offsetLeft+'px;top:'+pet.offsetTop+'px;width:'+(W*2)+'px;height:'+A.height+'px;'
+    +'transition:transform '+SLIDE_MS+'ms ease-in-out;transform:translateX('+(dir>0?0:-W)+'px)';
+  document.getElementById('stage').appendChild(ov);
+  ov.getBoundingClientRect();
+  ov.style.transform='translateX('+(dir>0?-W:0)+'px)';
+  await new Promise(r=>setTimeout(r,SLIDE_MS+40));
+  ov.remove(); sliding=false;
+}
+// 翻頁的箭頭與點點。事件進行中、滑行中都不給翻
+function pageNav(pages){
+  const show=view==='yard'&&pages>1&&!p2Phase;
+  document.getElementById('pgprev').style.display=(show&&yardPage>0)?'block':'none';
+  document.getElementById('pgnext').style.display=(show&&yardPage<pages-1)?'block':'none';
+  const d=document.getElementById('pgdots');
+  d.style.display=show?'block':'none';
+  const want=pages+':'+yardPage;
+  if(show&&d.dataset.k!==want){ d.dataset.k=want; d.innerHTML=Array.from({length:pages},(_,i)=>'<i'+(i===yardPage?' class="on"':'')+'></i>').join(''); }
+}
+document.getElementById('pgprev').addEventListener('click',()=>{ if(!p2Phase&&yardPage>0) slideToPage(yardPage-1); });
+document.getElementById('pgnext').addEventListener('click',()=>{ if(!p2Phase&&lastYard&&yardPage<(lastYard.pages||1)-1) slideToPage(yardPage+1); });
+// Keramon 空降：從畫面上方掉到牠的位置，落地彈一下、揚一點灰。伺服器在這段期間不畫牠（?drop=）
+function drawDrop(g, ts){
+  if(!p2Drop||!p2Drop.t0||!lastYard||!lastYard.drop) return;
+  const d=lastYard.drop, t=ts-p2Drop.t0;
+  let y;
+  if(t<DROP_MS){ const k=t/DROP_MS; y=-18+(d.y+18)*k*k; }
+  else if(t<DROP_MS+DROP_BOUNCE_MS){ const k=(t-DROP_MS)/DROP_BOUNCE_MS; y=d.y-Math.sin(k*Math.PI)*2.5; }
+  else { y=d.y; if(!p2Drop.release) p2Drop.release=true; }
+  const dots=d.frames[(lastYard.step||0)%2]||d.frames[0];
+  const px=Math.round(d.x*CW), py=Math.round(y*(CH/2));
+  if(t>=DROP_MS&&t<DROP_MS+DROP_BOUNCE_MS*2){   // 落地的灰
+    const k=Math.min(1,(t-DROP_MS)/(DROP_BOUNCE_MS*2));
+    g.save(); g.globalAlpha=0.45*(1-k); g.fillStyle='#d8cdb4';
+    g.beginPath(); g.ellipse(px+8*CW, (d.y+16)*(CH/2), (6+8*k)*CW, (1.5+1.5*k)*(CH/2), 0, 0, Math.PI*2); g.fill(); g.restore();
+  }
+  for(let yy=0;yy<dots.length;yy++){ const row=dots[yy];
+    for(let x=0;x<row.length;x++){ const c=row[x]; if(!c) continue;
+      g.fillStyle='rgb('+c[0]+','+c[1]+','+c[2]+')'; g.fillRect(px+x*CW, py+yy*(CH/2), CW, CH/2); } }
+}
+{
+  const sel=document.getElementById('p2dev');
+  if(sel) sel.addEventListener('change',()=>{ const a=sel.value; sel.value=''; if(a){ p2NoticeShown=false; sendCmd('page2Dev',{act:a}); } });
+}
+
 const HELP=${JSON.stringify(HELP.tipsFor(IS_RELEASE))};
 const TUTOR=${JSON.stringify(tutorFrames())};
 const HELP_TYPE_MS=28, HELP_ANIM_MS=375, HELP_BOX_W=420;   // 逐字速度、老師兩幀交替的間隔（半拍）
@@ -3582,8 +4011,23 @@ const server = http.createServer((req, res) => {
             // 圍爐跟著「顯示節慶造型」：關掉就變回平常散步
             const feast = festOpt.costume && festFeast(fest, Date.now(), festQ);
             const alive = new Set((ranch.pets || []).map(p => p.id));
-            const out   = plaza.composeYard(core, ranch, st, step,
-                                            { caches: yardCaches, react: yardReactMap(alive),
+            const yq    = new URL(req.url, 'http://x').searchParams;
+            // 營地第二頁：打完的 Armagemon 戰鬥先結算（關掉分頁、中途切走也照結果處理）
+            page2Settle(ranch, step);
+            const ev    = page2Event(ranch, step);
+            // 分頁：事件進行中只有一頁（對峙畫面）；圍爐大家坐同一桌也不分頁
+            const solo  = !!(ev && ev.standoff);
+            const pages = solo ? 1 : plaza.yardPages(ranch, { feast }).length;
+            const page  = Math.max(0, Math.min(pages - 1, Number(yq.get('pg')) || 0));
+            const pr    = solo ? ranch : plaza.yardPageRanch(ranch, page, { feast });
+            // ?drop=<id>：Keramon 空降登場時前端自己畫那隻往下掉，伺服器先別畫牠（當成拿在手上）
+            const dropId = yq.get('drop');
+            let react = yardReactMap(alive);
+            if (dropId) { react = new Map(react); react.set(dropId, { ...(react.get(dropId) || {}), held: true }); }
+            const sto   = ev && ev.standoff ? plaza.composeYardStandoff(core, ranch.pets || [], core.PAGE2_FINAL, step,
+                                                                         { enemyDx: ev.enemyDx || 0 }) : null;
+            const out   = sto ? null : plaza.composeYard(core, pr, st, step,
+                                            { caches: yardCaches, react,
                                               layout: zoneLayout,
                                               acc: fest && festOpt.costume ? fest.acc : null,
                                               swap: fest && festOpt.costume ? fest.swap || null : null,
@@ -3617,27 +4061,40 @@ const server = http.createServer((req, res) => {
             // ⚠️ 一定要用 yardZonesFor（含編輯器存的覆寫檔），不是 plaza.yardZones（只有內建表）。
             //    合成走的是前者、payload 走後者的話，角色照新切法走、框卻畫舊的，
             //    看起來就像「存了沒生效」。踩過一次 —— 兩個來源就是會漂移。
-            const zoneInfo = plaza.yardLayoutsFor(core, (ranch.pets || []).length);
+            const zoneInfo = plaza.yardLayoutsFor(core, (pr.pets || []).length);
             // 前端活在「細格」裡（營地畫小一號，見 plaza.js 的 YARD_RENDER）：
             // 尺寸、每隻的位置、範圍框一律換算成畫出來的座標再送。
             const D = plaza.yardToDraw, R = plaza.YARD_RENDER;
-            const zones = plaza.yardZonesFor(core, (ranch.pets || []).length, zoneLayout).map(z => {
+            const zones = sto ? [] : plaza.yardZonesFor(core, (pr.pets || []).length, zoneLayout).map(z => {
                 const lo = D(z.minX, z.minY), hi = D(z.maxX, z.maxY), an = plaza.zoneAnchor(z), a = D(an.x, an.y);
                 return { minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, anchor: { x: a.x, y: a.y } };
             });
-            body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones, feast,
+            let drop = null;
+            if (dropId && !solo) {
+                const sp = plaza.yardSpriteFor(core, pr, dropId, step, { layout: zoneLayout });
+                if (sp) { const at = plaza.yardToDraw(sp.x, sp.y); drop = { id: dropId, frames: sp.frames, x: at.x, y: at.y }; }
+            }
+            body = { ok: true, step, cols: R.w, rows: R.h / 2, sprite: plaza.SPRITE, zones,
+                     feast: sto ? null : feast,
                      inPlaza: plazaClient.active(),   // 別的分頁進了廣場 → 這個分頁也要跟進去
                      weather: { ...wx, ...WX.describe(wx) },
-                     festival: festView(fest), festCostume: festOpt.costume,
-                     cap: core.ranchCap(),
+                     // 事件的對峙強制非節慶背景（規格：連春節圍爐也蓋過去）
+                     festival: sto ? null : festView(fest), festCostume: festOpt.costume,
+                     cap: core.ranchCap(ranch),
+                     page, pages, drop,
+                     event: ev ? { stage: ev.stage, win: ev.win, gaveUp: ev.gaveUp, keramonId: ev.keramonId, exiting: !!ev.exiting,
+                                   battle: ev.battle || null, fighter: ev.fighter || null,
+                                   keramonPage: ev.keramonId ? plaza.yardPageOf(ranch, ev.keramonId) : null } : null,
                      // dev 下拉要知道這個隻數有哪些切法可挑、現在是哪一個
                      layout: zoneLayout || zoneInfo.def,
                      layouts: zoneInfo.names,
                      kept: (ranch.pets || []).length,
-                     lines: out ? out.lines : null, layer: out ? out.layer : null,
+                     lines: sto ? sto.lines : out ? out.lines : null, layer: out ? out.layer : null,
+                     enemy: sto ? sto.enemy : null,
                      // y 回傳**畫出來**的位置（含跳躍位移），不是地面的 y ——
                      // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
-                     pets: out ? out.placed.map(p => ({
+                     pets: sto ? sto.pets.map(p => ({ ...p, name: core.getDisplayName(p.char), ...info(p.id) }))
+                         : out ? out.placed.map(p => ({
                          id: p.ranchId, name: p.name, char: p.char, zoneIdx: p.zoneIdx,
                          x: p.dx, y: p.dy, size: p.size || plaza.SPRITE, ...info(p.ranchId),
                      })) : [] };

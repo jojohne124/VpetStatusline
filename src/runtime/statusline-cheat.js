@@ -682,7 +682,7 @@ if (args[0] === '--evolve') {
 const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release', '--jogress'];
 if (RANCH_CMDS.includes(args[0])) {
     const ranch = core.loadRanch();
-    const cap   = core.ranchCap();
+    const cap   = core.ranchCap(ranch);
     const pets  = ranch.pets;
 
     const label = (p) => {
@@ -747,7 +747,7 @@ if (RANCH_CMDS.includes(args[0])) {
         }
         rerollGate();
         // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
-        const pool = starters.filter(x => roster.includes(x));
+        const pool = starters.filter(x => roster.includes(x)).concat(core.page2StarterExtras(ranch));
         const next = weightedPickStarter(pool.length ? pool : starters);
         const force = readForce();
         force.ranchTriggerTs = Date.now();
@@ -869,7 +869,8 @@ let target;
 if (arg === '--reset') {
     rerollGate();
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
-    const pool = starters.filter(s => roster.includes(s));
+    // 營地第二頁解鎖後多開放 Keramon（core.page2StarterExtras）
+    const pool = starters.filter(s => roster.includes(s)).concat(core.page2StarterExtras(core.loadRanch()));
     target = weightedPickStarter(pool.length ? pool : starters);
     console.log(`🎲 隨機抽到：${target}`);
 } else {

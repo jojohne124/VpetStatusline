@@ -934,5 +934,27 @@ console.log('— 角色 config.json 讀取快取（DLP 掛標的檔每次 open ~
     } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {} }
 }
 
+console.log('— 營地第二頁：分頁與對峙 —');
+{
+    const pets = (n) => Array.from({ length: n }, (_, i) => ({ id: 'p' + i, state: { characterId: 'agumon' } }));
+    const sz = (r, o) => P.yardPages(r, o).map(p => p.length).join(',');
+    ok(sz({ pets: pets(4) }) === '4', '4 隻應該只有一頁');
+    ok(sz({ pets: pets(5) }) === '5', '沒解鎖（舊存檔超過上限）不該分頁，全部照舊畫在一頁');
+    ok(sz({ pets: pets(5), page2At: 1 }) === '4,1', '解鎖後 5 隻應該分成 4+1');
+    ok(sz({ pets: pets(8), page2At: 1 }) === '4,4', '解鎖後 8 隻應該分成 4+4');
+    ok(sz({ pets: pets(8), page2At: 1 }, { feast: true }) === '8', '圍爐不分頁（大家坐同一桌）');
+    const r8 = { pets: pets(8), page2At: 1 };
+    ok(P.yardPageRanch(r8, 1).pets.map(p => p.id).join() === 'p4,p5,p6,p7', '第二頁應該是第 5～8 隻');
+    ok(P.yardPageRanch(r8, 9).pets[0].id === 'p4', '頁碼超出要夾在最後一頁');
+    ok(P.yardPageOf(r8, 'p6') === 1 && P.yardPageOf(r8, 'p1') === 0, 'yardPageOf 找錯頁（拎起來會用錯區域）');
+    if (hasArt) {
+        const o = P.composeYardStandoff(core, pets(4), 'agumon', 0);
+        ok(o.pets.length === 4 && o.enemy, '對峙要有我方 4 隻和敵人');
+        ok(o.pets.every(p => p.x + 16 <= o.enemy.x), '我方要全部站在敵人左邊');
+        const gone = P.composeYardStandoff(core, pets(4), 'agumon', 0, { enemyDx: 99 });
+        ok(gone.enemy === null, '敵人退出畫面後還在');
+    } else skip++;
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));
 process.exit(fail ? 1 : 0);

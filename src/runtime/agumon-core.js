@@ -443,7 +443,7 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
 
     if (op.op === 'keep') {
         // 滿了就不收（CLI 已擋，這是第二道 —— 兩次檢查之間可能又被別的視窗收了一隻）
-        if (ranch.pets.length >= ranchCap()) {
+        if (ranch.pets.length >= ranchCap(ranch)) {
             // 永久失敗 → 把配對的「抽新的」也一起作廢，否則下一拍時戳已過期、
             // keepFailed 不再成立，那隻新角色就會補上來把現役蓋掉。
             if (forceFile) clearForceCharacter(forceFile);
@@ -776,6 +776,20 @@ const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
 const RANCH_CAP  = 4;
 
+// ── 營地第二頁（docs/yard-page2-spec.md）────────────────────────────
+// 連續擊倒 Diablomon（自動戰鬥）與 Armagemon（營地事件）→ 上限 +4、營地多一隻 Keramon、
+// 重抽池開放 Keramon。存檔只記「解鎖了沒」（ranch.page2At）與事件進度（page2Quest），
+// 上限本身照 ranch-spec 的規則不吃存檔。
+//
+// ⛔ 尚未實裝（Keramon 家族美術調整中）：PAGE2_ENABLED = false → 自然觸發全部關閉
+//    （Diablomon 不進對手池、打贏也不進第二階段）。daemon 的 dev 指令照樣能強制
+//    進第二階段／解鎖，拿來預覽與截圖；release 版擋掉 dev 指令，玩家碰不到。
+const PAGE2_ENABLED   = false;
+const PAGE2_CAP_BONUS = 4;
+const PAGE2_BOSS      = 'diablomon';   // 第一階段：自動戰鬥遇到並打贏
+const PAGE2_FINAL     = 'armagemon';   // 第二階段：營地裡挑一隻跟牠打
+const PAGE2_REWARD    = 'keramon';     // 打贏後加進營地、開放重抽
+
 // 收進營地時**丟掉**的欄位。其餘一律保存。
 //
 // ⚠️ 這裡用黑名單而不是白名單，是因為兩種漏掉的後果差很多：
@@ -845,8 +859,36 @@ function loadRanch(file) {
     return { v: 1, pets: [] };
 }
 
-/** 目前的收納上限。一律以常數為準，不看存檔。 */
-function ranchCap() { return RANCH_CAP; }
+/** 目前的收納上限：常數為準，只看「第二頁解鎖了沒」（不吃存檔裡的數字）。 */
+function ranchCap(ranch) { return RANCH_CAP + (page2Unlocked(ranch) ? PAGE2_CAP_BONUS : 0); }
+function page2Unlocked(ranch) { return !!(ranch && ranch.page2At); }
+
+// 第一階段：打贏 Diablomon 那一刻營地剛好滿 4 隻、還沒解鎖、沒有進行中的事件 → 記下待觸發。
+// seen = 前線的「牠逃到營地了」提示看過沒（只跳一次）。回傳有沒有記。
+// opts.enabled：測試用（開關還關著時也要能驗觸發條件）
+function page2OnBossWin(file, opts = {}) {
+    if (!(opts.enabled != null ? opts.enabled : PAGE2_ENABLED)) return false;
+    const r = loadRanch(file);
+    if (page2Unlocked(r) || r.page2Quest || (r.pets || []).length < RANCH_CAP) return false;
+    r.page2Quest = { at: Date.now(), seen: false };
+    saveRanch(r, file);
+    return true;
+}
+
+// 第二階段打贏：解鎖 + 營地補一隻全新的 Keramon（下一個空格）。只改傳進來的 ranch，存檔由呼叫端做。
+function page2Grant(ranch, now = Date.now()) {
+    ranch.page2At = now;
+    delete ranch.page2Quest;
+    const id = newRanchId(ranch);
+    ranch.pets.push({ id, keptAt: now,
+                      state: snapshotPet({ characterId: PAGE2_REWARD, birthAt: now, lastEvolveAt: now }) });
+    return id;
+}
+
+// 重抽池額外開放的角色（解鎖第二頁 → Keramon）。素材沒裝就不給，免得抽到一隻畫不出來的。
+function page2StarterExtras(ranch) {
+    return page2Unlocked(ranch) && characterExists(PAGE2_REWARD) ? [PAGE2_REWARD] : [];
+}
 function saveRanch(r, file) {
     return atomicWrite(file || RANCH_FILE, JSON.stringify(r));
 }
@@ -1326,6 +1368,10 @@ function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
         // 我方若已是 SU，「同階」幾乎抓不到人 → 基礎池退回 Ultimate（規格：其餘為 Ultimate）
         const baseStage = (myStage === SU_STAGE) ? 'Ultimate' : myStage;
         let candidates = roster.filter(n => n !== myId && getCharacterStage(n) === baseStage);
+        // 營地第二頁的大魔王：不在 roster（沒實裝成可養角色），只當 Ultimate 池的對手。
+        // 機率比照一般遇敵（池裡平均抽）。SU 退回 Ultimate 池，所以兩階都遇得到。
+        if (PAGE2_ENABLED && baseStage === 'Ultimate' && myId !== PAGE2_BOSS
+            && characterExists(PAGE2_BOSS) && !candidates.includes(PAGE2_BOSS)) candidates.push(PAGE2_BOSS);
 
         // ── Super-Ultimate 強敵抽選 ──
         if (myStage === 'Ultimate' || myStage === SU_STAGE) {
@@ -1745,6 +1791,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                     // 分 tag 戰績（給 tag_battles 進化條件用）：這場對手身上每個 tag 各記一筆。
                     // 與上面同一個去重 guard 內 → 多視窗不會重複加計。
                     // 對手本機沒安裝（黑影 fallback）讀不到 tag → 該場不計入任何 tag。
+                    // 營地第二頁第一階段（打贏 Diablomon）。在去重 guard 裡 → 同一場不會記兩次
+                    if (st.battleWin && st.battleEnemy === PAGE2_BOSS) page2OnBossWin();
                     const etags = getCharacterTags(st.battleEnemy);
                     if (etags.length) {
                         if (!st.tagStats || typeof st.tagStats !== 'object') st.tagStats = {};
@@ -2553,6 +2601,8 @@ module.exports = {
     bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
     RANCH_FILE, RANCH_CAP, ranchCap, loadRanch, saveRanch, newRanchId,
+    PAGE2_ENABLED, PAGE2_CAP_BONUS, PAGE2_BOSS, PAGE2_FINAL, PAGE2_REWARD,
+    page2Unlocked, page2OnBossWin, page2Grant, page2StarterExtras,
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
     JOGRESS_FILE, loadJogress, jogressTarget, jogressCandidates, isJogressStep, settleJogress,

@@ -581,6 +581,45 @@ console.log('— 特殊進化（營地時效）—');
     }
 }
 
+console.log('— 營地第二頁（核心）—');
+{
+    // 還沒實裝：開關關著，自然觸發一律不發生（dev 指令另外測，見 test-yard-page2）
+    ok(core.PAGE2_ENABLED === false, '營地第二頁還沒實裝，PAGE2_ENABLED 應該關著');
+    const four = () => ({ v: 1, pets: [1, 2, 3, 4].map(i => ({ id: 'q' + i, keptAt: i, state: { characterId: 'agumon' } })) });
+    ok(core.ranchCap() === 4 && core.ranchCap(four()) === 4, '未解鎖的上限應該是 4');
+    fs.writeFileSync(RANCH, JSON.stringify(four()));
+    ok(core.page2OnBossWin(RANCH) === false && !core.loadRanch(RANCH).page2Quest, '開關關著，打贏 Diablomon 卻進了第二階段');
+    // 觸發條件（開關打開時）：滿 4 隻、沒解鎖、沒有進行中的事件
+    ok(core.page2OnBossWin(RANCH, { enabled: true }) === true, '滿 4 隻打贏 Diablomon 應該進第二階段');
+    const q = core.loadRanch(RANCH).page2Quest;
+    ok(q && q.seen === false, '第二階段待觸發要記成「還沒看過提示」');
+    ok(core.page2OnBossWin(RANCH, { enabled: true }) === false, '已經在第二階段又打贏一次，不該重記（提示會再跳一次）');
+    const three = four(); three.pets.pop(); fs.writeFileSync(RANCH, JSON.stringify(three));
+    ok(core.page2OnBossWin(RANCH, { enabled: true }) === false, '營地不到 4 隻也進了第二階段');
+    // 打贏 Armagemon：解鎖、上限 8、Keramon 補在下一格、事件清掉
+    const r = four(); r.page2Quest = { at: 1, seen: true };
+    const kid = core.page2Grant(r, 123);
+    ok(r.page2At === 123 && core.ranchCap(r) === 8, '解鎖後上限應該是 8');
+    ok(r.pets.length === 5 && r.pets[4].id === kid && r.pets[4].state.characterId === 'keramon', '解鎖後營地第 5 格要是一隻新的 Keramon');
+    ok(!r.page2Quest, '解鎖後事件進度沒清掉');
+    fs.writeFileSync(RANCH, JSON.stringify(r));
+    ok(core.page2OnBossWin(RANCH, { enabled: true }) === false, '已經解鎖了還會再進第二階段');
+    // 收進營地用解鎖後的上限（5 隻還能收）
+    const st = { characterId: 'greymon' };
+    const k = core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' } }, RANCH);
+    ok(k && k.ok && core.loadRanch(RANCH).pets.length === 6, '解鎖後 5 隻卻收不進營地（上限沒吃解鎖）');
+    // 重抽池：解鎖才有 Keramon
+    ok(core.page2StarterExtras(four()).length === 0, '沒解鎖，重抽池卻有 Keramon');
+    if (core.characterExists('keramon')) ok(core.page2StarterExtras(r).includes('keramon'), '解鎖了，重抽池沒有 Keramon');
+    // 開關關著 → Diablomon 不會出現在對手池（Ultimate 打很多場都遇不到）
+    let met = false;
+    for (let s = 1; s <= 400 && !met; s++) if (core.chooseBattleEnemy('wargreymon', s * 7919, null, { total: 0, wins: 0 }) === 'diablomon') met = true;
+    ok(!met, '開關關著，Ultimate 卻遇到 Diablomon');
+    // 重抽有兩條路（vpet reset、收進營地後抽新的），兩條都要把解鎖開放的角色加進池子
+    const cheatSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'runtime', 'statusline-cheat.js'), 'utf8');
+    ok((cheatSrc.match(/\.concat\(core\.page2StarterExtras\(/g) || []).length === 2, '重抽的兩條路沒有都加上 page2StarterExtras（解鎖了也抽不到 Keramon）');
+}
+
 cleanup();
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -166,6 +166,11 @@ cd vpet
 
 ---
 
+<!--
+  ⛔ 狀態列的桌寵暫停中（2026-10-15，重心放在 daemon 版）：agumon-core 的 STATUSLINE_PET_PAUSED
+  讓狀態列只顯示狀態文字、不畫桌寵，下面這段附錄的做法目前看不到桌寵，先藏起來（不刪）。
+  恢復時，把這個註解拿掉即可。
+
 ## 附錄：讓桌寵也住進 Claude Code 狀態列（進階）
 
 預設安裝不碰 statusline。如果你想在 Claude Code 底下的狀態列也看到桌寵：
@@ -191,5 +196,6 @@ node scripts/install.js        # 不加 --daemon-only
 > ⚠ 2026-08 之前的舊版 `--daemon-only` **不會**清掉那條 `statusLine`，結果是 Claude Code 每秒
 > 去執行一個已被刪掉的檔案、狀態列跳「找不到檔案」。先 `git pull` 再跑；已經踩到的話，手動把
 > `~/.claude/settings.json` 裡的 `statusLine` 整段刪掉即可。
+-->
 
 祝養寵愉快 🦖

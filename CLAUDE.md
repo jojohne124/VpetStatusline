@@ -16,6 +16,17 @@ Claude Code 桌寵：statusline 或獨立視窗裡的 16×16 像素角色，會�
 換機器要做的一次性設定見 `docs/agent-memory/README.md`。
 通用偏好（回話精簡、只用 log、commit 規則）在 `~/.claude/CLAUDE.md`，不在這裡。
 
+## 狀態列的 vpet 暫停中（2026-10-15）
+
+重心放在 **daemon 版**（獨立視窗），之後找機會再移植到 mod。**statusline 本身照常**（狀態文字），
+只有右側的 vpet **只擋不刪**：
+
+- 開關只有一個：`agumon-core.js` 的 `STATUSLINE_PET_PAUSED = true`。
+- `statusline-agumon-color.js` 入口看到它就只輸出狀態文字，不讀不寫桌寵的 state（全交給 daemon）。
+- `vpet hide / show` 擋掉、help 不列；GUIDE 的「讓桌寵住進狀態列」附錄用註解藏起來。
+- 安裝流程不變（statusline 版的人照樣裝 statusLine、hook）。新功能不必再顧狀態列那一側的畫面。
+- 恢復：開關改 false、拿掉 GUIDE 附錄的註解。
+
 ## 兩份 code，改了要同步
 
 `~/.claude/agumon-statusline/` 是**實際跑的安裝版，也是權威版本**。

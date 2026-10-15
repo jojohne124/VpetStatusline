@@ -9,6 +9,11 @@ const STATE_DIR    = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'st
 const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
+// ⛔ 狀態列的 vpet 暫停（2026-10-15）：重心放在 daemon 版（獨立視窗），之後再找機會移植到 mod。
+//    statusline 本身照常顯示狀態文字（模型、花費、context…），只是右側不畫桌寵、也不推進
+//    桌寵的狀態（成長、戰鬥、進化都交給 daemon）。程式先不刪，只擋；恢復 → 改成 false。
+//    擋的地方：statusline-agumon-color.js 的入口、statusline-cheat.js 的 vpet hide / show。
+const STATUSLINE_PET_PAUSED = true;
 const ANCHOR_GAP  = 4;
 // 一拍多長 —— 整個 vpet 的**節奏參數**。所有表演（走路、戰鬥 19 拍、進化 12 拍、卡片、
 // 空降、表情…）都用「拍」定義，改這個數字就是整體加快或放慢，各表演的相對節奏不變。
@@ -2521,6 +2526,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 }
 
 module.exports = {
+    STATUSLINE_PET_PAUSED,
     STEP_MS,   // 節奏參數：statusline 與 daemon 都讀這一份
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     IDLE_MS, isIdleSleeping,

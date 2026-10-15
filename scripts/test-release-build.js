@@ -174,5 +174,71 @@ console.log('— 根目錄乾淨、預設安裝是純 daemon —');
 
 try { fs.rmSync(OUT, { recursive: true, force: true }); } catch (_) {}
 
+console.log('— 狀態列的 vpet 暫停：statusline 照常、右側桌寵只擋不刪 —');
+{
+    const { spawnSync } = require('child_process');
+    const core = require('../src/runtime/agumon-core.js');
+    ok(core.STATUSLINE_PET_PAUSED === true, '狀態列 vpet 的暫停開關沒開（agumon-core 的 STATUSLINE_PET_PAUSED）');
+    // 只擋不刪：安裝照常（statusline 版的人照樣裝 statusLine），程式也都還在
+    ok(!/STATUSLINE_PAUSED/.test(read('scripts/install.js')), 'install.js 不該擋 statusline 本身（要的是只擋右側桌寵）');
+    ok(fs.existsSync(path.join(REPO, 'src/runtime/statusline-agumon-color.js')), 'statusline 的程式被刪了（說好只擋不刪）');
+
+    // 暫存的部署樹：cheat / statusline / core 三支，core 的開關可以改成 false 當對照組
+    const sandbox = (paused) => {
+        const T = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-sloff-'));
+        for (const f of ['statusline-cheat.js', 'statusline-agumon-color.js', 'agumon-core.js'])
+            fs.copyFileSync(path.join(REPO, 'src/runtime', f), path.join(T, f));
+        if (!paused) {
+            const cf = path.join(T, 'agumon-core.js');
+            fs.writeFileSync(cf, fs.readFileSync(cf, 'utf8').replace('const STATUSLINE_PET_PAUSED = true;', 'const STATUSLINE_PET_PAUSED = false;'));
+        }
+        fs.mkdirSync(path.join(T, 'assets'));
+        fs.writeFileSync(path.join(T, 'assets', 'roster.json'), JSON.stringify({ roster: ['agumon'] }));   // cheat 開頭就會讀
+        return { T, env: { ...process.env, AGUMON_STATE_DIR: path.join(T, 'state') } };
+    };
+    const cleanup = (T) => { try { fs.rmSync(T, { recursive: true, force: true }); } catch (e) {} };
+
+    // statusline：只輸出狀態文字，桌寵的 state 一個檔都不碰
+    {
+        const { T, env } = sandbox(true);
+        const input = { model: { display_name: 'Opus' }, session_id: 's', cost: { total_cost_usd: 1.5 },
+                        context_window: { used_percentage: 12 }, cwd: T, render_width_chars: 200 };
+        // 先放一份有角色的 state（空 state 的話 saveState 本來就不寫，測不出來）＋一則新的 hook
+        const SF = path.join(T, 'state', 'color-state.json');
+        fs.mkdirSync(path.dirname(SF), { recursive: true });
+        const seed = JSON.stringify({ characterId: 'agumon', lastHookTs: 1, trainingBonus: 3 });
+        fs.writeFileSync(SF, seed);
+        fs.writeFileSync(path.join(T, 'state', 'hook.json'), JSON.stringify({ ts: Date.now() }));
+        const r = spawnSync(process.execPath, [path.join(T, 'statusline-agumon-color.js')],
+                            { env, input: JSON.stringify(input), encoding: 'utf8' });
+        ok(r.stdout === core.buildStatusLines(input).join('\n'),
+           '暫停時狀態列不是只有狀態文字：' + JSON.stringify((r.stdout || '').slice(0, 80)));
+        ok(fs.readFileSync(SF, 'utf8') === seed && !fs.existsSync(SF + '.bak'),
+           '暫停時 statusline 還在寫桌寵的 state（會跟 daemon 搶）');
+        cleanup(T);
+    }
+
+    // vpet hide / show：暫停時擋、help 不列；開關關掉照舊能用
+    const hideRun = (paused) => {
+        const { T, env } = sandbox(paused);
+        const hide = spawnSync(process.execPath, [path.join(T, 'statusline-cheat.js'), '--hide'], { env, encoding: 'utf8' });
+        const help = spawnSync(process.execPath, [path.join(T, 'statusline-cheat.js'), '--help'], { env, encoding: 'utf8' });
+        const forced = fs.existsSync(path.join(T, 'state', 'force-char.json'));
+        cleanup(T);
+        return { code: hide.status, forced, helpHasHide: /vpet hide/.test(help.stdout || '') };
+    };
+    const off = hideRun(true), on = hideRun(false);
+    ok(off.code !== 0 && !off.forced, '暫停時 vpet hide 沒擋（還是寫了 petHidden）');
+    ok(!off.helpHasHide, '暫停時 vpet help 還在列 hide / show');
+    ok(on.code === 0 && on.forced, '開關關掉後 vpet hide 壞了（恢復時要能直接用）');
+    ok(on.helpHasHide, '開關關掉後 vpet help 沒列 hide / show');
+
+    // GUIDE 的「讓桌寵住進狀態列」附錄藏在註解裡（出貨成 README 時不會顯示）
+    const g = read('GUIDE.md');
+    const at = g.indexOf('## 附錄：讓桌寵也住進 Claude Code 狀態列');
+    ok(at > 0 && g.lastIndexOf('<!--', at) > g.lastIndexOf('-->', at),
+       'GUIDE 的狀態列附錄沒有藏起來（照做也看不到桌寵）');
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

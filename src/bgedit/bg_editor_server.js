@@ -80,6 +80,14 @@ function json(res, code, obj) {
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
+    // vpet bg / vpet album 每次開都會先叫舊的收掉再起新的（statusline-cheat 的 PLAYER_PAGES）：
+    // 常駐的 server 會一直跑當初載入的舊程式，自動更新換了檔案也一樣。
+    if (req.method === 'POST' && url.pathname === '/__quit') {
+        json(res, 200, { ok: true });
+        setTimeout(() => process.exit(0), 50);
+        return;
+    }
+
     // 只列現在養的那隻；/sprite 也不接受別的 id（不然改網址就看得到全部）
     if (url.pathname === '/chars') return json(res, 200, { chars: [currentChar()] });
 

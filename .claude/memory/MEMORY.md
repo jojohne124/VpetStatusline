@@ -25,3 +25,4 @@
 - [statusline release 分支](todo_statusline_release_branch.md) — 為一般使用者建輕量 release；✅2026-07-13開工:打包腳本build-release.js產dist/release(省~2.6MB)、RELEASE標記+cheat gate停用作弊碼(保留help/card/pvp/code/sleep/wake/tree/reset/freeze/unfreeze/battle開關;移除切角/evolve/battle強制/pvp-server/pin)、vpet help指令、全新玩家預設agumon；待辦:推release分支(目前只到dist/)、未commit
 - [Super-Ultimate 階段](todo_super_ultimate_stage.md) — ✅敵方+我方均已實裝並push(27850cb)；正規線Godzilla_1994→BurningGodzilla(繼承戰力)、彩蛋線Agumon/Gabumon→Kizuna(Child直跳SU,power_at_least 50+win76%,**必須先freeze**)；config.evolvePower=固定戰力不繼承；tree格數=血緣長度;card一律顯Ultimate；⚠️僅剩「encounter前多2幀/強敵提示」規格有歧義未做
 - [戰鬥系統分鏡](project_fight_system.md) — 戰鬥分鏡、尺寸常數、子彈軌跡、自動觸發 TODO（原本沒列進索引）
+- [狀態列 vpet 暫停、重心 daemon](project_statusline_paused.md) — 2026-10-15 起 statusline 照常、只擋右側 vpet（core 的 STATUSLINE_PET_PAUSED，只擋不刪）；之後移植到 mod

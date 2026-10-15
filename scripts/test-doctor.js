@@ -146,5 +146,32 @@ console.log('— daemon 的排程 —');
        '啟動時那一輪是同步呼叫且排在 server.listen 之前，會拖慢 daemon 開始服務的時間');
 }
 
+console.log('— 照腳本檔名找 node 行程（vpet bg / album 收舊版 server 用）—');
+{
+    // 舊版頁面 server 沒有 /__quit，只能照命令列找出來砍。找錯人就是砍錯行程，
+    // 所以要確認：真的在跑那支檔案的找得到；只是命令列「提到」那個字串的找不到。
+    const { spawn, spawnSync } = require('child_process');
+    const os = require('os');
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-scan-'));
+    const NAME = 'vpet-scan-probe.js';
+    fs.writeFileSync(path.join(T, NAME), 'setTimeout(() => {}, 60000);');
+    const real = spawn(process.execPath, [path.join(T, NAME)], { stdio: 'ignore' });
+    const mention = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)', NAME], { stdio: 'ignore' });
+    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},500)']);   // 等兩隻都起來
+    try {
+        const pids = doctor.scanNodesByScript(NAME);
+        ok(Array.isArray(pids), '掃描失敗（回 null）');
+        ok(pids && pids.includes(real.pid), '真的在跑那支檔案的行程沒找到');
+        ok(pids && !pids.includes(mention.pid), '只是命令列提到檔名的行程也被當成目標（會砍錯人）');
+        ok(doctor.scanNodesByScript('a b.js') === null, '檔名含奇怪字元應該直接拒絕（會拼進 PowerShell）');
+    } finally {
+        real.kill(); mention.kill();
+        try { fs.rmSync(T, { recursive: true, force: true }); } catch (e) {}
+    }
+    // 兩支頁面 server 都要有 /__quit：新版靠它自己收，少了就每次都走「照命令列砍」那條慢路
+    for (const f of ['src/bgedit/bg_editor_server.js', 'src/album/album_server.js'])
+        ok(/url\.pathname === '\/__quit'/.test(read(f)), f + ' 少了 /__quit');
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

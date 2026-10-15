@@ -43,8 +43,10 @@
 | **Perfect** | 14 | 110–130 | 119 | 150 |
 | **Ultimate** | 14 | 160–190 | 171 | 200 |
 | Boss(?) | 2 | 200 | 200 | ∞ |
+| Super-Ultimate（敵方） | 4 | 210 | 210 | 210 |
 
 > 戰力 = `min(power + trainingBonus, TIER_CAP)`，每則訊息 trainingBonus +1（受 cap 約束）。
+> Super-Ultimate 敵方（agumon_kizuna / gabumon_kizuna / burninggodzilla / zephagamon_ace，及未實裝的 armagemon）2026-10-15 由 200 調成 **210**（= TIER_CAP），我方 Ultimate 封頂 200 打它勝率低於五五。我方 SU 的戰力走 inheritedPower / evolvePower（Kizuna 仍是 200），不受這個數字影響；只有沒有繼承值的才會讀 config.power。
 > 每階約 +50 級距（如 20→70→120→170），新鏈照此最不突兀。base power 須低於 TIER_CAP，留訓練空間。
 
 ## 進化勝率（win_rate）公式 — 考量「收益」與「難度」

@@ -4,6 +4,7 @@
 const fs   = require('fs');
 const path = require('path');
 const {
+    STATUSLINE_PET_PAUSED,
     STATE_DIR, ANCHOR_GAP, BATTLE_SCENE_WIDTH, STEP_MS,
     EVO_LENGTH,
     loadState, saveState, atomicWrite, decideAgumon, checkEvolution, resetStageStats,
@@ -79,6 +80,13 @@ process.stdin.on('end', () => {
     clearTimeout(_watchdog);
     try {
         const i   = JSON.parse(d);
+        // 狀態列的 vpet 暫停中（agumon-core 的 STATUSLINE_PET_PAUSED）：只給狀態文字。
+        // 刻意放在讀 state 之前 —— 不只不畫，連 force / 進化 / 戰鬥 / saveState 都不碰，
+        // 桌寵整個交給 daemon，兩邊才不會搶著推進同一份 color-state.json。
+        if (STATUSLINE_PET_PAUSED) {
+            process.stdout.write(buildStatusLines(i).join('\n'));
+            return;
+        }
         const now = Date.now();
         const st  = loadState(STATE_FILE);
         const readOnly = daemonIsAuthoritative();   // daemon 當家時本行程只顯示、不寫

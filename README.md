@@ -161,30 +161,4 @@ cd vpet
 
 ---
 
-## 附錄：讓桌寵也住進 Claude Code 狀態列（進階）
-
-預設安裝不碰 statusline。如果你想在 Claude Code 底下的狀態列也看到桌寵：
-
-```bash
-node scripts/install.js        # 不加 --daemon-only
-```
-
-完成後**重開 Claude Code**，狀態列就會出現桌寵。獨立視窗照樣可以用：視窗一開，
-狀態列那隻會自動退成只顯示，兩邊不會打架。
-
-要知道的：
-
-- **會覆蓋你原本的 statusline**。有自己慣用的 statusline 的話，先備份 `settings.json` 裡那條指令。
-- **狀態列那隻要等 Claude Code 刷新才會動**（最快一秒一次），所以比獨立視窗頓；
-  Claude 分頁閒置或沒 focus 時還會停格 —— 回到 Claude 分頁、送一則訊息就恢復。
-- `vpet hide` 只隱藏狀態列的桌寵（狀態文字保留），`vpet show` 恢復。
-
-**改回預設（只用獨立視窗）**：再雙擊一次 `install`（或 `node scripts/install.js --daemon-only`）。
-腳本會把狀態列那份拆乾淨，並移除 `settings.json` 裡**指向 `agumon-statusline` 的那條 `statusLine`**
-（會先備份），你的狀態列就恢復成 Claude Code 預設。角色與進度不受影響。
-
-> ⚠ 2026-08 之前的舊版 `--daemon-only` **不會**清掉那條 `statusLine`，結果是 Claude Code 每秒
-> 去執行一個已被刪掉的檔案、狀態列跳「找不到檔案」。先 `git pull` 再跑；已經踩到的話，手動把
-> `~/.claude/settings.json` 裡的 `statusLine` 整段刪掉即可。
-
 祝養寵愉快 🦖

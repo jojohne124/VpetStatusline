@@ -114,6 +114,29 @@ const PLAZA_FIELD = makeField(PLAZA_W, PLAZA_H);
 //（y 乘 ky ≈ 1.58，見 plaza.js 的 YARD_RENDER），minY = 2 → 畫出來腳底那列剛好踩在地平線。
 // 只動 minY：畫布尺寸和放大倍率都是用 w/h/maxY 算的，不會跟著變。
 const YARD_FIELD  = { ...makeField(52, 40, 0), minY: 2 };
+// 營地第二頁解鎖後 5～8 隻：兩頁合成**一個兩倍寬的場地**一起走（跨頁走動），每一頁只是
+// 這張大場地的一個鏡頭（plaza.js 的 YARD_RENDER_WIDE 合成整張、再裁出那一頁）。
+// 寬 99 不是 52 x 2：畫面上一頁是 69 細格，兩頁 138；走路格子要用**同一個**放大倍率
+// （kx = (69-16)/36 ≈ 1.47）鋪滿 138 → 可站範圍 (138-16)/1.47 ≈ 83 → 寬 83 + 16 = 99。
+// 用 104 的話兩頁的倍率不同，一解鎖大家走路就變慢一點、步伐也跟一頁時不一樣。
+// 高度、地平線都跟一頁的一樣（只是變寬）。test-plaza 釘著倍率要一致。
+const YARD_FIELD_WIDE = { ...makeField(99, 40, 0), minY: 2 };
+// 兩頁的交界：身體橫跨交界線的那幾格（畫出來一半在這頁、一半在那頁）不准**停**，走過去照常。
+// 停在線上的話兩頁都只看到半隻，像被切開（2026-10-16 回報）。noStay 是場地 x 的閉區間，
+// 跟著 yardZones 的 {...F} 帶進每一塊分區，legAt 抽到「停」時會先走離這段再停（同牆邊的作法）。
+// 換算同 plaza.js 的 YARD_RENDER／YARD_RENDER_WIDE（一頁 69 細格），test-plaza 釘著兩邊一致。
+YARD_FIELD_WIDE.noStay = (() => {
+    const PW = Math.round(YARD_FIELD.w * 8 / 6), kx = (2 * PW - SPRITE) / YARD_FIELD_WIDE.maxX;
+    const xs = [];
+    for (let x = YARD_FIELD_WIDE.minX; x <= YARD_FIELD_WIDE.maxX; x++) {
+        const d = Math.round(x * kx);
+        if (d < PW && d + SPRITE > PW) xs.push(x);
+    }
+    return [xs[0], xs[xs.length - 1]];
+})();
+const YARD_WIDE_MIN = 5, YARD_WIDE_MAX = 8;
+/** 這個隻數走哪一張場地：5～8 隻是兩頁寬的那張，其他（含沒支援的隻數）照舊一頁。 */
+function yardFieldFor(n) { return n >= YARD_WIDE_MIN && n <= YARD_WIDE_MAX ? YARD_FIELD_WIDE : YARD_FIELD; }
 // 廣場（第二版）：畫布跟營地畫出來的一樣大（69x54 細格，見 plaza.js 的 YARD_RENDER），
 // 但**直接在細格上走** —— 一拍走 1 細格（6px）。營地是走在 52x40 的粗格再放大 1.47 倍畫，
 // 每一步要跳 1~2 個細格，廣場用同一套看起來「步伐很大」（回報過）。
@@ -186,8 +209,22 @@ const YARD_LAYOUTS = {
          quadStagger: [[0, 0, .5, .5], [.5, 0, 1, .55], [0, .45, .5, 1], [.5, .55, 1, 1]],
          rows:        [[0, 0, 1, .25], [0, .25, 1, .5], [0, .5, 1, .75], [0, .75, 1, 1]],
          cols:        [[0, 0, .25, 1], [.25, 0, .5, 1], [.5, 0, .75, 1], [.75, 0, 1, 1]] },
+    // 5～8 隻：比例是對**兩頁寬的場地**（YARD_FIELD_WIDE）說的，0.5 = 兩頁的交界。
+    // cross = 上下兩排，兩排切的位置錯開，總有一塊橫跨交界、而且寬到能「整隻待在第一頁」也能
+    // 「整隻走到第二頁」—— 那一隻就會在兩頁之間走來走去。只是身體擦過交界不算（test-plaza 釘著）。
+    // 8 隻：下排中間那塊刻意比較寬（.38～.65），其他三塊分剩下的；四等分的話沒有一塊夠寬。
+    // 左邊兩塊也不能再窄：寬不到 9 格，模擬的「最短移動段」就掉到 4（低於門檻 5）。
+    // 第 5 隻（解鎖送的 Keramon）一律落在右下，鏡頭帶到第二頁時找得到牠。
+    5: { cross: [[0, 0, 1 / 3, .5], [1 / 3, 0, 2 / 3, .5], [2 / 3, 0, 1, .5], [0, .5, .5, 1], [.5, .5, 1, 1]] },
+    6: { cross: [[0, 0, 1 / 3, .5], [1 / 3, 0, 2 / 3, .5], [2 / 3, 0, 1, .5],
+                 [0, .5, 1 / 3, 1], [1 / 3, .5, 2 / 3, 1], [2 / 3, .5, 1, 1]] },
+    7: { cross: [[0, 0, .25, .5], [.25, 0, .5, .5], [.5, 0, .75, .5], [.75, 0, 1, .5],
+                 [0, .5, 1 / 3, 1], [1 / 3, .5, 2 / 3, 1], [2 / 3, .5, 1, 1]] },
+    8: { cross: [[0, 0, .25, .5], [.25, 0, .5, .5], [.5, 0, .75, .5], [.75, 0, 1, .5],
+                 [0, .5, .18, 1], [.18, .5, .38, 1], [.38, .5, .65, 1], [.65, .5, 1, 1]] },
 };
-const YARD_LAYOUT_DEFAULT = { 1: 'solo', 2: 'leftRight', 3: 'quadFull', 4: 'quad' };
+const YARD_LAYOUT_DEFAULT = { 1: 'solo', 2: 'leftRight', 3: 'quadFull', 4: 'quad',
+                              5: 'cross', 6: 'cross', 7: 'cross', 8: 'cross' };
 
 /**
  * 把場地切成 n 個子場地（每隻一個）。順序固定，呼叫端用「第幾隻」索引。
@@ -204,7 +241,7 @@ const YARD_LAYOUT_DEFAULT = { 1: 'solo', 2: 'leftRight', 3: 'quadFull', 4: 'quad
  * 貼邊時，其中一條邊會跨過分支，尺寸就跟著變（回報：「移動區到邊緣會變動區塊大小」）。
  * 直接操作的工具不能有這種行為，所以它存絕對座標；比例那套留給內建表當簡寫。
  */
-function yardZones(n, field = YARD_FIELD, margin = ZONE_MARGIN, layout = null) {
+function yardZones(n, field = yardFieldFor(n), margin = ZONE_MARGIN, layout = null) {
     const F = field;
     // 絕對座標：原樣採用，只夾進場地。不套接縫讓開 —— 那是比例簡寫才需要的。
     if (layout && !Array.isArray(layout) && Array.isArray(layout.exact) && layout.exact.length === n) {
@@ -386,7 +423,10 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     // 讓營地的寵物幾乎不會停下來（實測只停 2% 的時間）。
     const wantStay = rand01(seed, k * 3) < STAY_CHANCE;
     const stayLen  = STAY_MIN + Math.floor(rand01(seed ^ 0x5bd1e995, k) * (STAY_MAX - STAY_MIN + 1));
-    if (wantStay && !onWall) return { vx: 0, vy: 0, len: stayLen, stay: true };
+    // 兩頁交界（field.noStay）也不准停：跟牆邊一樣，先走離那段再停
+    const seamAt = (px) => !!field.noStay && px >= field.noStay[0] && px <= field.noStay[1];
+    const onSeam = seamAt(x);
+    if (wantStay && !onWall && !onSeam) return { vx: 0, vy: 0, len: stayLen, stay: true };
     const idx  = Math.floor(rand01(seed, k * 3 + 1) * DIR_VECTORS.length) % DIR_VECTORS.length;
     const runWant = RUN_MIN + Math.floor(rand01(seed, k * 3 + 2) * (RUN_MAX - RUN_MIN + 1));
     const offWall = (px, py) => px > minX && px < maxX && py > minY && py < maxY;
@@ -423,7 +463,8 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
     // 走到那裡再停。找不到（分區太窄、縮在角落）就不停了，照常走一段 —— 寧可少停一次，
     // 也不要停在牆邊（那就是「卡在邊界」）。
     if (wantStay) {
-        want = WALL_STEP_OUT;
+        // 交界那段有 10 格寬，走 5 步不一定出得去 → 在交界上就放寬到一整段
+        want = onSeam ? RUN_MAX : WALL_STEP_OUT;
         for (let i = 0; i < n; i++) {
             const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
             if (!leaves(c[0], c[1])) continue;
@@ -431,7 +472,7 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
             if (len < MIN_LEG) continue;
             const [ox, oy] = offsetAt(c[0], c[1], len);
             // walk = 真的在走的拍數；len 含後面停的拍數（posAt 只在前 walk 拍移動）
-            if (offWall(x + ox, y + oy)) return { vx: c[0], vy: c[1], len: len + stayLen, walk: len, stay: false };
+            if (offWall(x + ox, y + oy) && !seamAt(x + ox)) return { vx: c[0], vy: c[1], len: len + stayLen, walk: len, stay: false };
         }
         want = runWant;
     }
@@ -612,7 +653,8 @@ function stepAt(ms) { return Math.floor(ms / STEP_MS); }
 
 module.exports = {
     PLAZA_W, PLAZA_H, SPRITE, STEP_MS, DOT_PER, MIN_X, MIN_Y, MAX_X, MAX_Y, LABEL_RESERVE,
-    makeField, PLAZA_FIELD, YARD_FIELD, PLAZA_LIVE_FIELD, PLAZA_HORIZON,
+    makeField, PLAZA_FIELD, YARD_FIELD, YARD_FIELD_WIDE, YARD_WIDE_MIN, YARD_WIDE_MAX, yardFieldFor,
+    PLAZA_LIVE_FIELD, PLAZA_HORIZON,
     ZONE_MARGIN, YARD_LAYOUTS, YARD_LAYOUT_DEFAULT, yardZones, yardLayoutNames,
     zoneAnchor, inZone, returnLeg,
     DIR_VECTORS, DIR_SCAN_STRIDE, RUN_MIN, RUN_MAX, MIN_LEG, STAY_MIN, STAY_MAX, STAY_CHANCE, MAX_REPLAY,

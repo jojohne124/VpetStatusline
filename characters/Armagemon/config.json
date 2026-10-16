@@ -1,7 +1,7 @@
 {
   "name": "Armagemon",
   "stage": "Super-Ultimate",
-  "power": 0,
+  "power": 210,
   "frameCount": 12,
   "targetSize": 16,
   "layout": "individual",

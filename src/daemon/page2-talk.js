@@ -1,0 +1,21 @@
+'use strict';
+// 營地第二頁事件的台詞（docs/yard-page2-spec.md「表演」）。助手 = TerriermonAssistant。
+//
+// 台詞**只寫在這一份**，daemon 頁面整包帶過去（跟 help-tips.js 同一個作法）。
+// {name} = 派出去的那隻的名字。文字裡不要放反引號和「${」（會進 daemon 頁面的 template literal）。
+module.exports = {
+    // 第一階段：打贏 Diablomon 後，下次在前線看到畫面時跳一次
+    notice:   '打得好！可是 Diablomon 沒有消失……牠逃進你的營地了！下次去營地看看吧。',
+    // 第二階段：進營地、對峙
+    standoff: [
+        '大事不妙！Diablomon 在營地裡進化成 Armagemon 了！',
+        '從營地裡選一隻夥伴跟牠交戰吧！滑過去選，點下去就出發。',
+    ],
+    pick:     '選一隻夥伴出戰',
+    confirm:  '派 {name} 出戰？',
+    giveUp:   '放棄的話 Armagemon 會逃走，要再擊敗一次 Diablomon 才能再挑戰。確定嗎？',
+    // 結果
+    win:      'Armagemon 被打倒了……咦？牠變回 Keramon 了！看來牠歸順了，而且還找到營地的新地方，跟我來！',
+    unlocked: '營地變大囉！現在最多能住 8 隻。以後重抽也有機會遇到 Keramon 喔！',
+    lose:     '哎呀……Armagemon 逃走了。要再擊敗一次 Diablomon，牠才會再出現。下次一定行！',
+};

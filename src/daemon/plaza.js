@@ -186,6 +186,21 @@ const yardToDraw = (x, y) => ({ x: Math.round(x * YARD_RENDER.kx),
                                 y: Math.round(y * YARD_RENDER.ky) });
 const yardFromDraw = (x, y) => ({ x: Math.round(x / YARD_RENDER.kx),
                                   y: Math.round(y / YARD_RENDER.ky) });
+// 營地第二頁解鎖後 5～8 隻：兩頁寬的場地（W.YARD_FIELD_WIDE）畫在兩頁寬的畫布上，
+// 每一頁 = 從這張大圖裁出 YARD_RENDER.w 寬的一段。高度、ky 跟一頁的一樣。
+const YARD_RENDER_WIDE = (() => {
+    const F = W.YARD_FIELD_WIDE, S = W.SPRITE, w = 2 * YARD_RENDER.w;
+    return { s: YARD_RENDER.s, w, h: YARD_RENDER.h, kx: (w - S) / F.maxX, ky: YARD_RENDER.ky };
+})();
+// 「這張營地怎麼走、怎麼畫」綁成一包，呼叫端只挑一頁或兩頁，不會拿錯一半（場地用寬的、
+// 換算卻用一頁的 → 角色畫到錯的地方，而且只有 5 隻以上才看得出來）。
+const geom = (field, render) => ({
+    field, render, wide: field === W.YARD_FIELD_WIDE,
+    toDraw:   (x, y) => ({ x: Math.round(x * render.kx), y: Math.round(y * render.ky) }),
+    fromDraw: (x, y) => ({ x: Math.round(x / render.kx), y: Math.round(y / render.ky) }),
+});
+const YARD_GEOM      = geom(W.YARD_FIELD, YARD_RENDER);
+const YARD_GEOM_WIDE = geom(W.YARD_FIELD_WIDE, YARD_RENDER_WIDE);
 
 // ── 廣場（第二版）：大小比照營地，但直接在細格上走 ─────────────────────
 // 畫布跟營地畫出來的一樣大（69x54 細格、角色 16 細格），走路**就在這張細格上**，
@@ -344,6 +359,8 @@ function composePlazaLive(core, occupants, step, opts = {}) {
 }
 
 // opts.render：{ w, h, toDraw(x,y) } —— 畫在另一張格子上（營地用）。沒給就跟走路同一張（廣場）。
+// opts.crop：{ x0, w } —— 整張畫完只交出 x0 起 w 寬的那一段（營地跨頁：兩頁一起走、一次看一頁）。
+//   回傳的位置（dx/gx）也換成裁切後的座標；整隻在裁切範圍外的照樣在 placed 裡，呼叫端自己挑。
 function composePlaza(core, occupants, step, opts = {}) {
     const caches = opts.caches instanceof Map ? opts.caches : new Map();
     const field  = opts.field || W.PLAZA_FIELD;
@@ -473,15 +490,24 @@ function composePlaza(core, occupants, step, opts = {}) {
     // 4. dot -> cell -> ANSI，名牌另外走文字層（見下）
     //    天氣**不在這裡**：做過「依天氣把角色調色」，實際看了拿掉 —— 16x16 的點陣圖
     //    顏色本來就少，一染就分不出誰是誰。天氣整層都在前端疊，不動角色本身。
-    const cells  = dotsToCells(dots, bw);
+    let outDots = dots, outOwner = owner, ow = bw;
+    if (opts.crop) {
+        const { x0, w } = opts.crop;
+        outDots = dots.map(r => r.slice(x0, x0 + w));
+        outOwner = owner.map(r => r.slice(x0, x0 + w));
+        ow = w;
+        for (const p of placed) { p.dx -= x0; p.gx -= x0; }
+        if (layer) for (const it of layer) it.x -= x0;
+    }
+    const cells  = dotsToCells(outDots, ow);
     // 名牌在**畫出來的**格子上排（有 render 時是細格），尺寸也用畫布的
-    const labels = buildLabels(placed, core, opts.me, owner, render ? { w: bw, h: bh } : field);
+    const labels = buildLabels(placed, core, opts.me, outOwner, render ? { w: ow, h: bh } : field);
     // labels 一併回傳：測試要驗「哪些字因為遮擋而沒畫」，從 ANSI 字串反推很脆弱
     // opts.textLabels === false：名牌不塞進格子，改回傳位置讓前端用真的字型畫（見 nameTags）
     if (opts.textLabels === false) {
         // owner：每個 dot 是誰畫的（繪製順序 z，-1 = 空）。前端畫名牌時用它把「被站在前面的角色
         // 蓋住的部分」挖掉 —— 名牌的前後關係才會跟角色一樣（回報過：重疊時後排的名字浮在前排身上）。
-        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me), owner, tableZ, layer };
+        return { lines: renderWithLabels(cells, new Map()), placed, labels, tags: nameTags(placed, labels, opts.me), owner: outOwner, tableZ, layer };
     }
     return { lines: renderWithLabels(cells, labels), placed, labels, layer };
 }
@@ -648,7 +674,7 @@ const SESSION_START = Date.now();
  */
 function yardJoinStep() { return W.stepAt(SESSION_START); }
 
-function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts) {
+function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts, g = YARD_GEOM) {
     const base = W.stepAt(SESSION_START);
     void activeState;   // 現役不進院子（見下），保留參數是為了呼叫端不用改
     const list = [];
@@ -656,8 +682,8 @@ function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts) 
     // ⚠️ 索引取自**完整名單**而不是過濾後的 list：拿在手上的那一隻會被 continue
     //    跳過，用 list.length 當索引的話，牠一被抓起來其他隻的區域就整組位移。
     const n = (ranch.pets || []).length;
-    const zones = coreForLayouts ? yardZonesFor(coreForLayouts, n, layout)
-                                 : W.yardZones(n, undefined, undefined, layout);
+    const zones = coreForLayouts ? yardZonesFor(coreForLayouts, n, layout, g)
+                                 : W.yardZones(n, g.field, undefined, layout);
     let idx = -1;
     for (const p of (ranch.pets || [])) {
         idx++;
@@ -686,9 +712,9 @@ function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts) 
             react:    r ? r.frame : null,
             jump:     r ? r.jump || 0 : 0,
             zoneIdx:  idx,
-            field:    zones[idx] || W.YARD_FIELD,
+            field:    zones[idx] || g.field,
             // 放下的落點在區域外時，先走回這裡再接回正常的鏈（見 plaza-walk 的 returnLeg）
-            anchor:   W.zoneAnchor(zones[idx] || W.YARD_FIELD),
+            anchor:   W.zoneAnchor(zones[idx] || g.field),
         });
     }
     // 現役**不**放進院子。草案原本要放（想說「不然院子會像少了一隻」），但那是搞混了
@@ -730,7 +756,8 @@ function yardSpriteFor(core, ranch, id, step, opts = {}) {
     if (!cid) return null;
     // 一定要用**這一隻自己的區域**算 —— 用整場算的話，抓起來那一下回報的位置
     // 會跟畫面上的不一樣，游標一接手就跳一格。
-    const zone = yardZonesFor(core, pets.length, opts.layout)[idx] || W.YARD_FIELD;
+    const g = opts.geom || YARD_GEOM;
+    const zone = yardZonesFor(core, pets.length, opts.layout, g)[idx] || g.field;
     const p = W.posAt({ seed: W.hash2(hashStr(id), 0),
                         joinStep: opts.joinStep != null ? opts.joinStep : W.stepAt(SESSION_START),
                         origin: opts.origin || null,
@@ -754,7 +781,9 @@ let _layoutCache = { mtime: 0, data: null };
 
 function loadYardLayouts(core) {
     try {
-        const p = path.join(core.ASSETS_DIR, YARD_LAYOUTS_FILE);
+        // AGUMON_YARD_LAYOUTS：測試用，指到別的檔（或不存在的檔 = 只用內建）——
+        // 不然隔離的 daemon 還是會讀到使用者在編輯器存的切法，結果跟著那台機器變。
+        const p = process.env.AGUMON_YARD_LAYOUTS || path.join(core.ASSETS_DIR, YARD_LAYOUTS_FILE);
         const st = fs.statSync(p);
         if (_layoutCache.data && _layoutCache.mtime === st.mtimeMs) return _layoutCache.data;
         const j = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -781,7 +810,10 @@ function yardLayoutsFor(core, n) {
 // ⚠️ 指名的切法查不到（網址參數打錯、或那個切法剛被刪）要退回**目前生效的**預設，
 //    不是內建的預設 —— 後者的症狀是「刪掉自訂切法之後畫面靜靜跳回出廠值」，
 //    而且 dev 下拉顯示的名字跟實際走的切法對不起來。
-function yardZonesFor(core, n, layout) {
+function yardZonesFor(core, n, layout, g = YARD_GEOM) {
+    // 5～8 隻的切法是兩頁寬場地的比例／座標，一頁的場地裝不下 —— 沒解鎖卻超過 4 隻的舊存檔、
+    // 圍爐（大家坐同一桌、不分頁）走一頁的場地，照分區之前整場共用（座位另外排）。
+    if (g.field !== W.yardFieldFor(n)) return new Array(Math.max(1, n || 1)).fill(g.field);
     const over = loadYardLayouts(core);
     const custom = (over.layouts || {})[n] || {};
     const builtin = W.YARD_LAYOUTS[n] || {};
@@ -789,7 +821,7 @@ function yardZonesFor(core, n, layout) {
     const name = (known(layout) && layout)
               || (over.default || {})[n]
               || W.YARD_LAYOUT_DEFAULT[n] || null;
-    return W.yardZones(n, W.YARD_FIELD, W.ZONE_MARGIN, custom[name] || name);
+    return W.yardZones(n, g.field, W.ZONE_MARGIN, custom[name] || name);
 }
 
 /**
@@ -797,14 +829,66 @@ function yardZonesFor(core, n, layout) {
  * 那看起來像壞掉）。
  * NPC 一律關掉：院子是你自己的地方，不該有野生 vpet 亂入。
  */
+// opts.wide：兩頁寬（第二頁解鎖、5～8 隻）→ opts.page 決定裁哪一頁。回傳的位置都是那一頁的座標。
 function composeYard(core, ranch, activeState, step, opts = {}) {
-    const occ = yardOccupants(core, ranch, activeState, opts.react, opts.layout, core);
+    const g = opts.wide ? YARD_GEOM_WIDE : YARD_GEOM;
+    const occ = yardOccupants(core, ranch, activeState, opts.react, opts.layout, core, g);
     if (!occ.length) return null;
-    return composePlaza(core, occ, step, { ...opts, npc: false, field: W.YARD_FIELD,
-                                           render: { w: YARD_RENDER.w, h: YARD_RENDER.h, toDraw: yardToDraw } });
+    return composePlaza(core, occ, step, { ...opts, npc: false, field: g.field,
+                                           render: { w: g.render.w, h: g.render.h, toDraw: g.toDraw },
+                                           crop: opts.wide ? { x0: yardPageX(opts.page), w: YARD_RENDER.w } : null });
+}
+
+// ── 營地第二頁（docs/yard-page2-spec.md）──────────────────────────────
+// 解鎖且超過 4 隻 → 兩頁合成一個兩倍寬的場地一起走（跨頁走動，2026-10-16）。
+// 「頁」只是鏡頭：一次看半張，換頁 = 鏡頭往旁邊滑（前端拿兩頁的畫面並排平移）。
+// 誰在第幾頁不是固定的 —— 看牠現在走到哪。圍爐大家坐同一桌，不分頁。
+const YARD_PAGE_SIZE = 4;
+
+/** 這個營地要不要兩頁寬：解鎖、超過 4 隻、不是圍爐。 */
+function yardWide(ranch, opts = {}) {
+    const n = ((ranch && ranch.pets) || []).length;
+    return !opts.feast && !!(ranch && ranch.page2At) && n > YARD_PAGE_SIZE && W.yardFieldFor(n) === W.YARD_FIELD_WIDE;
+}
+/** 有幾頁（1 或 2）。 */
+function yardPageCount(ranch, opts = {}) { return yardWide(ranch, opts) ? 2 : 1; }
+/** 第 page 頁在兩頁寬畫布上的左緣（細格）。 */
+function yardPageX(page) { return Math.max(0, Math.min(1, page | 0)) * YARD_RENDER.w; }
+/** 兩頁寬畫布上的 x（身體左緣）→ 身體中心落在第幾頁。 */
+function yardPageAt(drawX) { return drawX + W.SPRITE / 2 >= YARD_RENDER.w ? 1 : 0; }
+
+// 第二階段的對峙（規格「表演」）：我方站左側面向右、IDLE_1 ↔ ANGRY 兩拍一輪（同廣場對戰的 BATTLE）；
+// 敵人站右側面向左、待機兩幀交替。2026-10-16：原本釘在 ANGRY 太死板。
+// 不走路 —— 位置寫死，畫在營地的細格上（跟 composeYard 同一張畫布大小）。
+// enemyDx：敵人往右挪多少細格（輸了退場用，挪出畫面就不畫）。
+const STANDOFF_SLOTS = [{ x: 18, y: 8 }, { x: 2, y: 16 }, { x: 18, y: 26 }, { x: 2, y: 34 }];
+function composeYardStandoff(core, pets, enemyId, step, opts = {}) {
+    const bw = YARD_RENDER.w, bh = YARD_RENDER.h, S = W.SPRITE;
+    const dots = [], owner = [];
+    for (let y = 0; y < bh; y++) { dots.push(new Array(bw).fill(null)); owner.push(new Array(bw).fill(-1)); }
+    const placed = pets.slice(0, STANDOFF_SLOTS.length).map((p, i) => ({
+        id: p.id, char: p.state && p.state.characterId, x: STANDOFF_SLOTS[i].x, y: STANDOFF_SLOTS[i].y,
+        facing: 'right', react: 'BATTLE',
+    }));
+    const ex = bw - S - 4 + (opts.enemyDx || 0), ey = Math.round((bh - S) / 2);
+    const all = ex < bw ? [...placed, { id: null, char: enemyId, x: ex, y: ey, facing: 'left', react: null }] : placed;
+    all.sort((a, b) => a.y - b.y);
+    all.forEach((p, i) => {
+        const sp = p.char ? spriteDots(core, p.char, step, p.facing, p.react) : null;
+        if (sp) blit(dots, sp, p.x, p.y, owner, i);
+    });
+    const cells = dotsToCells(dots, bw);
+    return {
+        lines: renderWithLabels(cells, new Map()),
+        // 前端的命中判定（選一隻出戰）：畫出來的位置，跟 /yard 的 pets 同一套座標
+        pets: placed.map(p => ({ id: p.id, char: p.char, x: p.x, y: p.y, size: S })),
+        enemy: ex < bw ? { x: ex, y: ey, size: S } : null,
+    };
 }
 
 module.exports = {
+    YARD_PAGE_SIZE, yardWide, yardPageCount, yardPageX, yardPageAt, composeYardStandoff,
+    YARD_RENDER_WIDE, YARD_GEOM, YARD_GEOM_WIDE,
     PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD, SPRITE: W.SPRITE,
     cellsToDots, dotsToCells, blit,
     loadArt, spriteDots,

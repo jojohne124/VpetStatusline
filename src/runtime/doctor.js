@@ -72,6 +72,37 @@ function scanUnix() {
     return res;
 }
 
+// 跑著 script（檔名）的 node 行程 → [pid]；掃描失敗回 null。
+// 給 vpet bg / vpet album 收掉沒有 /__quit 的舊版頁面 server 用。
+// 要求檔名前面是路徑分隔字元（…\bgedit\bg_editor_server.js）：只是命令列「提到」這個字串的
+// 行程不算（實際踩到：測試用 node -e 呼叫時，掃到的是自己）。自己也一律排除。
+function scanNodesByScript(script) {
+    if (!/^[\w.-]+$/.test(script)) return null;   // 會拼進 PowerShell / 正規式，只收檔名
+    const esc = script.replace(/\./g, '\\.');
+    let pids;
+    if (process.platform === 'win32') {
+        const ps = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+                 + "Where-Object { $_.CommandLine -match '[\\\\/]" + esc + "\"?(\\s|$)' } | "
+                 + "ForEach-Object { $_.ProcessId }";
+        try {
+            const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
+                { encoding: 'utf8', timeout: 30000, windowsHide: true });
+            pids = out.split(/\r?\n/).map(s => +s.trim()).filter(Boolean);
+        } catch (e) { return null; }
+    } else {
+        let out;
+        try { out = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: 15000 }); }
+        catch (e) { return null; }
+        const re = new RegExp('[\\\\/]' + esc + '(\\s|$)');
+        pids = [];
+        for (const line of out.split(/\r?\n/)) {
+            const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+            if (m && /\bnode\b/.test(m[2]) && re.test(m[2])) pids.push(+m[1]);
+        }
+    }
+    return pids.filter(p => p !== process.pid);
+}
+
 // 確認式收屍：送 SIGKILL 後回探，唯有拿到 ESRCH（確認死亡）才算成功。
 function killConfirmed(pid) {
     try { process.kill(pid, 'SIGKILL'); } catch (e) {}
@@ -134,7 +165,7 @@ function run({ fix = true } = {}) {
     return 0;
 }
 
-module.exports = { run, scanAgumonNodes, ORPHAN_AGE_SEC };
+module.exports = { run, scanAgumonNodes, scanNodesByScript, killConfirmed, ORPHAN_AGE_SEC };
 
 // 允許直接執行：node doctor.js [--check]
 if (require.main === module) {

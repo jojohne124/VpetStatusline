@@ -9,6 +9,11 @@ const STATE_DIR    = process.env.AGUMON_STATE_DIR || path.join(INSTALL_ROOT, 'st
 const ASSETS_DIR   = path.join(INSTALL_ROOT, 'assets');
 
 const HOOK_FILE   = path.join(STATE_DIR, 'hook.json');
+// ⛔ 狀態列的 vpet 暫停（2026-10-15）：重心放在 daemon 版（獨立視窗），之後再找機會移植到 mod。
+//    statusline 本身照常顯示狀態文字（模型、花費、context…），只是右側不畫桌寵、也不推進
+//    桌寵的狀態（成長、戰鬥、進化都交給 daemon）。程式先不刪，只擋；恢復 → 改成 false。
+//    擋的地方：statusline-agumon-color.js 的入口、statusline-cheat.js 的 vpet hide / show。
+const STATUSLINE_PET_PAUSED = true;
 const ANCHOR_GAP  = 4;
 // 一拍多長 —— 整個 vpet 的**節奏參數**。所有表演（走路、戰鬥 19 拍、進化 12 拍、卡片、
 // 空降、表情…）都用「拍」定義，改這個數字就是整體加快或放慢，各表演的相對節奏不變。
@@ -411,7 +416,10 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
     //    於是「戰鬥動畫播放中按收進營地」會變成：營地沒收到，但配對的抽新角色照做，
     //    現役被蓋掉且沒存進去＝永久遺失。戰鬥有 19 拍，那個窗口一點都不窄。
     //    改成保留指令，動畫播完的下一拍自然就成功了。
-    if (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0) {
+    // 放生例外：只從營地刪一筆，完全不碰現役（st），沒有理由等前線演完。
+    //    等的話，前線一直在自動戰鬥時，營地裡按了放生卻遲遲不見（2026-10-16 實測回報）。
+    if (op.op !== 'release'
+        && (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0)) {
         return { op: op.op, ok: false, retry: true, reason: 'busy' };
     }
 
@@ -438,7 +446,7 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
 
     if (op.op === 'keep') {
         // 滿了就不收（CLI 已擋，這是第二道 —— 兩次檢查之間可能又被別的視窗收了一隻）
-        if (ranch.pets.length >= ranchCap()) {
+        if (ranch.pets.length >= ranchCap(ranch)) {
             // 永久失敗 → 把配對的「抽新的」也一起作廢，否則下一拍時戳已過期、
             // keepFailed 不再成立，那隻新角色就會補上來把現役蓋掉。
             if (forceFile) clearForceCharacter(forceFile);
@@ -771,6 +779,24 @@ const ALBUM_FILE = path.join(STATE_DIR, 'album.json');
 const RANCH_FILE = path.join(STATE_DIR, 'ranch.json');
 const RANCH_CAP  = 4;
 
+// ── 營地第二頁（docs/yard-page2-spec.md）────────────────────────────
+// 連續擊倒 Diablomon（自動戰鬥）與 Armagemon（營地事件）→ 上限 +4、營地多一隻 Keramon、
+// 重抽池開放 Keramon。存檔只記「解鎖了沒」（ranch.page2At）與事件進度（page2Quest），
+// 上限本身照 ranch-spec 的規則不吃存檔。
+//
+// 開關：PAGE2_ENABLED = false → 自然觸發全部關閉（打贏 Diablomon 不進第二階段）。
+//    2026-10-16 打開實測（Keramon 線已實裝）。daemon 的 dev 指令不看開關，照樣能強制
+//    進第二階段／解鎖／重置；release 版擋掉 dev 指令，玩家碰不到。
+const PAGE2_ENABLED   = true;
+const PAGE2_CAP_BONUS = 4;
+const PAGE2_BOSS      = 'diablomon';   // 第一階段：自動戰鬥遇到並打贏
+const PAGE2_FINAL     = 'armagemon';   // 第二階段：營地裡挑一隻跟牠打
+const PAGE2_REWARD    = 'keramon';     // 打贏後加進營地、開放重抽
+// 營地滿了在等解鎖時，Diablomon 主動找上門：每場先擲這個機率，中了直接是牠（2026-10-16 定 10%）。
+// 平均抽的話 Ultimate 池 58 隻、五六十場才碰一次，滿 4 隻的人等太久。
+const PAGE2_BOSS_CHANCE = 0.1;
+const PAGE2_BOSS_SALT   = 7717;        // 跟勝負 seed、SU 擲骰的 salt 錯開，免得三個擲骰綁在一起
+
 // 收進營地時**丟掉**的欄位。其餘一律保存。
 //
 // ⚠️ 這裡用黑名單而不是白名單，是因為兩種漏掉的後果差很多：
@@ -840,8 +866,44 @@ function loadRanch(file) {
     return { v: 1, pets: [] };
 }
 
-/** 目前的收納上限。一律以常數為準，不看存檔。 */
-function ranchCap() { return RANCH_CAP; }
+/** 目前的收納上限：常數為準，只看「第二頁解鎖了沒」（不吃存檔裡的數字）。 */
+function ranchCap(ranch) { return RANCH_CAP + (page2Unlocked(ranch) ? PAGE2_CAP_BONUS : 0); }
+function page2Unlocked(ranch) { return !!(ranch && ranch.page2At); }
+
+// 第一階段：打贏 Diablomon 那一刻營地剛好滿 4 隻、還沒解鎖、沒有進行中的事件 → 記下待觸發。
+// seen = 前線的「牠逃到營地了」提示看過沒（只跳一次）。回傳有沒有記。
+// opts.enabled：測試用（開關還關著時也要能驗觸發條件）
+// 第一階段等著觸發：營地滿 4 隻、還沒解鎖、也沒有打贏過在等第二階段的。遇敵加成和記錄共用這一條。
+function page2BossWanted(r) {
+    return !!r && !page2Unlocked(r) && !r.page2Quest && (r.pets || []).length >= RANCH_CAP;
+}
+function page2OnBossWin(file, opts = {}) {
+    if (!(opts.enabled != null ? opts.enabled : PAGE2_ENABLED)) return false;
+    const r = loadRanch(file);
+    if (!page2BossWanted(r)) return false;
+    r.page2Quest = { at: Date.now(), seen: false };
+    saveRanch(r, file);
+    return true;
+}
+
+// 第二階段打贏：解鎖 + 營地補一隻全新的 Keramon（下一個空格）。只改傳進來的 ranch，存檔由呼叫端做。
+function page2Grant(ranch, now = Date.now()) {
+    ranch.page2At = now;
+    delete ranch.page2Quest;
+    const id = newRanchId(ranch);
+    ranch.pets.push({ id, keptAt: now,
+                      state: snapshotPet({ characterId: PAGE2_REWARD, birthAt: now, lastEvolveAt: now }) });
+    ranch.page2RewardId = id;   // dev 重置用：只認這一隻，玩家自己養的 Keramon 不會被收走
+    return id;
+}
+
+// 重抽池：Keramon 是解鎖第二頁的獎勵，解鎖前抽不到（就算路線編輯器把牠勾成 starter）；
+// 解鎖後才放進池子（沒勾成 starter 也補上，只放一份不重複加權）。素材沒裝就不給，免得抽到畫不出來的。
+function page2StarterPool(list, ranch) {
+    const out = (list || []).filter(x => x !== PAGE2_REWARD);
+    if (page2Unlocked(ranch) && characterExists(PAGE2_REWARD)) out.push(PAGE2_REWARD);
+    return out;
+}
 function saveRanch(r, file) {
     return atomicWrite(file || RANCH_FILE, JSON.stringify(r));
 }
@@ -991,6 +1053,9 @@ function evalCondition(cond, ns, st, input, nowSec) {
         const total = st.battleTotalCount || 0;
         const wins  = st.battleWinCount  || 0;
         if (total < (cond.minBattles ?? 0)) return false;
+        // minWins：本階段勝場數門檻（Diablomon → Armagemon「吞噬很多對手」）。跟勝率是兩回事：
+        // 勝率看比例，這個看累積 —— 輸幾場不會扣，只是要贏夠多場。
+        if (wins < (cond.minWins ?? 0)) return false;
         // ⚠️ total === 0 要單獨處理：0/0 是 NaN，而 NaN >= 任何數都是 false，
         //    會讓「pct:0 + minBattles:0」這個本該是 no-op 的寫法變成永遠不過的硬門檻
         //    （彩蛋線常這樣填佔位，靠別的軸把關）。0 場時勝率視為 0：pct<=0 才算通過。
@@ -1310,7 +1375,8 @@ const SU_CHANCE         = 0.3;
 const SU_MIN_BATTLES    = 5;
 const SU_SEED_SALT      = 9973;   // 與 anti-stick 的 seed+1 明顯區隔，避免兩個擲骰相關
 
-function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
+// opts.ranch：給了就看營地第二頁要不要讓 Diablomon 找上門（startBattle 帶 loadRanch()）；opts.enabled 覆寫開關（測試用）。
+function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats, opts = {}) {
     // 同階隨機（排除自己）；給 seed → 決定性挑選（多視窗一致）。
     // anti-stick：若抽到的 == 上一場敵人，用 seed+1 變體 re-roll；仍同就順移下一個 candidate。
     //   連續同敵機率從 1/N 降到 ~1/N²，避免短樣本下「一直重複」的觀感。
@@ -1321,6 +1387,10 @@ function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
         // 我方若已是 SU，「同階」幾乎抓不到人 → 基礎池退回 Ultimate（規格：其餘為 Ultimate）
         const baseStage = (myStage === SU_STAGE) ? 'Ultimate' : myStage;
         let candidates = roster.filter(n => n !== myId && getCharacterStage(n) === baseStage);
+        // 營地第二頁的大魔王：Keramon 線實裝後已在 roster，上面同階抽就抽得到，這裡不會再補；
+        // 只有 roster 拿掉牠時才靠開關補進 Ultimate 池。SU 退回 Ultimate 池，所以兩階都遇得到。
+        if (PAGE2_ENABLED && baseStage === 'Ultimate' && myId !== PAGE2_BOSS
+            && characterExists(PAGE2_BOSS) && !candidates.includes(PAGE2_BOSS)) candidates.push(PAGE2_BOSS);
 
         // ── Super-Ultimate 強敵抽選 ──
         if (myStage === 'Ultimate' || myStage === SU_STAGE) {
@@ -1333,6 +1403,15 @@ function chooseBattleEnemy(myId, seed, lastEnemyId, battleStats) {
                 const roll = (seed != null) ? seedRand01(seed + SU_SEED_SALT) : Math.random();
                 if (suPool.length > 0 && roll < SU_CHANCE) candidates = suPool;
             }
+        }
+
+        // ── 營地第二頁：滿 4 隻在等解鎖 → Diablomon 找上門 ──
+        // 已經改抽 SU 強敵的那場不搶；沒中就照下面平均抽。
+        const p2on = opts.enabled != null ? opts.enabled : PAGE2_ENABLED;
+        if (p2on && baseStage === 'Ultimate' && myId !== PAGE2_BOSS && candidates.includes(PAGE2_BOSS)
+            && page2BossWanted(opts.ranch)) {
+            const roll = (seed != null) ? seedRand01(seed + PAGE2_BOSS_SALT) : Math.random();
+            if (roll < PAGE2_BOSS_CHANCE) return PAGE2_BOSS;
         }
 
         if (candidates.length === 0) return 'godzilla_1999';
@@ -1510,7 +1589,8 @@ function startBattle(st, step, myId, seed) {
     st.battleStartStep    = step;
     // 帶入戰績 → 讓 chooseBattleEnemy 判斷是否抽 Super-Ultimate 強敵（勝率 gate）
     st.battleEnemy        = chooseBattleEnemy(myId, seed, st.lastBattleEnemy,
-                                              { total: st.battleTotalCount || 0, wins: st.battleWinCount || 0 });
+                                              { total: st.battleTotalCount || 0, wins: st.battleWinCount || 0 },
+                                              { ranch: PAGE2_ENABLED ? loadRanch() : null });
     if (seed != null) {
         const winProb = computeWinProb(myId, st, st.battleEnemy);
         st.battleWin  = seedRand01(seed) < winProb;
@@ -1740,6 +1820,8 @@ function decideAgumon(i, st, now, charDef, opts = {}) {
                     // 分 tag 戰績（給 tag_battles 進化條件用）：這場對手身上每個 tag 各記一筆。
                     // 與上面同一個去重 guard 內 → 多視窗不會重複加計。
                     // 對手本機沒安裝（黑影 fallback）讀不到 tag → 該場不計入任何 tag。
+                    // 營地第二頁第一階段（打贏 Diablomon）。在去重 guard 裡 → 同一場不會記兩次
+                    if (st.battleWin && st.battleEnemy === PAGE2_BOSS) page2OnBossWin();
                     const etags = getCharacterTags(st.battleEnemy);
                     if (etags.length) {
                         if (!st.tagStats || typeof st.tagStats !== 'object') st.tagStats = {};
@@ -2521,6 +2603,7 @@ function composeDropScene({ charRows, dustRows, elapsed }) {
 }
 
 module.exports = {
+    STATUSLINE_PET_PAUSED,
     STEP_MS,   // 節奏參數：statusline 與 daemon 都讀這一份
     INSTALL_ROOT, STATE_DIR, ASSETS_DIR,
     IDLE_MS, isIdleSleeping,
@@ -2547,6 +2630,8 @@ module.exports = {
     bumpStat, getStat, resetStageStats, STAT_COOLDOWN_MS,
     loadAlbum, recordAlbumIfChanged, ALBUM_FILE,
     RANCH_FILE, RANCH_CAP, ranchCap, loadRanch, saveRanch, newRanchId,
+    PAGE2_ENABLED, PAGE2_CAP_BONUS, PAGE2_BOSS, PAGE2_FINAL, PAGE2_REWARD, PAGE2_BOSS_CHANCE, page2BossWanted,
+    page2Unlocked, page2OnBossWin, page2Grant, page2StarterPool,
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
     JOGRESS_FILE, loadJogress, jogressTarget, jogressCandidates, isJogressStep, settleJogress,

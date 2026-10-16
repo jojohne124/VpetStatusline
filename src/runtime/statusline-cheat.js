@@ -12,6 +12,11 @@ const path = require('path');
 
 const INSTALL_ROOT = __dirname;
 const IS_RELEASE   = fs.existsSync(path.join(INSTALL_ROOT, 'RELEASE'));   // release 版：隱藏/停用開發指令
+// 狀態列的 vpet 暫停中（agumon-core 的 STATUSLINE_PET_PAUSED）：狀態列本來就不畫桌寵，
+// hide / show 沒有對象 → 擋掉、說明裡也不列。程式留著，恢復時直接能用。
+// 用 try：讀不到 core 就當沒暫停（不能因為這個讓整支 vpet 指令起不來）。
+let STATUSLINE_OFF = false;
+try { STATUSLINE_OFF = !!require('./agumon-core.js').STATUSLINE_PET_PAUSED; } catch (e) {}
 const ROSTER_FILE  = path.join(INSTALL_ROOT, 'assets', 'roster.json');
 // state 目錄吃 AGUMON_STATE_DIR（與 core 同一條規則）。daemon 開子行程跑 CLI 時會把環境變數
 // 帶下來，所以測試用暫存目錄起的 daemon，CLI 也只會碰暫存目錄。
@@ -91,7 +96,7 @@ function printHelp() {
     // 指令本身還在（開發者用），列在下面的開發區。
     console.log('  vpet code [名牌]            查看 / 設定名牌（廣場上顯示的名字）');
     console.log('  vpet doctor [--check]       檢查並清除卡死的 node 孤兒（--check 只診斷不清）');
-    console.log('  vpet hide / show            隱藏 / 顯示狀態列的 pet（只留狀態文字；pet 可到獨立介面看）');
+    if (!STATUSLINE_OFF) console.log('  vpet hide / show            隱藏 / 顯示狀態列的 pet（只留狀態文字；pet 可到獨立介面看）');
     if (dev) {
         console.log('  ── 開發指令（release 版不提供）──');
         console.log('  vpet <index|name>           切換到任意角色');
@@ -159,7 +164,12 @@ if ((PLAZA_BLOCKED.has(args[0]) || isSwitch) && inPlaza()
 }
 
 // 玩家用的獨立頁面（圖鑑 / 底圖編輯器）：起一個 detached server 再開瀏覽器。
-// server 以 detached 方式起，指令本身立刻結束（不佔住終端機）；已經在跑就直接開瀏覽器。
+// server 以 detached 方式起，指令本身立刻結束（不佔住終端機）。
+// 已經在跑的**一律先收掉再重起**，不能直接沿用：server 會一直跑當初載入的舊程式，
+// 自動更新換了檔案也不會變（回報過：修好「底圖編輯器只給現在那隻」之後，
+// 同事那邊還是看得到全角色 —— 開著的是更新前起的那個行程）。
+//   新版 server：POST /__quit 自己收。
+//   舊版 server（沒有 /__quit）：照命令列找出那個 node 砍掉（doctor.scanNodesByScript）。
 // 兩者流程一模一樣，只差目錄與埠號 → 抽成一張表，日後再加頁面只要多一行。
 // 放在 release gate 之前 → 這些是玩家功能，release 版一樣要能用。
 const PLAYER_PAGES = {
@@ -182,16 +192,40 @@ if (PLAYER_PAGES[args[0]]) {
     const open = () => {
         const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
                   : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
-        try { spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' }).unref(); } catch (e) {}
+        // spawn 失敗（找不到 cmd/open）是非同步丟 'error' 事件，try 接不到 —— 沒掛 handler 會整支當掉
+        try { const c = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
+              c.on('error', () => console.log(`開不了瀏覽器，請自己打開 ${url}`)); c.unref(); } catch (e) {}
     };
-    // 先探一下：已經起來就別重複啟動（重複會 EADDRINUSE，然後靜默失敗）
-    require('http').get(url + cfg.probe, r => { r.resume(); console.log(`${cfg.label}已在執行 → ${url}`); open(); })
-        .on('error', () => {
-            const ch = spawn(process.execPath, [server], { detached: true, stdio: 'ignore' });
-            ch.unref();
-            console.log(`${cfg.label}已啟動 → ${url}`);
-            setTimeout(open, 800);   // 等 server listen 再開瀏覽器
+    const http = require('http');
+    const start = () => {
+        const ch = spawn(process.execPath, [server], { detached: true, stdio: 'ignore' });
+        ch.unref();
+        console.log(`${cfg.label}已啟動 → ${url}`);
+        setTimeout(open, 800);   // 等 server listen 再開瀏覽器
+    };
+    // 埠真的放掉了才起新的（不然新的 EADDRINUSE 靜默失敗，開到的是一片空白）
+    const whenFree = (then, tries = 30) => http.get(url + cfg.probe, r => {
+        r.resume();
+        if (tries <= 0) { console.log(`${cfg.label}的舊行程收不掉，先開舊的 → ${url}`); return open(); }
+        setTimeout(() => whenFree(then, tries - 1), 100);
+    }).on('error', then);
+    const killOld = () => {
+        const doctor = require('./doctor');
+        const pids = doctor.scanNodesByScript(cfg.file);
+        if (!pids || !pids.length) { console.log(`${cfg.label}找不到舊行程，先開舊的 → ${url}`); return open(); }
+        for (const pid of pids) doctor.killConfirmed(pid);
+        whenFree(start);
+    };
+    http.get(url + cfg.probe, r => {
+        r.resume();
+        const q = http.request(url + '/__quit', { method: 'POST' }, r2 => {
+            let b = ''; r2.on('data', c => b += c);
+            r2.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {}
+                                 if (j && j.ok) whenFree(start); else killOld(); });
         });
+        q.on('error', killOld);
+        q.end();
+    }).on('error', start);
     return;
 }
 
@@ -597,6 +631,10 @@ if (args[0] === '--freeze' || args[0] === '--unfreeze') {
 // ── --hide / --show：隱藏 / 顯示 statusline 的 pet（狀態列照常顯示）──────────
 // 給「只想用 statusline 狀態列」或「只在獨立介面看 pet」的人。非作弊，release 也可用。
 if (args[0] === '--hide' || args[0] === '--show') {
+    if (STATUSLINE_OFF) {
+        console.log('狀態列的桌寵暫停中，沒有東西可以隱藏／顯示；桌寵在獨立視窗（vpet-standalone）看。');
+        process.exit(1);
+    }
     const force = readForce();
     if (args[0] === '--hide') {
         force.petHidden = true;
@@ -644,7 +682,7 @@ if (args[0] === '--evolve') {
 const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release', '--jogress'];
 if (RANCH_CMDS.includes(args[0])) {
     const ranch = core.loadRanch();
-    const cap   = core.ranchCap();
+    const cap   = core.ranchCap(ranch);
     const pets  = ranch.pets;
 
     const label = (p) => {
@@ -709,8 +747,8 @@ if (RANCH_CMDS.includes(args[0])) {
         }
         rerollGate();
         // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
-        const pool = starters.filter(x => roster.includes(x));
-        const next = weightedPickStarter(pool.length ? pool : starters);
+        const pool = core.page2StarterPool(starters.filter(x => roster.includes(x)), ranch);
+        const next = weightedPickStarter(pool.length ? pool : core.page2StarterPool(starters, ranch));
         const force = readForce();
         force.ranchTriggerTs = Date.now();
         force.ranchOp        = { op: 'keep' };
@@ -831,8 +869,10 @@ let target;
 if (arg === '--reset') {
     rerollGate();
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
-    const pool = starters.filter(s => roster.includes(s));
-    target = weightedPickStarter(pool.length ? pool : starters);
+    // Keramon 是營地第二頁的解鎖獎勵：解鎖前抽不到、解鎖後才開放（core.page2StarterPool）
+    const ranchNow = core.loadRanch();
+    const pool = core.page2StarterPool(starters.filter(s => roster.includes(s)), ranchNow);
+    target = weightedPickStarter(pool.length ? pool : core.page2StarterPool(starters, ranchNow));
     console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);

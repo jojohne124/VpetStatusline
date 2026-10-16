@@ -357,6 +357,10 @@ console.log('— 表演中 —');
     core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'swap', id: 'zzz' } }, RANCH);
     ok(st.characterId === 'greymon', '戰鬥表演中還是換了角色');
     ok(core.loadRanch(RANCH).pets.length === 1, '戰鬥表演中還是動了營地');
+    // 放生例外：不碰現役，前線在打也要馬上生效（不然營地按了放生，要等前線打完才消失）
+    const r = core.applyRanchOp(st, { ranchTriggerTs: Date.now() + 1, ranchOp: { op: 'release', id: 'zzz' } }, RANCH);
+    ok(r && r.ok === true && core.loadRanch(RANCH).pets.length === 0, '前線戰鬥中放生被延後了（營地裡的那隻遲遲不消失）');
+    ok(st.characterId === 'greymon' && st.battleStartStep === 100, '放生動到了正在戰鬥的現役');
 }
 
 // ── 7. 壞掉的 ranch.json 不能讓整個流程炸掉 ────────────────────────────
@@ -583,12 +587,12 @@ console.log('— 特殊進化（營地時效）—');
 
 console.log('— 營地第二頁（核心）—');
 {
-    // 還沒實裝：開關關著，自然觸發一律不發生（dev 指令另外測，見 test-yard-page2）
-    ok(core.PAGE2_ENABLED === false, '營地第二頁還沒實裝，PAGE2_ENABLED 應該關著');
+    // 開關（2026-10-16 打開實測）：關著時自然觸發一律不發生（dev 指令另外測，見 test-yard-page2）
+    ok(typeof core.PAGE2_ENABLED === 'boolean', 'PAGE2_ENABLED 沒有匯出'); 
     const four = () => ({ v: 1, pets: [1, 2, 3, 4].map(i => ({ id: 'q' + i, keptAt: i, state: { characterId: 'agumon' } })) });
     ok(core.ranchCap() === 4 && core.ranchCap(four()) === 4, '未解鎖的上限應該是 4');
     fs.writeFileSync(RANCH, JSON.stringify(four()));
-    ok(core.page2OnBossWin(RANCH) === false && !core.loadRanch(RANCH).page2Quest, '開關關著，打贏 Diablomon 卻進了第二階段');
+    ok(core.page2OnBossWin(RANCH, { enabled: false }) === false && !core.loadRanch(RANCH).page2Quest, '開關關著，打贏 Diablomon 卻進了第二階段');
     // 觸發條件（開關打開時）：滿 4 隻、沒解鎖、沒有進行中的事件
     ok(core.page2OnBossWin(RANCH, { enabled: true }) === true, '滿 4 隻打贏 Diablomon 應該進第二階段');
     const q = core.loadRanch(RANCH).page2Quest;
@@ -601,6 +605,7 @@ console.log('— 營地第二頁（核心）—');
     const kid = core.page2Grant(r, 123);
     ok(r.page2At === 123 && core.ranchCap(r) === 8, '解鎖後上限應該是 8');
     ok(r.pets.length === 5 && r.pets[4].id === kid && r.pets[4].state.characterId === 'keramon', '解鎖後營地第 5 格要是一隻新的 Keramon');
+    ok(r.page2RewardId === kid, '沒記下送的是哪一隻（dev 重置收不回來）');
     ok(!r.page2Quest, '解鎖後事件進度沒清掉');
     fs.writeFileSync(RANCH, JSON.stringify(r));
     ok(core.page2OnBossWin(RANCH, { enabled: true }) === false, '已經解鎖了還會再進第二階段');
@@ -608,16 +613,53 @@ console.log('— 營地第二頁（核心）—');
     const st = { characterId: 'greymon' };
     const k = core.applyRanchOp(st, { ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' } }, RANCH);
     ok(k && k.ok && core.loadRanch(RANCH).pets.length === 6, '解鎖後 5 隻卻收不進營地（上限沒吃解鎖）');
-    // 重抽池：解鎖才有 Keramon
-    ok(core.page2StarterExtras(four()).length === 0, '沒解鎖，重抽池卻有 Keramon');
-    if (core.characterExists('keramon')) ok(core.page2StarterExtras(r).includes('keramon'), '解鎖了，重抽池沒有 Keramon');
-    // 開關關著 → Diablomon 不會出現在對手池（Ultimate 打很多場都遇不到）
+    // 重抽池：解鎖前抽不到 Keramon（就算被勾成 starter），解鎖後才有、而且只放一份
+    const lst = ['agumon', 'keramon', 'gabumon'];
+    ok(!core.page2StarterPool(lst, four()).includes('keramon'), '沒解鎖，重抽池卻有 Keramon（starters 勾了牠就漏過去）');
+    ok(core.page2StarterPool(lst, four()).join() === 'agumon,gabumon', '擋 Keramon 時把別的 starter 也弄掉了');
+    if (core.characterExists('keramon')) {
+        ok(core.page2StarterPool(['agumon'], r).includes('keramon'), '解鎖了，重抽池沒有 Keramon');
+        ok(core.page2StarterPool(lst, r).filter(x => x === 'keramon').length === 1, '解鎖後 Keramon 在池子裡重複（機率被加倍）');
+    }
+    // Diablomon 在 roster（Keramon 線實裝）→ 本來就是一般 Ultimate 對手，跟開關無關；
+    // 不在 roster 時才靠開關補進池子，開關關著就遇不到。開關只擋「打贏記成第二階段」（上面測了）。
     let met = false;
     for (let s = 1; s <= 400 && !met; s++) if (core.chooseBattleEnemy('wargreymon', s * 7919, null, { total: 0, wins: 0 }) === 'diablomon') met = true;
-    ok(!met, '開關關著，Ultimate 卻遇到 Diablomon');
-    // 重抽有兩條路（vpet reset、收進營地後抽新的），兩條都要把解鎖開放的角色加進池子
+    const inRoster = core.characterExists('diablomon') && JSON.parse(fs.readFileSync(path.join(path.dirname(INSTALLED), 'assets', 'roster.json'), 'utf8')).roster.includes('diablomon');
+    ok(met === inRoster, inRoster ? 'Diablomon 在 roster，Ultimate 卻遇不到' : '開關關著，Ultimate 卻遇到 Diablomon');
+    // 營地滿 4 隻在等解鎖 → Diablomon 找上門（每場先擲 10%）；其他時候照平均抽
+    if (inRoster) {
+        const N = 3000, rate = (ranch, opt = {}, me = 'wargreymon', bs = { total: 0, wins: 0 }) => {
+            let k = 0;
+            for (let s = 1; s <= N; s++) if (core.chooseBattleEnemy(me, s * 7919, null, bs, { ranch, enabled: true, ...opt }) === 'diablomon') k++;
+            return k / N;
+        };
+        ok(core.PAGE2_BOSS_CHANCE === 0.1, '找上門的機率不是 10%');
+        const full = four();
+        ok(core.page2BossWanted(full) && !core.page2BossWanted(r) && !core.page2BossWanted({ pets: [{}, {}, {}] }),
+           '「營地滿了在等解鎖」判斷錯（沒滿、或已解鎖也算）');
+        ok(!core.page2BossWanted({ ...full, page2Quest: { at: 1 } }), '已經打贏在等第二階段，還在加成 Diablomon');
+        const hi = rate(full), lo = rate(r), off = rate(full, { enabled: false }), none = rate(null);
+        ok(hi > 0.09 && hi < 0.15, `營地滿了遇到 Diablomon 的機率 ${(hi * 100).toFixed(1)}%，不是約 10%＋平均抽的那份`);
+        ok(lo < 0.04, `已解鎖還在加成 Diablomon（${(lo * 100).toFixed(1)}%）`);
+        ok(off < 0.04 && none < 0.04, '開關關著、或沒給營地時也在加成 Diablomon');
+        ok(rate(full, {}, 'agumon') === 0, 'Child 也被 Diablomon 找上門（只有 Ultimate 以上遇得到）');
+        // 改抽 SU 強敵的那場不搶：強敵條件成立時，SU 池抽到的場次照樣是 SU
+        const strong = { total: 100, wins: 95 }, SU = new Set(['agumon_kizuna', 'burninggodzilla', 'gabumon_kizuna', 'zephagamon_ace', 'armagemon']);
+        let suA = 0, suB = 0;
+        for (let s = 1; s <= N; s++) {
+            if (SU.has(core.chooseBattleEnemy('wargreymon', s * 7919, null, strong, { ranch: null, enabled: true }))) suA++;
+            if (SU.has(core.chooseBattleEnemy('wargreymon', s * 7919, null, strong, { ranch: full, enabled: true }))) suB++;
+        }
+        ok(suA > 0 && suA === suB, `Diablomon 找上門搶掉了 SU 強敵的場次（${suA} → ${suB}）`);
+        const coreSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'runtime', 'agumon-core.js'), 'utf8');
+        ok(/chooseBattleEnemy\(myId, seed, st\.lastBattleEnemy,[\s\S]{0,200}?ranch: PAGE2_ENABLED \? loadRanch\(\)/.test(coreSrc),
+           '自動戰鬥沒把營地帶給 chooseBattleEnemy（加成永遠不會發生）');
+    }
+    // 重抽有兩條路（vpet reset、收進營地後抽新的），兩條（含池子空掉的備案）都要過 page2StarterPool
     const cheatSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'runtime', 'statusline-cheat.js'), 'utf8');
-    ok((cheatSrc.match(/\.concat\(core\.page2StarterExtras\(/g) || []).length === 2, '重抽的兩條路沒有都加上 page2StarterExtras（解鎖了也抽不到 Keramon）');
+    ok((cheatSrc.match(/core\.page2StarterPool\(/g) || []).length === 4, '重抽的兩條路沒有都過 page2StarterPool（解鎖前抽得到、或解鎖後抽不到 Keramon）');
+    ok(!/weightedPickStarter\([^)]*:\s*starters\)/.test(cheatSrc), '重抽的備案直接用 starters（池子空掉時會抽到還沒解鎖的 Keramon）');
 }
 
 cleanup();

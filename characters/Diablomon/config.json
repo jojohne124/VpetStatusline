@@ -60,5 +60,21 @@
       ]
     }
   ],
-  "evolvesTo": []
+  "evolvesTo": [
+    {
+      "character": "armagemon",
+      "conditions": [
+        {
+          "type": "cost_threshold",
+          "usd": 0
+        },
+        {
+          "type": "win_rate",
+          "pct": 0,
+          "minBattles": 0,
+          "minWins": 77
+        }
+      ]
+    }
+  ]
 }

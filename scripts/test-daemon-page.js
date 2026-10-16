@@ -15,6 +15,7 @@
  * 用法：node scripts/test-daemon-page.js
  */
 const http = require('http');
+const fs   = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -45,12 +46,27 @@ const post = (port, p, body) => new Promise((res, rej) => {
     r.end(data);
 });
 
-// --isolated：只寫 daemon-state.json，不碰正式 color-state.json，也不寫 heartbeat
+// --isolated：只寫 daemon-state.json，不碰正式 color-state.json，也不寫 heartbeat。
+// 存檔另外複製一份到暫存目錄（AGUMON_STATE_DIR）：只靠 --isolated 的話還是**讀**使用者真的營地，
+// 營地第二頁事件進行到一半（對峙中沒有分區框）測試就紅；/yard 的結算也會寫回 ranch.json。
+// 營地留著真實的隻數跟角色（測得到各種組合），只拿掉進行中的事件。
+const MAIN_SD = fs.mkdtempSync(path.join(require('os').tmpdir(), 'vpet-pagetest-'));
+{
+    const real = path.join(require('os').homedir(), '.claude', 'agumon-statusline', 'state');
+    for (const f of ['color-state.json', 'album.json', 'festival.json', 'hook.json', 'state.json', 'ranch.json']) {
+        try { fs.copyFileSync(path.join(real, f), path.join(MAIN_SD, f)); } catch (e) {}
+    }
+    try {
+        const rf = path.join(MAIN_SD, 'ranch.json'), r = JSON.parse(fs.readFileSync(rf, 'utf8'));
+        for (const k of ['page2Quest', 'page2Fight', 'page2Result', 'page2Notice']) delete r[k];
+        fs.writeFileSync(rf, JSON.stringify(r));
+    } catch (e) {}
+}
 const child = spawn(process.execPath,
     [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
-    { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT) }, stdio: 'ignore' });
+    { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT), AGUMON_STATE_DIR: MAIN_SD }, stdio: 'ignore' });
 
-const done = (code) => { try { child.kill(); } catch (e) {} process.exit(code); };
+const done = (code) => { try { child.kill(); } catch (e) {} try { fs.rmSync(MAIN_SD, { recursive: true, force: true }); } catch (e) {} process.exit(code); };
 
 
 // ── 前端實跑 ─────────────────────────────────────────────────────────
@@ -166,7 +182,7 @@ function renderProbe(js, html, daemonSrc) {
         ok(c1.prevented && c1.stopped, '問號模式下點「重抽」沒有攔下來 —— 會真的重抽');
         ok(H.mode() === 2, '問號模式下點有說明的地方，沒有進入講解');
         fire('click', tgt('reset'));           // 還在打字 → 先一次顯示完
-        ok(H.mode() === 2, '老師還在打字時點一下就關了（應該先顯示完整段）');
+        ok(H.mode() === 2, '助手還在打字時點一下就關了（應該先顯示完整段）');
         H.set(1);
         const cm = fire('contextmenu', tgt('stage'));
         ok(cm.prevented && H.mode() === 0, '問號模式下按右鍵沒有離開（或右鍵選單照樣跳出來）');
@@ -191,7 +207,7 @@ function renderProbe(js, html, daemonSrc) {
         }
         ok(Array.isArray(H.TUTOR) && H.TUTOR.length === 2 && H.TUTOR[0].length === 16 && H.TUTOR[0][0].length === 16
            && H.TUTOR[0].flat().some(Boolean) && JSON.stringify(H.TUTOR[0]) !== JSON.stringify(H.TUTOR[1]),
-           '教學老師的兩幀沒送到頁面（或是空的、兩幀一樣）');
+           '教學助手的兩幀沒送到頁面（或是空的、兩幀一樣）');
         H.set(0);
     }
     g.__p.noScene();
@@ -719,6 +735,7 @@ setTimeout(async () => {
         console.log('— 端點 —');
         const st = JSON.parse(await get('/state'));
         ok(typeof st.tick === 'number', '/state 沒有回傳 tick');
+        ok(typeof st.bgV === 'number', '/state 沒帶底圖版本 bgV（底圖存檔後要重啟 daemon 才換得到）');
 
         const y = JSON.parse(await get('/yard'));
         ok(y.ok === true, '/yard 回應失敗');
@@ -760,6 +777,7 @@ setTimeout(async () => {
             const y = JSON.parse(await get('/yard'));
             ok(Array.isArray(y.zones), '/yard 沒有回傳 zones（dev 的走動範圍框畫不出來）');
             if (Array.isArray(y.zones)) {
+                // 每隻一塊。第二頁解鎖後 5～8 隻兩頁一起走，框照樣每隻一塊（換成這一頁的座標，另一頁的落在畫面外）
                 ok(y.zones.length === y.kept || y.kept === 0,
                    `zones 有 ${y.zones.length} 塊，但營地裡有 ${y.kept} 隻`);
                 const shape = y.zones.filter(z => ['minX', 'maxX', 'minY', 'maxY'].every(k => Number.isFinite(z[k]))
@@ -1370,6 +1388,88 @@ setTimeout(async () => {
            '營地第二頁的台詞少了段落');
         ok(!/momentai/i.test(flat), '台詞不要 Momentai（使用者要求拿掉）');
     }
-    console.log(`\n結果：${pass} passed, ${fail} failed`);
+    // 營地第二頁的漫畫對話框：逐字打的時候框不能長大，不然上面的 CutIn 會跟著字跑
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const fn = (src.match(/function storyLine\(\)\{[\s\S]*?\n\}/) || [''])[0];
+    const lock = fn.indexOf("bb.style.width=bb.offsetWidth+'px'"), typing = fn.indexOf('story.typing=setInterval');
+    ok(lock > 0 && typing > lock, '對話框沒在逐字打之前鎖住大小（CutIn 會跟著字移動）');
+    ok(/bb\.style\.width='';\s*bb\.style\.minHeight='';/.test(fn), '換下一句前沒解鎖大小（短句會沿用上一句的大框）');
+    ok(/#storybubble\{[^}]*box-sizing:border-box/.test(src), '對話框不是 border-box：鎖 offsetWidth 會多出 padding，框一鎖就變大');
+}
+// 第一階段提示：第二階段輸了、重打 Diablomon 又贏，同一個分頁要能再跳一次
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const reset = src.indexOf('if(s.ranch&&!s.ranch.page2Notice&&!storyOn()) p2NoticeShown=false;');
+    const show  = src.indexOf("if(view==='home'&&s.ranch&&s.ranch.page2Notice&&!storyOn()&&!p2NoticeShown){");
+    ok(reset > 0 && show > reset, '提示收掉後沒解除 p2NoticeShown（輸了重打 Diablomon 又贏，助手不會再出來）');
+}
+// 戰鬥蓋版底下的名字列：只有廣場對戰要留（營地第二頁的戰鬥沒有名字，留了就多一條空白）
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const rb = (src.match(/function renderBattle\(b\)\{[\s\S]*?\n\}/) || [''])[0];
+    ok(/draw\(b\.nameRow \? b\.lines\.concat\(\[''\]\) : b\.lines, cv\)/.test(rb), '戰鬥蓋版不分場合都多畫一列名字（營地戰鬥底下多一條空白）');
+    const pv = (src.match(/function plazaBattleView\([\s\S]*?\n\}/) || [''])[0];
+    ok(/nameRow: true/.test(pv), '廣場對戰沒要求留名字列（名字會畫到畫布外面）');
+    const ev = (src.match(/function page2Event\([\s\S]*?\n\}/) || [''])[0];
+    ok(ev && !/nameRow/.test(ev), '營地第二頁的戰鬥也留了名字列');
+}
+// 底圖存檔後不用重啟：不能在啟動時定死有沒有底圖，前端照 bgV 換網址（帶 ?v= 避開快取）
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(!/HAS_BG\s*=\s*fs\.existsSync/.test(src), '底圖有沒有又在啟動時定死了（存檔後要重啟才生效）');
+    ok(/syncBg\(s\.bgV\)/.test(src) && /'url\(\/bg\?v='\+v\+'\)'/.test(src), '前端沒照 bgV 換底圖網址');
+    ok(/classList\.toggle\('hasbg',!!v\)/.test(src), '底圖移除後前端沒退回純色');
+    ok(/req\.url\.startsWith\('\/bg\?'\)/.test(src), '/bg?v= 的請求沒接到（換網址之後底圖變 404）');
+}
+
+// 助手 CutIn 擺正、外框是黑框＋四角綠色 L 形（靜態，開對話框時畫一次）
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const css = (src.match(/#storycv\{[^}]*\}/) || [''])[0];
+    ok(css && !/rotate/.test(css), '助手的 CutIn 又斜了');
+    const fx = (src.match(/#storyfx\{[^}]*\}/) || [''])[0];
+    ok(/max-width:none/.test(fx) && /max-width:none/.test(css), '外框／CutIn 沒擋全域的 max-width:100%（外框被縮成 CutIn 的寬度、歪向一邊）');
+    ok(/<canvas id="storyfx"/.test(src) && /function storyFxDraw\(\)/.test(src), 'CutIn 沒有外框');
+    const open = (src.match(/function storyOpen\([\s\S]*?\n\}/) || [''])[0];
+    ok(/storyFxDraw\(\)/.test(open), '開對話框時沒畫外框');
+    ok(!/setInterval/.test((src.match(/function storyFxDraw\(\)[\s\S]*?\n\}/) || [''])[0]), '外框又在跑動畫（定案是靜態）');
+}
+
+// Keramon 空降的節奏：打贏那一刻就藏起來（?drop=），說明字打完 0.5 秒才掉下來
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const sync = (src.match(/function p2Sync\(y\)\{[\s\S]*?\n\}/) || [''])[0];
+    const iHide = sync.indexOf("if(ev.win&&ev.keramonId) p2Drop={ id:ev.keramonId, t0:0, release:false };"), iWin = sync.indexOf('storyOpen([{text:P2TALK.win}]');
+    ok(iHide > 0 && iWin > iHide, '打贏時沒先把 Keramon 藏起來（滑到第二頁之前就露面）');
+    const iUnl = sync.indexOf('storyOpen([{text:P2TALK.unlocked}]'), iSlide = sync.indexOf('await slideToPage(');
+    ok(iUnl > iSlide && /onShown:\(\)=>\{\s*setTimeout\(\(\)=>\{ if\(p2Drop&&!p2Drop\.t0\) p2Drop\.t0=performance\.now\(\); \}, REVEAL_DELAY_MS\)/.test(sync),
+       'Keramon 不是在說明字打完之後才掉下來');
+    ok(!/if\(p2Drop\) p2Drop\.t0=performance\.now\(\);/.test(sync), '滑完就直接空降（沒等說明）');
+    ok(/REVEAL_DELAY_MS=500/.test(src), '說明打完到 Keramon 出現不是 0.5 秒');
+    const adv = (src.match(/function storyAdvance\(\)\{[\s\S]*?\n\}/) || [''])[0];
+    ok(/storyShown\(\); return;/.test(adv), '點一下直接顯示完整句時沒通知「字打完了」（Keramon 就不會掉下來）');
+}
+
+// 走動範圍編輯器每次開都重起（舊行程會一直跑舊程式，新的 EADDRINUSE 靜靜死掉）
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const fn = (src.match(/function openZoneEditor\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+    const kill = fn.indexOf("doctor.scanNodesByScript('zone_editor_server.js')"), sp = fn.indexOf('spawn(process.execPath');
+    ok(kill > 0 && sp > kill && /doctor\.killConfirmed\(pid\)/.test(fn), '開走動範圍編輯器前沒先收掉舊的（開到的永遠是舊版程式）');
+    ok(!/編輯器已在執行/.test(fn), '編輯器還在跑就直接沿用（舊程式不會換新）');
+}
+
+// 翻頁滑行：快照的天空是透明的，換頁重畫之前要先把底下的即時圖層藏起來，演完再放回來
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const fn = (src.match(/async function slideToPage\([\s\S]*?\n\}/) || [''])[0];
+    const hide = fn.indexOf("e.style.visibility='hidden'"), redraw = fn.indexOf('await pollYard()'), back = fn.indexOf("e.style.visibility=''");
+    ok(hide > 0 && redraw > hide, '翻頁時沒在換頁重畫之前藏起即時圖層（新頁的桌寵會從天空透出來）');
+    ok(back > redraw && /finally\s*\{[\s\S]*e\.style\.visibility=''/.test(fn), '翻頁演完沒放回即時圖層（或出錯時不會放回，畫面就空了）');
+    ok(/for\(const id of SLIDE_LIVE\)/.test(src) && /SLIDE_LIVE\.map/.test(fn), '快照拍的圖層跟滑行時藏的圖層不是同一份清單');
+}
+
+console.log(`\n結果：${pass} passed, ${fail} failed`);
     done(fail ? 1 : 0);
 }, 100);

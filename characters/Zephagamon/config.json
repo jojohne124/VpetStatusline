@@ -70,8 +70,8 @@
         },
         {
           "type": "win_rate",
-          "pct": 0,
-          "minBattles": 0
+          "pct": 80,
+          "minBattles": 20
         },
         {
           "type": "power_at_least",
@@ -80,7 +80,7 @@
         {
           "type": "elapsed_since",
           "since": "evolve",
-          "seconds": 86400
+          "seconds": 259200
         }
       ]
     }

@@ -82,6 +82,8 @@ function edgeParams(evo) {
         pct: win ? win.pct : null,
         cost: cost ? cost.usd : null,
         minBattles: win ? win.minBattles : null,
+        // win_rate.minWins：本階段勝場 ≥ N（可空）
+        minWins: win && win.minWins != null ? win.minWins : null,
         time: tod ? tod.period : null,
         // power_at_least：當前戰力（base + 訓練值，受本階 cap 約束）達標才進化。
         // 填本階 cap 就是「練滿才給進」，常用於彩蛋線。
@@ -167,7 +169,7 @@ function buildGraph() {
             //    漏了會「讀得到但存檔後消失」（前端 payload 送回來的就沒有這個欄位）。
             edges.push({
                 from: id, to: evo.character,
-                pct: p.pct, cost: p.cost, minBattles: p.minBattles, time: p.time,
+                pct: p.pct, cost: p.cost, minBattles: p.minBattles, minWins: p.minWins, time: p.time,
                 tag: p.tag, tagCount: p.tagCount, tagPct: p.tagPct,
                 power: p.power,
                 statKey: p.statKey, statCount: p.statCount, statScope: p.statScope,
@@ -237,11 +239,13 @@ function save(graph) {
         const kids = (byParent[n.id] || []).slice()
             .sort((a, b) => ((nodeById[a.to] || {}).power ?? 0) - ((nodeById[b.to] || {}).power ?? 0));
         cfg.evolvesTo = kids.map(e => {
+            const win = { type: 'win_rate',
+                  pct: e.pct != null ? e.pct : suggestions[e.from + '>' + e.to],
+                  minBattles: e.minBattles != null ? e.minBattles : RULES.minBattlesFor(n.stage) };
+            if (e.minWins != null && e.minWins !== '') win.minWins = e.minWins;   // 勝場門檻（空＝不設）
             const conds = [
                 { type: 'cost_threshold', usd: e.cost != null ? e.cost : RULES.costFor(n.stage) },
-                { type: 'win_rate',
-                  pct: e.pct != null ? e.pct : suggestions[e.from + '>' + e.to],
-                  minBattles: e.minBattles != null ? e.minBattles : RULES.minBattlesFor(n.stage) },
+                win,
             ];
             if (e.time) conds.push({ type: 'time_of_day', period: e.time });
             // power_at_least：戰力門檻（空＝不設）

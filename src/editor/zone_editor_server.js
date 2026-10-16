@@ -43,6 +43,12 @@ const F = W.YARD_FIELD, SPR = W.SPRITE;
 // 回報過「走動範圍編輯器跟畫面不符」。換算只有一份，在 plaza.js（營地合成用的那份）。
 const PLAZA = require('../daemon/plaza.js');
 const R = PLAZA.YARD_RENDER, toDraw = PLAZA.yardToDraw;
+// 5～8 隻（營地第二頁解鎖後）走的是**兩頁寬**的場地（跨頁走動）：場地、畫布、換算整包換掉。
+// 用 plaza.js 那兩包（營地合成用的同一份），編輯器才不會跟營地實際的畫面對不上。
+const geomFor = (n) => (W.yardFieldFor(n) === W.YARD_FIELD_WIDE ? PLAZA.YARD_GEOM_WIDE : PLAZA.YARD_GEOM);
+const renderOf = (g) => ({ w: g.render.w, h: g.render.h, kx: g.render.kx, ky: g.render.ky,
+                           page: R.w });   // page：一頁多寬（細格），兩頁寬時前端在這裡畫交界線
+const fieldOf = (f) => ({ w: f.w, h: f.h, minX: f.minX, maxX: f.maxX, minY: f.minY, maxY: f.maxY });
 
 // ── 資料 ─────────────────────────────────────────────────────────────
 function loadOverride() {
@@ -62,7 +68,10 @@ function buildState() {
     for (const n of Object.keys(W.YARD_LAYOUTS).map(Number)) {
         const builtin = W.YARD_LAYOUTS[n] || {};
         const custom  = over.layouts[n] || {};
+        const g = geomFor(n);
         out.counts[n] = {
+            // 這個隻數的場地與畫布（5～8 隻是兩頁寬）。頂層的 field / render 是一頁的，給舊頁面相容
+            field: fieldOf(g.field), render: renderOf(g), wide: g.wide,
             def: over.default[n] || W.YARD_LAYOUT_DEFAULT[n] || null,
             // 一律以 exact 交出去 —— 前端只處理一種座標，少一個會漂的地方。
             // 內建的是比例簡寫，這裡先跑一次 yardZones 換算成實際 dot。
@@ -71,7 +80,7 @@ function buildState() {
                 ...Object.keys(custom).map(name => ({
                     name, builtin: false,
                     rects: Array.isArray(custom[name])
-                        ? W.yardZones(n, F, W.ZONE_MARGIN, custom[name]).map(z => [z.minX, z.maxX, z.minY, z.maxY])
+                        ? W.yardZones(n, g.field, W.ZONE_MARGIN, custom[name]).map(z => [z.minX, z.maxX, z.minY, z.maxY])
                         : (custom[name].exact || []),
                 })),
             ],
@@ -93,6 +102,7 @@ function overlapArea(a, b) {
 // 角色在那裡是 16 細格。用走路格子量的話角色等於大了一圈，重疊率會高估。
 function measure(zones, trials = 12, steps = 1500) {
     const n = zones.length;
+    const g = geomFor(n), F = g.field, toDraw = g.toDraw, R = g.render;
     let bad = 0, tot = 0, area = 0, pairs = 0, real = 0, seen = 0, stay = 0, shortest = Infinity;
     const heat = zones.map(() => new Map());
     const cov = new Set();
@@ -162,12 +172,12 @@ function validate(zones) {
 
 // exact = dot 絕對座標（編輯器的預設）；否則當成比例矩形（內建表的簡寫）
 function rectsToZones(rects, exact = true) {
-    return W.yardZones(rects.length, F, W.ZONE_MARGIN, exact ? { exact: rects } : rects);
+    return W.yardZones(rects.length, geomFor(rects.length).field, W.ZONE_MARGIN, exact ? { exact: rects } : rects);
 }
 
 // 內建表是比例的，要拿到編輯器裡編就先換算成 exact
 function builtinToExact(n, name) {
-    return W.yardZones(n, F, W.ZONE_MARGIN, name).map(z => [z.minX, z.maxX, z.minY, z.maxY]);
+    return W.yardZones(n, geomFor(n).field, W.ZONE_MARGIN, name).map(z => [z.minX, z.maxX, z.minY, z.maxY]);
 }
 
 // ── 存檔：repo + 已安裝的 assets 雙寫（跟路線編輯器同一套）──────────
@@ -181,6 +191,7 @@ function save(body) {
         return { ok: false, error: `「${name}」是內建切法，請換一個名字（內建的留著當對照組）` };
     if (!Array.isArray(body.rects) || body.rects.length !== n)
         return { ok: false, error: `要 ${n} 塊區域，收到 ${(body.rects || []).length} 塊` };
+    const F = geomFor(n).field;   // 5～8 隻是兩頁寬的場地
     for (const r of body.rects) {
         if (!Array.isArray(r) || r.length !== 4 || r.some(v => !Number.isInteger(v)))
             return { ok: false, error: '區域座標必須是 4 個整數（minX, maxX, minY, maxY，單位 dot）' };

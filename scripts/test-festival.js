@@ -219,7 +219,7 @@ if (hasDitto && hasArt) {
 {
     const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
     ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null,\s*feast \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
-    ok(/swapSalt: args\.ds \|\| null,/.test(src) && /const ga=\{which:hit\.id,ds:yardSalt\}/.test(src), '營地拿起來的那隻沒帶進場亂數（拿起來會變另一隻）');
+    ok(/swapSalt: args\.ds \|\| null,/.test(src) && /const ga=\{which:hit\.id,ds:yardSalt[,}]/.test(src), '營地拿起來的那隻沒帶進場亂數（拿起來會變另一隻）');
     ok(/qs\.push\('ds='\+yardSalt\);/.test(src), '營地畫面沒有把進場亂數送給 /yard');
     ok(/if\(v==='yard' && view!=='yard'\) yardSalt=Math\.random\(\)/.test(src), '切進營地沒有重抽進場亂數');
     // 廣場對戰：打架的本體換成廣場上那隻（p:<id>），CutIn 不換

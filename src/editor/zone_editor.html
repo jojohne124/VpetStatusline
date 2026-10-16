@@ -99,7 +99,7 @@
 </main>
 
 <script>
-const COLORS = ['#58a6ff', '#3fb950', '#d29922'];
+const COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f778ba', '#a371f7', '#56d4dd', '#ff7b72', '#e3b341'];
 let ST = null;        // /state
 let n = 3;            // 目前編幾隻
 let rects = [];       // [[minX,maxX,minY,maxY] ...]（dot 絕對座標，角色左上角的可走範圍）
@@ -194,7 +194,17 @@ function draw() {
     ctx.fillStyle = col; ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillText('#' + (i + 1), b.x * SCALE + 6, b.y * SCALE + 16);
   });
-  $('fieldsize').textContent = W + '×' + H;
+  // 兩頁寬（5～8 隻）：畫出兩頁的交界 —— 跨過這條線的框，那一隻就會在兩頁之間走來走去
+  if (R.page && W > R.page) {
+    ctx.save(); ctx.strokeStyle = '#8b949e'; ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+    for (let x = R.page; x < W; x += R.page) {
+      ctx.beginPath(); ctx.moveTo(x * SCALE + .5, 0); ctx.lineTo(x * SCALE + .5, cv.height); ctx.stroke();
+    }
+    ctx.restore();
+    ctx.fillStyle = '#8b949e'; ctx.font = '12px ui-monospace, monospace';
+    ctx.fillText('第一頁', 6, cv.height - 8); ctx.fillText('第二頁', R.page * SCALE + 6, cv.height - 8);
+  }
+  $('fieldsize').textContent = W + '×' + H + (R.page && W > R.page ? '（兩頁）' : '');
 }
 
 // ── 滑鼠 ─────────────────────────────────────────────────────────────
@@ -288,6 +298,9 @@ async function runMeasure() {
 // ── 載入 / 切換 ──────────────────────────────────────────────────────
 function fillLayouts() {
   const c = ST.counts[n];
+  // 換隻數就換場地：5～8 隻是兩頁寬（跨頁走動）。畫布變兩倍寬，縮小一點才放得下
+  if (c.field && c.render) { ST.field = c.field; ST.render = c.render; }
+  SCALE = ST.render.w > 100 ? 6 : 9;
   const sel = $('layout');
   sel.innerHTML = c.layouts.map(l =>
     '<option value="' + l.name + '">' + l.name + (l.builtin ? '（內建）' : '') + (l.name === c.def ? ' ★預設' : '') + '</option>').join('');

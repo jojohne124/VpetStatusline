@@ -303,6 +303,21 @@ function migrateLegacyState() {
 const isOurs = (cmd) => typeof cmd === 'string'
     && cmd.replace(/\\/g, '/').includes('agumon-statusline');
 
+// 狀態列的 vpet 暫停中（agumon-core 的 STATUSLINE_PET_PAUSED）→ 不需要每秒刷新。
+// refreshInterval: 1 是給右側桌寵動畫用的；只剩狀態文字時，Claude Code 有事件就會自己刷新。
+// 每秒刷新的代價：每個視窗每秒起一支 node（~100MB），機器一忙單支跑到 3～4 秒，
+// 幾個視窗疊起來同時十幾支、1GB 上下（2026-10-16 實測）。
+let PET_PAUSED = false;
+try { PET_PAUSED = !!require(path.join(REPO_ROOT, 'src', 'runtime', 'agumon-core.js')).STATUSLINE_PET_PAUSED; } catch (e) {}
+
+// 暫停時把「我們寫的」每秒刷新拿掉（值是 1 才動，使用者自己調過的保留）。回傳有沒有改。
+// 舊版 install 寫進去的設定，重裝或熱更（updater 會重跑 install）就會被這裡修掉。
+function syncRefreshInterval(statusLine, paused) {
+    if (!paused || !statusLine || statusLine.refreshInterval !== 1) return false;
+    delete statusLine.refreshInterval;
+    return true;
+}
+
 function updateSettings() {
     console.log('\n[7/8] 更新 ~/.claude/settings.json');
     const settingsPath = path.join(CLAUDE_HOME, 'settings.json');
@@ -313,7 +328,8 @@ function updateSettings() {
     if (!fs.existsSync(settingsPath)) {
         console.warn('  [skip] 找不到 settings.json，請手動建立並貼入：');
         const sample = { hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: newHook }] }] } };
-        if (!DAEMON_ONLY) sample.statusLine = { type: 'command', command: newCmd, refreshInterval: 1 };
+        if (!DAEMON_ONLY) sample.statusLine = PET_PAUSED ? { type: 'command', command: newCmd }
+                                                         : { type: 'command', command: newCmd, refreshInterval: 1 };
         console.log(JSON.stringify(sample, null, 2));
         return;
     }
@@ -347,10 +363,14 @@ function updateSettings() {
             const old = cur.statusLine.command;
             cur.statusLine.command = newCmd;
             cur.statusLine.type    = cur.statusLine.type || 'command';
-            cur.statusLine.refreshInterval = cur.statusLine.refreshInterval || 1;
+            if (!PET_PAUSED) cur.statusLine.refreshInterval = cur.statusLine.refreshInterval || 1;
             console.log(`  [update] statusLine.command:`);
             console.log(`           舊: ${old}`);
             console.log(`           新: ${newCmd}`);
+            changed = true;
+        }
+        if (syncRefreshInterval(cur.statusLine, PET_PAUSED)) {
+            console.log('  [rm]     statusLine.refreshInterval（狀態列桌寵暫停中，不用每秒刷新）');
             changed = true;
         }
     }
@@ -491,3 +511,4 @@ function main() {
 }
 
 if (require.main === module) main();
+else module.exports = { syncRefreshInterval };

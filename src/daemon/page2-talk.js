@@ -1,5 +1,5 @@
 'use strict';
-// 營地第二頁事件的台詞（docs/yard-page2-spec.md「表演」）。老師 = TerriermonAssistant。
+// 營地第二頁事件的台詞（docs/yard-page2-spec.md「表演」）。助手 = TerriermonAssistant。
 //
 // 台詞**只寫在這一份**，daemon 頁面整包帶過去（跟 help-tips.js 同一個作法）。
 // {name} = 派出去的那隻的名字。文字裡不要放反引號和「${」（會進 daemon 頁面的 template literal）。

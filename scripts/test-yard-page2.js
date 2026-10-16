@@ -41,7 +41,9 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
 
 (async () => {
     const d = spawn(process.execPath, [path.join(REPO, 'src/daemon/daemon.js'), '--isolated'],
-        { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT), AGUMON_STATE_DIR: SD }, stdio: 'ignore' });
+        // 切法只用內建的：使用者在編輯器另存成預設的切法（例如 5 隻的 Keramon 區域橫跨兩頁）不能影響結果
+        { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT), AGUMON_STATE_DIR: SD,
+                 AGUMON_YARD_LAYOUTS: path.join(SD, 'no-yard-layouts.json') }, stdio: 'ignore' });
     try {
         let up = false;
         for (let i = 0; i < 150 && !up; i++) { try { await req('GET', '/state'); up = true; } catch (e) { await wait(100); } }
@@ -82,23 +84,46 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         ok(!!r1.page2At && !r1.page2Quest && !r1.page2Fight, '贏了沒解鎖／事件沒清乾淨');
         ok(r1.pets.length === 5 && r1.pets[4].state.characterId === 'keramon', '贏了營地第 5 格沒有 Keramon');
         ok(y.event.keramonId === r1.pets[4].id && y.event.keramonPage === 1, '結果沒告訴前端 Keramon 在第二頁（鏡頭要帶過去）');
+        // 還沒演完（page2Ack 前）Keramon 不能露面：兩頁都不畫牠，前端沒帶 ?drop= 也一樣
+        {
+            const a = await yard(), b = await yard('?pg=1');
+            ok(![...a.pets, ...b.pets].some(p => p.id === r1.pets[4].id), '打贏還沒演完，Keramon 就先出現在營地裡（滑過去之前就露面）');
+        }
         ok(y.cap === 8, '解鎖後上限不是 8');
         await cmd('page2Ack');
         y = await yard();
         ok(!y.event && !ranch().page2Result, '演完（page2Ack）結果沒清掉');
 
-        console.log('— 分頁 —');
-        ok(y.pages === 2 && y.page === 0 && y.pets.length === 4, '5 隻應該分兩頁、第一頁 4 隻');
+        console.log('— 分頁（兩頁一起走，頁 = 鏡頭）—');
+        ok(y.pages === 2 && y.page === 0, '解鎖後 5 隻應該分兩頁');
+        const y0 = y;
         y = await yard('?pg=1');
-        ok(y.page === 1 && y.pets.length === 1 && y.pets[0].char === 'keramon', '第二頁應該只有 Keramon');
-        const kid = y.pets[0].id;
+        ok(y.page === 1, '第二頁打不開');
+        ok(new Set([...y0.pets, ...y.pets].map(p => p.id)).size === 5, '兩頁加起來沒看到全部 5 隻');
+        ok(y0.zones.length === 5 && y.zones.length === 5 && y0.zones[0].minX - y.zones[0].minX === y.cols,
+           '分區框沒換成這一頁的座標（第二頁的框要往左移一頁寬）');
+        const kid = r1.pets[4].id;
+        // 拎起來／放下：座標是「這一頁」的。漏了頁碼換算，第二頁拎起來那一下會跳到右邊畫面外、放下會掉到第一頁
+        {
+            const yk = await yard('?pg=1'), pk = yk.pets.find(p => p.id === kid);
+            ok(!!pk, '前提不成立：Keramon 不在第二頁的畫面裡');
+            if (pk) {
+                const g = await cmd('yardGrab', { which: kid, pg: '1' });
+                ok(g.ok && Math.abs(g.x - pk.x) <= 3 && Math.abs(g.y - pk.y) <= 3, `第二頁拎起來的位置對不上畫面（${g.x},${g.y} vs ${pk.x},${pk.y}）`);
+                const d = await cmd('yardDrop', { which: kid, x: String(g.x), y: String(g.y), pg: '1' });
+                ok(d.ok && Math.abs(d.x - g.x) <= 2, `第二頁放下的位置跑掉了（${d.x} vs ${g.x}）`);
+                await wait(300);
+                const after = (await yard('?pg=1')).pets.find(p => p.id === kid);
+                ok(after && Math.abs(after.x - g.x) <= 4, '放下之後 Keramon 不在第二頁剛放的地方');
+            }
+        }
         y = await yard('?pg=1&drop=' + kid);
         ok(y.drop && y.drop.id === kid && y.drop.frames.length === 2, '空降要回傳那隻的兩幀和落點');
         ok(!y.pets.some(p => p.id === kid), '空降中伺服器還在畫那隻（會看到兩隻）');
         y = await yard('?pg=7');
         ok(y.page === 1, '頁碼超出沒有夾住');
 
-        console.log('— 輸：老師講完才退場、退完回平常 —');
+        console.log('— 輸：助手講完才退場、退完回平常 —');
         await cmd('page2Dev', { act: 'quest' }); await cmd('page2Dev', { act: 'lose' });
         ok((await cmd('page2Fight', { which: 'p0' })).ok, '第二次出戰失敗');
         edit(r => { r.page2Fight.startStep -= 1000; });
@@ -121,6 +146,17 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         y = await yard();
         ok(y.event && y.event.stage === 'result' && y.event.win === false && y.event.gaveUp, '放棄要視同戰敗');
         ok(!ranch().page2Quest, '放棄後事件沒清掉（要從 Diablomon 重來）');
+
+        console.log('— dev 重置：可以反覆測 —');
+        edit(r => { r.pets.push({ id: 'mine', keptAt: 9, state: { characterId: 'keramon' } }); });   // 玩家自己養的
+        const rid = ranch().page2RewardId;
+        ok(rid && ranch().pets.some(p => p.id === rid), '前提不成立：解鎖送的 Keramon 不在營地');
+        ok((await cmd('page2Dev', { act: 'reset' })).ok, 'dev 重置失敗');
+        const rr = ranch();
+        ok(!rr.page2At && !rr.page2Quest && !rr.page2Result && !rr.page2RewardId, '重置後事件旗標沒清乾淨');
+        ok(!rr.pets.some(p => p.id === rid), '重置後解鎖送的 Keramon 還在（重測時營地會超過 4 隻）');
+        ok(rr.pets.some(p => p.id === 'mine'), '重置把玩家自己養的 Keramon 也收走了');
+        ok(rr.pets.length === 5, '重置動到了其他營地成員');
 
         console.log('— dev 只在開發版 —');
         const src = fs.readFileSync(path.join(REPO, 'src/daemon/daemon.js'), 'utf8');

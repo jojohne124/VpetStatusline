@@ -277,5 +277,47 @@ console.log('— 前端座標換算 —');
     }
 }
 
+// ── 5～8 隻：兩頁寬的場地（營地第二頁解鎖後跨頁走動）──────────────────
+console.log('— 5～8 隻（兩頁寬）—');
+{
+    const PL = require(path.join(REPO, 'src', 'daemon', 'plaza.js'));
+    const st = Z.buildState();
+    for (let n = 5; n <= 8; n++) {
+        const c = st.counts[n];
+        ok(!!c, `編輯器沒有 ${n} 隻的選項`);
+        if (!c) continue;
+        ok(c.wide === true && c.render.w === PL.YARD_RENDER_WIDE.w && c.field.maxX === W.YARD_FIELD_WIDE.maxX,
+           `${n} 隻的場地不是兩頁寬（編輯器的框會跟營地實際的對不上）`);
+        ok(c.render.page === PL.YARD_RENDER.w, `${n} 隻沒告訴頁面一頁多寬（畫不出兩頁的交界線）`);
+        ok(c.layouts.some(l => l.name === 'cross' && l.builtin && l.rects.length === n), `${n} 隻沒有內建的 cross 切法`);
+    }
+    ok(st.counts[4].wide === false && st.counts[4].render.w === PL.YARD_RENDER.w, '4 隻（含）以下應該還是一頁寬');
+    // 內建的 5～8 隻切法：每一隻都走得動（最短移動段過門檻 5，跟編輯器亮綠燈同一條）
+    for (let n = 5; n <= 8; n++) {
+        const leg = Z.measure(W.yardZones(n), 4, 400).shortestLeg;
+        ok(leg >= 5, `${n} 隻的內建切法最短移動段只有 ${leg}（有一塊太窄，那一隻走不太動）`);
+    }
+    // 編輯器的框 == 營地實際的區域（跟一頁時同一個要求，換成兩頁寬的那包換算）
+    const ex = Z.builtinToExact(5, 'cross'), zs = W.yardZones(5);
+    ok(ex.every((r, i) => r[0] === zs[i].minX && r[1] === zs[i].maxX && r[2] === zs[i].minY && r[3] === zs[i].maxY),
+       '5 隻的內建切法換算出來跟營地的區域不一樣');
+    // 存檔的邊界：5 隻可以放到兩頁寬的右半邊；一頁的上限只管 1～4 隻
+    const rects5 = Z.builtinToExact(5, 'cross');
+    const far = rects5.map(r => r.slice()); far[4] = [60, 83, 17, 24];
+    const r5 = Z.save({ n: 5, name: 'x', rects: far.map((r, i) => i === 4 ? [60, 61, 17, 18] : r) });   // 太小 → 被 validate 擋（不會寫檔）
+    ok(r5.ok === false && !/超出場地/.test(r5.error || ''), '5 隻放在第二頁的區域被當成超出場地（存檔邊界還是一頁寬）');
+    const out5 = Z.save({ n: 5, name: 'x', rects: far.map((r, i) => i === 4 ? [60, W.YARD_FIELD_WIDE.maxX + 1, 17, 24] : r) });
+    ok(out5.ok === false && /超出場地/.test(out5.error || ''), '5 隻超出兩頁寬的場地卻沒擋下來');
+    const r3 = Z.save({ n: 3, name: 'x', rects: [[0, 50, 2, 9], [0, 10, 2, 9], [0, 10, 12, 20]] });
+    ok(r3.ok === false && /超出場地/.test(r3.error || ''), '3 隻的區域超出一頁寬卻沒擋下來');
+    // 模擬也要用兩頁寬：整場利用率是對兩頁算的（用一頁算的話會超過 100%）
+    const m = Z.measure(W.yardZones(5), 3, 300);
+    ok(m.coverPct > 0 && m.coverPct <= 100, `5 隻的場地利用率 ${m.coverPct.toFixed(0)}% 不合理（模擬沒換成兩頁寬）`);
+    // 頁面：換隻數就換場地，兩頁寬時畫交界線
+    const html = fs.readFileSync(path.join(REPO, 'src', 'editor', 'zone_editor.html'), 'utf8');
+    ok(/if \(c\.field && c\.render\) \{ ST\.field = c\.field; ST\.render = c\.render; \}/.test(html), '頁面換隻數時沒換場地（5～8 隻還用一頁寬的畫布）');
+    ok(/R\.page && W > R\.page/.test(html), '頁面沒畫兩頁的交界線');
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

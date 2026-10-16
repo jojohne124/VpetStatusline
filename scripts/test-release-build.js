@@ -183,6 +183,20 @@ console.log('— 狀態列的 vpet 暫停：statusline 照常、右側桌寵只�
     ok(!/STATUSLINE_PAUSED/.test(read('scripts/install.js')), 'install.js 不該擋 statusline 本身（要的是只擋右側桌寵）');
     ok(fs.existsSync(path.join(REPO, 'src/runtime/statusline-agumon-color.js')), 'statusline 的程式被刪了（說好只擋不刪）');
 
+    // 暫停時不要每秒刷新：每個視窗每秒起一支 node，疊起來十幾支、1GB（2026-10-16）。
+    // 熱更會重跑 install，所以舊設定靠 install 拿掉就能送到同事那邊。
+    const { syncRefreshInterval } = require('./install.js');
+    const sl = (ri) => ri === undefined ? { type: 'command', command: 'x' } : { type: 'command', command: 'x', refreshInterval: ri };
+    let s = sl(1);
+    ok(syncRefreshInterval(s, true) === true && !('refreshInterval' in s), '暫停中，舊設定的 refreshInterval: 1 沒拿掉（每秒起一支 node）');
+    s = sl(5);
+    ok(syncRefreshInterval(s, true) === false && s.refreshInterval === 5, '使用者自己調過的 refreshInterval 被拿掉了');
+    s = sl(1);
+    ok(syncRefreshInterval(s, false) === false && s.refreshInterval === 1, '沒暫停（桌寵要動）卻拿掉了每秒刷新');
+    ok(syncRefreshInterval(sl(), true) === false, '本來就沒有 refreshInterval 還回報「有改」');
+    ok(/if \(syncRefreshInterval\(cur\.statusLine, PET_PAUSED\)\)/.test(read('scripts/install.js')), 'updateSettings 沒呼叫 syncRefreshInterval（只有指令路徑變了才會修）');
+    ok(/sample\.statusLine = PET_PAUSED \?/.test(read('scripts/install.js')), '沒有 settings.json 時印的範例還是帶每秒刷新');
+
     // 暫存的部署樹：cheat / statusline / core 三支，core 的開關可以改成 false 當對照組
     const sandbox = (paused) => {
         const T = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-sloff-'));

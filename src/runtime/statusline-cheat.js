@@ -747,8 +747,8 @@ if (RANCH_CMDS.includes(args[0])) {
         }
         rerollGate();
         // 抽新的那一步沿用 --reset 的邏輯：只抽已實裝（在 roster）的 starter
-        const pool = starters.filter(x => roster.includes(x)).concat(core.page2StarterExtras(ranch));
-        const next = weightedPickStarter(pool.length ? pool : starters);
+        const pool = core.page2StarterPool(starters.filter(x => roster.includes(x)), ranch);
+        const next = weightedPickStarter(pool.length ? pool : core.page2StarterPool(starters, ranch));
         const force = readForce();
         force.ranchTriggerTs = Date.now();
         force.ranchOp        = { op: 'keep' };
@@ -869,9 +869,10 @@ let target;
 if (arg === '--reset') {
     rerollGate();
     // 只抽「已實裝(在 roster)」的 starter：未實裝的 starter（如子彈未完成的 fujamon）不該被抽到
-    // 營地第二頁解鎖後多開放 Keramon（core.page2StarterExtras）
-    const pool = starters.filter(s => roster.includes(s)).concat(core.page2StarterExtras(core.loadRanch()));
-    target = weightedPickStarter(pool.length ? pool : starters);
+    // Keramon 是營地第二頁的解鎖獎勵：解鎖前抽不到、解鎖後才開放（core.page2StarterPool）
+    const ranchNow = core.loadRanch();
+    const pool = core.page2StarterPool(starters.filter(s => roster.includes(s)), ranchNow);
+    target = weightedPickStarter(pool.length ? pool : core.page2StarterPool(starters, ranchNow));
     console.log(`🎲 隨機抽到：${target}`);
 } else {
     const idx = parseInt(arg, 10);

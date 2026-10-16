@@ -294,7 +294,7 @@ console.log('— 營地分區 —');
         // 身體實際會蓋到的範圍 = 左上角可走範圍 + 一個角色。把所有區域的身體範圍
         // 疊起來要蓋滿整個場地 —— 蓋不滿就代表有死區（回報過「三隻時分得不好」，
         // 真因是舊的 quad 切法右下整塊沒人站，場地只用到 83%）。
-        const coverPct = (Z) => {
+        const coverPct = (Z, F) => {
             const w = F.maxX - F.minX + SPR, h = F.maxY - F.minY + SPR;
             const grid = new Uint8Array(w * h);
             for (const z of Z)
@@ -304,6 +304,7 @@ console.log('— 營地分區 —');
             return 100 * grid.reduce((a, b) => a + b, 0) / (w * h);
         };
         for (const n of Object.keys(W.YARD_LAYOUTS).map(Number)) {
+            const F = W.yardFieldFor(n);   // 5～8 隻是兩頁寬的場地（跨頁走動）
             for (const name of W.yardLayoutNames(n)) {
                 const Z = W.yardZones(n, undefined, undefined, name);
                 ok(Z.length === n, `切法 ${name} 給了 ${Z.length} 塊，應為 ${n}`);
@@ -315,7 +316,7 @@ console.log('— 營地分區 —');
             }
             // 預設那種不可以留死區
             const def = W.yardZones(n);
-            const pct = coverPct(def);
+            const pct = coverPct(def, F);
             ok(pct > 99.5, `n=${n} 的預設切法只蓋到場地的 ${pct.toFixed(0)}%，有死區`);
         }
         // 指名不存在的切法 → 退回預設，不能壞掉也不能變成整場
@@ -937,23 +938,93 @@ console.log('— 角色 config.json 讀取快取（DLP 掛標的檔每次 open ~
 console.log('— 營地第二頁：分頁與對峙 —');
 {
     const pets = (n) => Array.from({ length: n }, (_, i) => ({ id: 'p' + i, state: { characterId: 'agumon' } }));
-    const sz = (r, o) => P.yardPages(r, o).map(p => p.length).join(',');
-    ok(sz({ pets: pets(4) }) === '4', '4 隻應該只有一頁');
-    ok(sz({ pets: pets(5) }) === '5', '沒解鎖（舊存檔超過上限）不該分頁，全部照舊畫在一頁');
-    ok(sz({ pets: pets(5), page2At: 1 }) === '4,1', '解鎖後 5 隻應該分成 4+1');
-    ok(sz({ pets: pets(8), page2At: 1 }) === '4,4', '解鎖後 8 隻應該分成 4+4');
-    ok(sz({ pets: pets(8), page2At: 1 }, { feast: true }) === '8', '圍爐不分頁（大家坐同一桌）');
-    const r8 = { pets: pets(8), page2At: 1 };
-    ok(P.yardPageRanch(r8, 1).pets.map(p => p.id).join() === 'p4,p5,p6,p7', '第二頁應該是第 5～8 隻');
-    ok(P.yardPageRanch(r8, 9).pets[0].id === 'p4', '頁碼超出要夾在最後一頁');
-    ok(P.yardPageOf(r8, 'p6') === 1 && P.yardPageOf(r8, 'p1') === 0, 'yardPageOf 找錯頁（拎起來會用錯區域）');
+    const cnt = (r, o) => P.yardPageCount(r, o);
+    ok(cnt({ pets: pets(4) }) === 1, '4 隻應該只有一頁');
+    ok(cnt({ pets: pets(4), page2At: 1 }) === 1, '解鎖了但只有 4 隻，應該還是一頁');
+    ok(cnt({ pets: pets(5) }) === 1, '沒解鎖（舊存檔超過上限）不該分頁，全部照舊畫在一頁');
+    ok(cnt({ pets: pets(5), page2At: 1 }) === 2 && cnt({ pets: pets(8), page2At: 1 }) === 2, '解鎖後 5～8 隻應該是兩頁');
+    ok(cnt({ pets: pets(8), page2At: 1 }, { feast: true }) === 1, '圍爐不分頁（大家坐同一桌）');
+    const RW = P.YARD_RENDER.w;
+    ok(P.yardPageX(1) === RW && P.yardPageX(9) === RW && P.yardPageX(-1) === 0, '頁碼超出沒有夾住');
+    ok(P.yardPageAt(RW - 9) === 0 && P.yardPageAt(RW - 8) === 1, '身體中心過了交界才算第二頁');
+    // 跨頁走動：兩頁合成一張兩倍寬的場地，走路的放大倍率要跟一頁時一樣（不然一解鎖大家就走慢一點）
+    ok(P.YARD_RENDER_WIDE.w === 2 * RW && P.YARD_RENDER_WIDE.h === P.YARD_RENDER.h, '兩頁寬的畫布不是一頁的兩倍寬');
+    ok(Math.abs(P.YARD_RENDER_WIDE.kx - P.YARD_RENDER.kx) < 0.01, `兩頁寬的走路倍率 ${P.YARD_RENDER_WIDE.kx} 跟一頁的 ${P.YARD_RENDER.kx} 不同`);
+    // 5～8 隻的預設切法：一定要有區域橫跨兩頁交界（不然還是各走各的），而且第 5 隻（Keramon）在第二頁
+    const G = P.YARD_GEOM_WIDE;
+    for (let n = 5; n <= 8; n++) {
+        const Z = W.yardZones(n);
+        // 真的跨頁 = 那一隻能整隻待在第一頁、也能整隻走到第二頁（只是身體擦過交界不算）
+        const cross = Z.filter(z => G.toDraw(z.minX, 0).x + W.SPRITE <= RW && G.toDraw(z.maxX, 0).x >= RW);
+        ok(cross.length >= 1, `n=${n} 的預設切法沒有任何一塊能從第一頁整隻走到第二頁（不會跨頁走動）`);
+    }
+    {
+        const z = W.yardZones(5)[4];
+        ok(P.yardPageAt(G.toDraw(z.minX, 0).x) === 1, '第 5 隻（解鎖送的 Keramon）的區域不在第二頁（鏡頭帶過去找不到牠）');
+    }
+    if (hasArt) {
+        // 真的會走到另一頁：跑一段時間，至少有一隻先後出現在兩頁
+        const r8 = { pets: pets(8), page2At: 1 };
+        const base = P.yardJoinStep(), onPage = [new Map(), new Map()];
+        for (let k = 0; k < 2400; k += 6) {
+            for (const pg of [0, 1]) {
+                const o = P.composeYard(core, r8, null, base + k, { wide: true, page: pg });
+                if (k === 0 && pg === 0) ok(o.lines.length === P.YARD_RENDER.h / 2, '裁出來的一頁高度不對');
+                for (const p of o.placed) if (p.dx + W.SPRITE > 0 && p.dx < RW) onPage[pg].set(p.ranchId, true);
+            }
+        }
+        const both = [...onPage[0].keys()].filter(id => onPage[1].has(id));
+        ok(both.length >= 1, '跑了 2400 拍，沒有任何一隻走到另一頁（跨頁走動沒接上）');
+        ok(new Set([...onPage[0].keys(), ...onPage[1].keys()]).size === 8, '兩頁加起來沒看到全部 8 隻');
+        // 裁切：第二頁的座標要減掉一頁寬（同一拍、同一隻，兩頁看到的位置差剛好一頁）
+        const a = P.composeYard(core, r8, null, base, { wide: true, page: 0 }), b = P.composeYard(core, r8, null, base, { wide: true, page: 1 });
+        const pa = a.placed.find(p => p.ranchId === 'p4'), pb = b.placed.find(p => p.ranchId === 'p4');
+        ok(pa && pb && pa.dx - pb.dx === RW, '兩頁裁出來的座標沒有差一頁寬（命中判定會點錯）');
+    } else skip++;
     if (hasArt) {
         const o = P.composeYardStandoff(core, pets(4), 'agumon', 0);
         ok(o.pets.length === 4 && o.enemy, '對峙要有我方 4 隻和敵人');
         ok(o.pets.every(p => p.x + 16 <= o.enemy.x), '我方要全部站在敵人左邊');
+        // 我方 IDLE_1 ↔ ANGRY 兩拍一輪（不是釘在 ANGRY）
+        const me = (s) => JSON.stringify(P.spriteDots(core, 'agumon', s, 'right', 'BATTLE'));
+        const idle = JSON.stringify(P.spriteDots(core, 'agumon', 0, 'right', 'IDLE_1')), angry = JSON.stringify(P.spriteDots(core, 'agumon', 0, 'right', 'ANGRY'));
+        ok(idle !== angry, '前提不成立：agumon 的 IDLE_1 跟 ANGRY 長一樣（測不出循環）');
+        ok(me(0) === idle && me(1) === angry && me(2) === idle && me(3) === angry, '對峙的我方不是 IDLE_1 ↔ ANGRY 兩拍循環');
+        const at = (s) => JSON.stringify(P.composeYardStandoff(core, pets(4), 'agumon', s, { enemyDx: 99 }).lines);   // 敵人移出畫面：只看我方
+        ok(at(0) !== at(1) && at(0) === at(2) && at(1) === at(3), '對峙畫面不是兩拍循環（我方釘死在同一幀，或循環長度不對）');
         const gone = P.composeYardStandoff(core, pets(4), 'agumon', 0, { enemyDx: 99 });
         ok(gone.enemy === null, '敵人退出畫面後還在');
     } else skip++;
+}
+
+// ── 兩頁交界不准停（停在線上兩頁都只看到半隻）──────────────────────
+console.log('— 兩頁交界不准停 —');
+{
+    const PL = require(path.join(__dirname, '..', 'src', 'daemon', 'plaza.js'));
+    const G = PL.YARD_GEOM_WIDE, RW = PL.YARD_RENDER.w, NS = W.YARD_FIELD_WIDE.noStay;
+    const straddle = [];
+    for (let x = W.YARD_FIELD_WIDE.minX; x <= W.YARD_FIELD_WIDE.maxX; x++) { const d = G.toDraw(x, 0).x; if (d < RW && d + W.SPRITE > RW) straddle.push(x); }
+    ok(NS && NS[0] === straddle[0] && NS[1] === straddle[straddle.length - 1], `交界不准停的範圍 ${NS} 跟畫面上橫跨交界的格子 ${straddle[0]}～${straddle[straddle.length - 1]} 對不上`);
+    ok(!W.YARD_FIELD.noStay, '一頁的場地也被設了交界（一頁沒有交界）');
+    let stops = 0, seamStops = 0, seamPass = 0;
+    for (const n of [5, 8]) {
+        const Z = W.yardZones(n);
+        ok(Z.every(z => z.noStay === NS), `n=${n} 的分區沒帶到交界範圍（legAt 看不到）`);
+        Z.forEach((z, i) => {
+            const occ = { seed: W.hash2(1000 + i * 37 + n, 0), joinStep: 0, anchor: W.zoneAnchor(z) };
+            let cache = null, prev = null;
+            for (let s = 0; s < 6000; s++) {
+                const p = W.posAt(occ, s, cache, z); cache = p.cache;
+                const on = p.x >= NS[0] && p.x <= NS[1];
+                if (!p.moving) { stops++; if (on) seamStops++; }
+                else if (on) seamPass++;
+                prev = p;
+            }
+        });
+    }
+    ok(stops > 1000, `前提不成立：模擬裡幾乎沒停過（${stops}）`);
+    ok(seamPass > 0, '前提不成立：沒有人走過交界（測不到）');
+    ok(seamStops === 0, `有 ${seamStops} 拍停在兩頁交界上（兩頁都只看到半隻）`);
 }
 
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));

@@ -394,7 +394,8 @@ function composePlaza(core, occupants, step, opts = {}) {
         caches.set(key, p.cache);
         // 手動模式放著太久 → 睡著：換成睡覺幀（兩張輪流，跟家裡睡覺同一個節奏）
         const react = p.sleeping ? (Math.floor(step / 2) % 2 ? 'SLEEP_2' : 'SLEEP_1') : o.react;
-        placed.push({ ...o, key, x: p.x, y: p.y, facing: p.facing, moving: p.moving,
+        // o.facing：指定面向（拍照：大家朝向照片中間）。沒給就照走路的面向。
+        placed.push({ ...o, key, x: p.x, y: p.y, facing: o.facing || p.facing, moving: p.moving,
                       sleeping: !!p.sleeping, react });
     }
 
@@ -839,6 +840,135 @@ function composeYard(core, ranch, activeState, step, opts = {}) {
                                            crop: opts.wide ? { x0: yardPageX(opts.page), w: YARD_RENDER.w } : null });
 }
 
+// ── 拍照（營地）─────────────────────────────────────────────────────
+// 大家集合到**一頁**裡（不管平常是不是兩頁寬），每隻隨機擺一個姿勢；前線那隻
+// 由前端從左下斜 45 度探頭（PHOTO_PEEK）。圍爐不排隊：照原本的座位拍。
+// 姿勢、站位只跟 seed 有關 → 同一個 seed 每次輪詢都排出一樣的照片，「再拍一張」換 seed 就重抽。
+const PHOTO_POSES = ['HAPPY', 'HAPPY_JUMP', 'EAT_1'];
+const PHOTO_JUMP  = 4;    // 跳起來多高（走路格；同摸摸的 JUMP_H）
+// 前線探頭的中心（細格）：左下角，只露出上半身。前端畫探頭用的也是這一份。
+// 16x16 轉 45 度 = 一個菱形（中心到尖角 8√2 ≈ 11.3）。站位避開這個菱形（r 多留一點），
+// 不是避開整個左下角 —— 用矩形避的話大家離探頭那隻太遠，像兩群人（2026-10-19 回報）。
+const PHOTO_PEEK  = { x: 3, y: 42, r: 12 };
+/** 這個站位（左上角，細格）被探頭蓋到多深：0 = 沒碰到。用站位方塊到探頭中心的 L1 距離跟菱形比 */
+function photoPeekHit(p) {
+    const S = W.SPRITE, P = PHOTO_PEEK;
+    const dx = Math.max(p.x - P.x, 0, P.x - (p.x + S)), dy = Math.max(p.y - P.y, 0, P.y - (p.y + S));
+    return Math.max(0, P.r - (dx + dy));
+}
+
+/** 每隻的姿勢（PHOTO_POSES 之一）。 */
+function photoPoses(n, seed) {
+    return Array.from({ length: n }, (_, i) => PHOTO_POSES[W.hash2(seed >>> 0, i + 1) % PHOTO_POSES.length]);
+}
+
+/** 姿勢 → 合成用的 react 幀 + 跳躍高度 */
+function photoReact(pose) {
+    return pose === 'HAPPY_JUMP' ? { frame: 'HAPPY', jump: PHOTO_JUMP } : { frame: pose, jump: 0 };
+}
+
+/**
+ * 一頁裡的站位（細格）。不排成一直線（2026-10-19：一排一排很呆板）：
+ * 「最佳候選」取樣 —— 每隻從一批亂數位置裡挑**離其他人、離探頭最遠**的那個，
+ * 結果是散開、自然、不規則，但不會擠成一團。亂數只跟 seed 有關（決定性）。
+ * 每隻朝向照片中間（左半邊的朝右、右半邊的朝左）。
+ */
+const PHOTO_TRIES = 200, PHOTO_ROUNDS = 12;
+const PHOTO_ROOM = 17;     // 兩隻離這麼遠（x、y 取大的，細格）就算「夠開」（≥ 16 不重疊），再遠不加分
+const PHOTO_PULL = 0.35;   // 往中間拉的力道（越大越擠向中間）
+// 7、8 隻已經把一頁塞滿了：再往中間拉只會疊在一起 → 不拉，照舊盡量散開
+const PHOTO_CROWD = 7;
+const PHOTO_GATHER = { x: 26, y: 21 };   // 集合點（細格，站位的左上角）= 照片正中央（2026-10-19 定：以靠中央為原則）
+const PHOTO_PEEK_OK = 3;   // 跟探頭重疊這麼深（細格）以內可以接受
+const PHOTO_ROW_DY = 6;     // 高度差不到這麼多（細格）就算「同一排」
+// 預覽開著時每次輪詢都會再問一次同一個 seed（約 1.5ms／次）→ 記住最近幾張
+const _photoSlotCache = new Map();
+function photoSlots(n, seed = 0) {
+    const ck = n + ':' + (seed >>> 0);
+    if (_photoSlotCache.has(ck)) return _photoSlotCache.get(ck).map(p => ({ ...p }));
+    const res = photoSlotsCalc(n, seed);
+    _photoSlotCache.set(ck, res);
+    if (_photoSlotCache.size > 16) _photoSlotCache.delete(_photoSlotCache.keys().next().value);
+    return res.map(p => ({ ...p }));
+}
+function photoSlotsCalc(n, seed) {
+    const RW = YARD_RENDER.w, RH = YARD_RENDER.h, S = W.SPRITE;
+    const X1 = RW - S, Y0 = 4, Y1 = RH - S;
+    // 兩隻之間的「距離」：取 x、y 方向較大的那個 —— ≥ 一隻的寬（16）就保證不重疊。
+    // 塞滿的時候（7、8 隻）改用中心距（y 放大一點）：要的是「整體盡量散開」，那個量法疊得比較少
+    const crowd = n >= PHOTO_CROWD;
+    const gap = crowd ? (a, b) => Math.hypot(a.x - b.x, (a.y - b.y) * 1.2)
+                      : (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    // 探頭那塊：身體有碰到就扣分（離越深扣越多）
+    // 跟探頭小部分重疊可以（PHOTO_PEEK_OK 細格以內不扣分），再深才扣
+    const peekHit = (p) => Math.max(0, photoPeekHit(p) - PHOTO_PEEK_OK);
+    // 往中間集中（2026-10-19）：離得夠開（PHOTO_ROOM）之後，再遠也不加分，改成越靠集合點（正中央）越好。
+    // 試過把集合點偏向探頭，使用者定案「以靠中央為原則」，探頭那邊改成允許小部分重疊（PHOTO_PEEK_OK）
+    const CX = PHOTO_GATHER.x, CY = PHOTO_GATHER.y;
+    const toMid = (p) => Math.hypot(p.x - CX, (p.y - CY) * 1.2);
+    const room = crowd ? Infinity : PHOTO_ROOM, pull = crowd ? 0 : PHOTO_PULL;
+    const one = (r) => {
+        let k = 0;
+        const rnd = () => W.hash2((seed >>> 0) ^ Math.imul(r + 1, 0x9e3779b1), 1000 + k++) / 4294967296;
+        const out = [];
+        for (let i = 0; i < n; i++) {
+            let best = null, bestScore = -Infinity;
+            for (let t = 0; t < PHOTO_TRIES; t++) {
+                const p = { x: Math.round(rnd() * X1), y: Math.round(Y0 + rnd() * (Y1 - Y0)) };
+                // 塞滿時第一隻（沒有鄰居）偏好離邊遠一點：一開始就貼邊，剩下的位置會被切得很零碎
+                const edge = Math.min(p.x, X1 - p.x, p.y - Y0, Y1 - p.y);
+                const near = out.length ? Math.min(...out.map(q => gap(p, q))) : crowd ? 20 + edge : RW;
+                // 往中間拉會把大家拉到同一個高度（排成一直線，3 隻最明顯）→ 跟別人幾乎一樣高的扣分
+                const sameRow = out.filter(q => Math.abs(q.y - p.y) < PHOTO_ROW_DY).length;
+                const score = Math.min(near, room) - toMid(p) * pull - sameRow * pull * 12 - peekHit(p) * 4;
+                if (score > bestScore) { bestScore = score; best = p; }
+            }
+            out.push(best);
+        }
+        let worst = RW;   // 這一版最擠的那一對
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) worst = Math.min(worst, gap(out[i], out[j]));
+        const spread = out.reduce((a, p) => a + toMid(p), 0) / n;
+        return { out, worst: Math.min(worst, room) * 4 - spread * pull - Math.max(0, ...out.map(peekHit)) * 4 };
+    };
+    // 擺好幾版、挑最不擠的那一版（取樣是貪心的，單一版偶爾會把最後幾隻擠在一起）
+    let pick = null;
+    for (let r = 0; r < PHOTO_ROUNDS; r++) { const c = one(r); if (!pick || c.worst > pick.worst) pick = c; }
+    const mid = RW / 2;
+    return pick.out.map(p => ({ ...p, facing: p.x + S / 2 < mid ? 'right' : 'left' }));
+}
+
+/**
+ * 拍照用的營地畫面（一頁）。opts.seed 決定姿勢；opts.feast = 圍爐 → 照座位拍（只換姿勢）。
+ * 其他 opts（acc / swap / swapSalt / caches）同 composeYard。回傳同 composeYard。
+ */
+function composeYardPhoto(core, ranch, activeState, step, opts = {}) {
+    const pets = (ranch && ranch.pets) || [];
+    if (!pets.length) return null;
+    const poses = photoPoses(pets.length, opts.seed || 0);
+    if (opts.feast) {
+        const react = new Map(pets.map((p, i) => [p.id, photoReact(poses[i])]));
+        return composeYard(core, ranch, activeState, step, { ...opts, wide: false, react });
+    }
+    const F = W.YARD_FIELD, slots = photoSlots(pets.length, opts.seed || 0);
+    const occ = [];
+    pets.forEach((p, i) => {
+        const id = p.state && p.state.characterId;
+        if (!id) return;
+        // 走路格裡的一個點當成牠的可走範圍 → posAt 一定停在那裡（站好不動）
+        const f = YARD_GEOM.fromDraw(slots[i].x, slots[i].y);
+        const fx = Math.max(F.minX, Math.min(F.maxX, f.x)), fy = Math.max(F.minY, Math.min(F.maxY, f.y));
+        const zone = { ...F, minX: fx, maxX: fx, minY: fy, maxY: fy };
+        const r = photoReact(poses[i]);
+        occ.push({ key: 'photo:' + p.id, ranchId: p.id, char: id,
+                   name: core.getDisplayName ? core.getDisplayName(id) : id,
+                   seed: W.hash2(hashStr(p.id), 0), joinStep: 0, origin: null,
+                   react: r.frame, jump: r.jump, facing: slots[i].facing, pose: poses[i],
+                   zoneIdx: i, field: zone, anchor: W.zoneAnchor(zone) });
+    });
+    return composePlaza(core, occ, step, { ...opts, npc: false, field: F, feast: false,
+                                           render: { w: YARD_RENDER.w, h: YARD_RENDER.h, toDraw: YARD_GEOM.toDraw } });
+}
+
 // ── 營地第二頁（docs/yard-page2-spec.md）──────────────────────────────
 // 解鎖且超過 4 隻 → 兩頁合成一個兩倍寬的場地一起走（跨頁走動，2026-10-16）。
 // 「頁」只是鏡頭：一次看半張，換頁 = 鏡頭往旁邊滑（前端拿兩頁的畫面並排平移）。
@@ -894,6 +1024,7 @@ module.exports = {
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, nameTags, NAME_DEFAULT_COLOR, cellToAnsi, occluded, NPCS,
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
+    PHOTO_POSES, PHOTO_PEEK, PHOTO_GATHER, photoPeekHit, photoPoses, photoSlots, composeYardPhoto,
     YARD_RENDER, yardToDraw, yardFromDraw,
     PLAZA_RENDER, plazaToDraw, PLAZA_LIVE_FIELD, composePlazaLive,
     FEAST_SIZES, FEAST_ARC_DEG, feastLayout, feastTable, scaleDots, packDots,

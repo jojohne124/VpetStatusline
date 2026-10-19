@@ -106,6 +106,8 @@ const UI_BUTTONS = [
     ['jogress', '🧬 合體進化', { scope: 'home', when: 'jogress', accent: true }],
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
+    // 拍照（docs/yard-photo-spec.md）：只在營地。不是送給 daemon 的指令，前端自己處理（photoTake）
+    ['photo',  '📷 拍照', { scope: 'yard' }],
     ['album',  '📖 圖鑑', { scope: 'both' }],
     ['yard',   '⛺ 營地', { scope: 'both' }],
     // 廣場（docs/plaza-spec.md）：帶前線那隻去。只在前線出現；進去之後只剩「離開」。
@@ -1580,6 +1582,19 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
            transition:opacity .15s,background .15s}
   .pgarrow:hover{opacity:1;background:rgba(0,0,0,.7)}
   #pgprev{left:6px} #pgnext{right:6px}
+  /* 拍照：快門閃光＋照片預覽（按鈕在圖鑑左邊，見 UI_BUTTONS） */
+  #photoflash{position:absolute;inset:0;z-index:6;background:#fff;opacity:0;pointer-events:none}
+  #photoflash.on{animation:photoflash .45s ease-out}
+  @keyframes photoflash{0%{opacity:.95}100%{opacity:0}}
+  #photobox{position:fixed;inset:0;z-index:9200;display:none;align-items:center;justify-content:center;background:rgba(1,4,9,.7)}
+  #photobox.on{display:flex}
+  #photocard{background:#f4f1ea;padding:12px 12px 10px;border-radius:4px;box-shadow:0 8px 30px rgba(0,0,0,.5);max-width:calc(100vw - 32px);
+             text-align:center;color:#222;font:13px/1.5 "Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif}
+  #photoimg{display:block;max-width:100%;image-rendering:pixelated;border:1px solid #ccc}
+  #photocard .btns{margin-top:10px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+  #photocard button{padding:4px 12px;border-radius:6px;border:1px solid #888;background:#fff;cursor:pointer;font:inherit}
+  #photocard button.pri{background:#238636;border-color:#238636;color:#fff}
+  #photomsg{margin-top:6px;min-height:1.5em;font-size:12px;color:#555;word-break:break-all}
   #pgdots{position:absolute;left:0;right:0;bottom:15px;z-index:4;display:none;text-align:center;pointer-events:none;line-height:0}
   #pgdots i{display:inline-block;width:7px;height:7px;margin:0 3px;border-radius:50%;background:rgba(255,255,255,.35);
             box-shadow:0 0 2px rgba(0,0,0,.8)}
@@ -1589,14 +1604,16 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="helptoast">❓ 點想問的地方　（Esc 或右鍵離開）</div>
 <div id="helpdim"><div id="helphole"></div><div id="helpbox"><canvas id="helpcv" width="16" height="16"></canvas>
   <div style="flex:1;min-width:0"><div class="who">🎓 Terriermon 助手</div><div class="hd"></div><div class="bd"></div><div class="ft">點任何地方關閉</div></div></div></div>
+<div id="photobox"><div id="photocard"><img id="photoimg" alt="營地照片"><div id="photomsg"></div>
+  <div class="btns"><button id="photosave" class="pri">💾 儲存</button><button id="photoagain">🔄 再拍一張</button><button id="photoclose">關閉</button></div></div></div>
 <div id="story"><div id="storypanel"><div id="storycut"><canvas id="storycv" width="32" height="16"></canvas><canvas id="storyfx" width="36" height="20"></canvas></div>
   <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && o.scope === 'plaza' ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
       <select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
@@ -1840,7 +1857,8 @@ let lastFetch=Date.now();
 // 一個看院子，daemon 不需要知道。
 let view = 'home';
 // 營地第二頁（見下方「營地第二頁」那段）：目前看第幾頁、事件演到哪、空降中的那隻、對話框
-let yardPage=0, sliding=false;
+let photoSeed=null, photoBusy=false, photoShot=null;   // 拍照中：seed（/yard?photo=）、合成好的照片
+let yardPage=0, sliding=false, slideOv=null, slideMask=null;   // 翻頁滑行中：蓋在上面的快照／兩頁的角色層並排（天氣遮罩用）
 let p2Phase=null, p2WaitAt=0, p2NoticeShown=false, p2Drop=null;
 let story=null;   // { lines, i, done, typing, text }
 // 這個元素在目前的畫面要不要出現。廣場是例外：進去之後**只剩**廣場自己的東西
@@ -2062,7 +2080,14 @@ function wxDraw(ts){
     mg.globalCompositeOperation='source-over'; mg.clearRect(0,0,w,h);
     for(let i=0;i<WX_ON_PET;i++) mg.drawImage(P.fx,0,0);
     mg.globalCompositeOperation='destination-in';
-    mg.drawImage(pet,0,0,w,h);
+    // 翻頁滑行中：底下的角色畫布已經是新的一頁（而且藏起來了），拿它當遮罩的話，陽光會照出
+    // 新頁角色的輪廓（2026-10-19 回報，跟天空透出新頁同一類）。改用滑行用的「只有角色」那張
+    // 兩頁並排圖（slideMask，不含地板 —— 含地板的話整片地面都會被當成角色加亮），
+    // 照快照目前平移到的位置對齊。
+    if(slideOv&&slideMask){
+      const m=new DOMMatrixReadOnly(getComputedStyle(slideOv).transform), k=w/pet.offsetWidth;
+      mg.drawImage(slideMask, m.m41*k, 0, slideOv.offsetWidth*k, h);
+    } else mg.drawImage(pet,0,0,w,h);
     mg.globalCompositeOperation='source-over';
     g.drawImage(P.mk,0,0);
   }
@@ -2756,6 +2781,7 @@ async function pollYard(){
   qs.push('ds='+yardSalt);
   if(yardPage) qs.push('pg='+yardPage);
   if(p2Drop&&!p2Drop.release) qs.push('drop='+encodeURIComponent(p2Drop.id));
+  if(photoSeed!=null) qs.push('photo='+photoSeed);
   const y = await (await fetch('/yard'+(qs.length?'?'+qs.join('&'):''),
                                {cache:'no-store'})).json();
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
@@ -2783,6 +2809,7 @@ async function pollYard(){
     ? '營地 '+y.kept+'/'+y.cap+'　'+y.pets.map(p=>p.code).join('　')
     : '營地是空的 —— 進階區的「📥 收進營地」可以把現役收進來（隨時換得回去）';
   pageNav(y.pages||1);
+  photoNav(y);
   document.getElementById('kind').textContent='yard';
   document.getElementById('tick').textContent='#'+y.step;
   applyWeather(y.weather);
@@ -3406,6 +3433,7 @@ document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventLis
     sendCmd('plazaLeave').then(()=>setView('home'));
     return;
   }
+  if(b.dataset.cmd==='photo'){ photoTake(); return; }
   // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
   if(b.dataset.cmd==='yard'){
     if(view!=='yard'){
@@ -3919,7 +3947,9 @@ async function slideToPage(to, dropId){
   ov.style.cssText='position:absolute;z-index:1;pointer-events:none;image-rendering:pixelated;max-width:none;'
     +'left:'+pet.offsetLeft+'px;top:'+pet.offsetTop+'px;width:'+(W*2)+'px;height:'+A.height+'px;'
     +'transition:transform '+SLIDE_MS+'ms ease-in-out;transform:translateX('+(dir>0?0:-W)+'px)';
-  document.getElementById('stage').appendChild(ov);
+  document.getElementById('stage').appendChild(ov); slideOv=ov;
+  const mk=document.createElement('canvas'); mk.width=W*2; mk.height=A.height;
+  mk.getContext('2d').drawImage(pet, dir>0?0:W, 0); slideMask=mk;
   const live=SLIDE_LIVE.map(id=>document.getElementById(id)).filter(Boolean);
   live.forEach(e=>{ e.style.visibility='hidden'; });
   try{
@@ -3928,14 +3958,90 @@ async function slideToPage(to, dropId){
     try{ await pollYard(); }catch(e){}
     sceneDraw(performance.now()+1e6);
     g.drawImage(snapStage(), dir>0?W:0, 0);   // 藏起來（visibility）照樣讀得到畫布內容
+    mk.getContext('2d').drawImage(pet, dir>0?W:0, 0);
     ov.getBoundingClientRect();
     ov.style.transform='translateX('+(dir>0?-W:0)+'px)';
     await new Promise(r=>setTimeout(r,SLIDE_MS+40));
   } finally {
     live.forEach(e=>{ e.style.visibility=''; });
-    ov.remove(); sliding=false;
+    ov.remove(); slideOv=null; slideMask=null; sliding=false;
   }
 }
+// ── 拍照 ─────────────────────────────────────────────────────────────
+// 按下去：換一個 seed 跟伺服器要「大家排好、擺姿勢」的那一張（/yard?photo=），畫到舞台上，
+// 再把舞台各層（背景、節日、角色、天氣）疊成一張，前線那隻從左邊斜 45 度探頭進來，閃光、跳出預覽。
+// 預覽開著的時候舞台維持拍照的樣子；關掉才放大家回去走。
+// 按鈕顯示與否歸 data-scope 管（只在營地）；這裡只管能不能按：空營地、事件進行中不能拍
+function photoNav(y){
+  const b=document.querySelector('#controls button[data-cmd="photo"]');
+  if(b) b.disabled=!(y&&y.kept&&!p2Phase&&!y.event);
+}
+async function photoTake(){
+  if(photoBusy||sliding||p2Phase||view!=='yard'||!lastYard||!lastYard.kept) return;
+  photoBusy=true;
+  try{
+    photoSeed=Math.floor(Math.random()*4294967296);
+    await pollYard();
+    if(!lastYard||!lastYard.photo){ photoSeed=null; return; }   // 伺服器不給拍（事件剛開始之類）
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));   // 背景、天氣先畫上這一幀
+    photoShot=photoCompose(lastYard.photo.front, lastYard.photo.peek);
+    const fl=document.getElementById('photoflash');
+    fl.classList.remove('on'); fl.getBoundingClientRect(); fl.classList.add('on');
+    document.getElementById('photoimg').src=photoShot;
+    document.getElementById('photomsg').textContent='';
+    document.getElementById('photobox').classList.add('on');
+  } finally { photoBusy=false; }
+}
+// 舞台各層 → 一張圖。天氣層（wx）是 CSS 像素大小，縮放到同一張
+function photoCompose(front, peek){
+  // 先鋪舞台的底色：有些背景（像聖誕夜空）天空那塊是透明的，靠 #stage 的底色撐著 —— 不鋪的話照片上那塊是透明的
+  const s=snapStage(), c=document.createElement('canvas'); c.width=s.width; c.height=s.height;
+  const g=c.getContext('2d');
+  g.fillStyle=getComputedStyle(document.getElementById('stage')).backgroundColor||'#181818';
+  g.fillRect(0,0,c.width,c.height); g.drawImage(s,0,0);
+  const wx=document.getElementById('wx');
+  if(wx.width) g.drawImage(wx,0,0,c.width,c.height);
+  if(front&&front.dots) photoPeek(g, front.dots, peek||{x:3,y:42});
+  return c.toDataURL('image/png');
+}
+// 前線探頭：先畫成原本大小（1 點 = CW × CH/2），再整張轉 45 度（最近點取樣，保持像素風）。
+// 中心 = 伺服器給的 peek（細格，左下角）→ 只露出上半身，像從畫面外斜斜探進來。
+// 位置跟伺服器排站位時避開的那塊是同一份（plaza.PHOTO_PEEK），兩邊不會對不上
+function photoPeek(g, dots, peek){
+  const DW=CW, DH=CH/2, o=document.createElement('canvas');
+  o.width=dots[0].length*DW; o.height=dots.length*DH;
+  const og=o.getContext('2d');
+  for(let y=0;y<dots.length;y++) for(let x=0;x<dots[y].length;x++){
+    const c=dots[y][x]; if(!c) continue;
+    og.fillStyle='rgb('+c[0]+','+c[1]+','+c[2]+')'; og.fillRect(x*DW,y*DH,DW,DH);
+  }
+  g.save(); g.imageSmoothingEnabled=false;
+  g.translate(peek.x*DW, peek.y*DH); g.rotate(Math.PI/4);
+  g.drawImage(o,-o.width/2,-o.height/2);
+  g.restore();
+}
+function photoClose(){
+  document.getElementById('photobox').classList.remove('on');
+  photoSeed=null; photoShot=null;
+}
+document.getElementById('photoclose').addEventListener('click',photoClose);
+document.getElementById('photoagain').addEventListener('click',()=>{
+  document.getElementById('photobox').classList.remove('on'); photoTake();
+});
+document.getElementById('photosave').addEventListener('click',async()=>{
+  const msg=document.getElementById('photomsg');
+  if(!photoShot) return;
+  msg.textContent='儲存中…';
+  try{
+    const r=await (await fetch('/photo',{method:'POST',body:JSON.stringify({png:photoShot})})).json();
+    if(!r.ok) throw new Error(r.error||'存不了');
+    msg.innerHTML='';
+    msg.appendChild(document.createTextNode('已存到 '+r.path+'　'));
+    const a=document.createElement('button'); a.textContent='📂 開啟資料夾';
+    a.addEventListener('click',()=>fetch('/photoOpen',{method:'POST',body:JSON.stringify({path:r.path})}));
+    msg.appendChild(a);
+  }catch(e){ msg.textContent='⚠️ '+e.message; }
+});
 // 翻頁的箭頭與點點。事件進行中、滑行中都不給翻
 function pageNav(pages){
   const show=view==='yard'&&pages>1&&!p2Phase;
@@ -4054,7 +4160,74 @@ const POLL_MS={home:500,yard:${YT.POLL_MS},plaza:250};   // 廣場：一拍 750m
 (function pollLoop(){ poll().finally(()=>setTimeout(pollLoop, POLL_MS[view]||500)); })();
 </script></body></html>`;
 
+// 拍照：前線那隻的點陣（開心幀、面向右、節日配件照穿）。讀不到美術就不探頭（照片照樣拍）
+function photoFront(st, acc) {
+    try {
+        const id = st && st.characterId;
+        let dots = id ? plaza.spriteDots(core, id, 0, 'right', 'HAPPY') : null;
+        if (dots && acc) dots = FEST.dress(dots, acc, 'right').dots;
+        return dots ? { char: id, dots } : null;
+    } catch (e) { return null; }
+}
+// 照片存哪：~/Pictures/vpet（沒有 Pictures 就放家目錄底下的 vpet）。AGUMON_PHOTO_DIR 給測試指到暫存目錄
+function photoDir() {
+    if (process.env.AGUMON_PHOTO_DIR) return process.env.AGUMON_PHOTO_DIR;
+    const pics = path.join(os.homedir(), 'Pictures');
+    return path.join(fs.existsSync(pics) ? pics : os.homedir(), 'vpet');
+}
+function photoName(now = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+    return '營地-' + now.getFullYear() + '-' + p(now.getMonth() + 1) + '-' + p(now.getDate())
+         + '-' + p(now.getHours()) + p(now.getMinutes()) + p(now.getSeconds()) + '.png';
+}
+
 const server = http.createServer((req, res) => {
+    // 拍照存檔：前端合成好的 PNG（data URL）。只收 PNG、檔名伺服器自己取，不讓頁面決定路徑
+    if (req.method === 'POST' && req.url === '/photo') {
+        let body = '';
+        req.on('data', c => { body += c; if (body.length > 20 * 1024 * 1024) req.destroy(); });
+        req.on('end', () => {
+            try {
+                const { png } = JSON.parse(body);
+                const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(png || ''));
+                if (!m) throw new Error('不是 PNG');
+                const buf = Buffer.from(m[1], 'base64');
+                const dir = photoDir();
+                fs.mkdirSync(dir, { recursive: true });
+                let file = path.join(dir, photoName());
+                for (let i = 2; fs.existsSync(file); i++) file = path.join(dir, photoName().replace(/\.png$/, '-' + i + '.png'));
+                fs.writeFileSync(file, buf);
+                console.log('   📷 照片存到 ' + file);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: true, path: file, size: buf.length }));
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+    // 打開照片所在的資料夾（並選取剛存的那張）。只開 photoDir 底下的檔，別的路徑一律不理
+    if (req.method === 'POST' && req.url === '/photoOpen') {
+        let body = '';
+        req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
+        req.on('end', () => {
+            let ok = false;
+            try {
+                const f = path.resolve(String(JSON.parse(body).path || ''));
+                const dir = path.resolve(photoDir());
+                if (f.startsWith(dir + path.sep) && fs.existsSync(f)) {
+                    if (process.platform === 'win32') spawn('explorer.exe', ['/select,', f], { detached: true, stdio: 'ignore' }).unref();
+                    else if (process.platform === 'darwin') spawn('open', ['-R', f], { detached: true, stdio: 'ignore' }).unref();
+                    else spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+                    ok = true;
+                }
+            } catch (e) { console.log('   ⚠️ 開不了照片資料夾：' + e.message); }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok }));
+        });
+        return;
+    }
     // 舞台底圖：使用者自己放的圖（scripts/make-bg.js 產出）。沒放就 404，CSS 退回純色。
     // 刻意不內嵌進 js、也不隨 release 出貨 —— 底圖是個人化的東西，每個人的照片不一樣，
     // 塞進 repo 只會讓 daemon.js 或 release 無謂變肥。
@@ -4098,7 +4271,10 @@ const server = http.createServer((req, res) => {
             // 分頁：事件進行中只有一頁（對峙畫面）；圍爐大家坐同一桌也不分頁。
             // 兩頁 = 兩頁寬的場地大家一起走（跨頁走動），page 只決定鏡頭看哪一半。
             const solo  = !!(ev && ev.standoff);
-            const wide  = !solo && plaza.yardWide(ranch, { feast });
+            // ?photo=<seed>：拍照。大家集合到一頁排好、隨機擺姿勢（圍爐照座位拍）。事件進行中不拍
+            const photoQ = yq.get('photo');
+            const photo = photoQ != null && !ev && (ranch.pets || []).length ? (Number(photoQ) >>> 0) : null;
+            const wide  = !solo && photo == null && plaza.yardWide(ranch, { feast });
             const pages = wide ? 2 : 1;
             const page  = Math.max(0, Math.min(pages - 1, Number(yq.get('pg')) || 0));
             const G     = wide ? plaza.YARD_GEOM_WIDE : plaza.YARD_GEOM;
@@ -4115,7 +4291,12 @@ const server = http.createServer((req, res) => {
             }
             const sto   = ev && ev.standoff ? plaza.composeYardStandoff(core, ranch.pets || [], core.PAGE2_FINAL, step,
                                                                          { enemyDx: ev.enemyDx || 0 }) : null;
-            const out   = sto ? null : plaza.composeYard(core, pr, st, step,
+            const out   = sto ? null : photo != null ? plaza.composeYardPhoto(core, pr, st, step,
+                                            { seed: photo, feast, caches: new Map(),
+                                              acc: fest && festOpt.costume ? fest.acc : null,
+                                              swap: fest && festOpt.costume ? fest.swap || null : null,
+                                              swapSalt: yq.get('ds') || null })
+                                        : plaza.composeYard(core, pr, st, step,
                                             { caches: yardCaches, react, wide, page,
                                               layout: zoneLayout,
                                               acc: fest && festOpt.costume ? fest.acc : null,
@@ -4155,7 +4336,7 @@ const server = http.createServer((req, res) => {
             // 尺寸、每隻的位置、範圍框一律換算成畫出來的座標再送。
             // 跨頁時一律換成**這一頁**的座標（減掉 px0）；另一頁的框落在畫布外，前端自然畫不到
             const D = (x, y) => { const d = G.toDraw(x, y); return { x: d.x - px0, y: d.y }; }, R = plaza.YARD_RENDER;
-            const zones = sto ? [] : plaza.yardZonesFor(core, (pr.pets || []).length, zoneLayout, G).map(z => {
+            const zones = sto || photo != null ? [] : plaza.yardZonesFor(core, (pr.pets || []).length, zoneLayout, G).map(z => {
                 const lo = D(z.minX, z.minY), hi = D(z.maxX, z.maxY), an = plaza.zoneAnchor(z), a = D(an.x, an.y);
                 return { minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, anchor: { x: a.x, y: a.y } };
             });
@@ -4181,6 +4362,9 @@ const server = http.createServer((req, res) => {
                      festival: sto ? null : festView(fest), festCostume: festOpt.costume,
                      cap: core.ranchCap(ranch),
                      page, pages, drop,
+                     // 拍照：前線那隻（前端從左邊斜 45 度探頭畫上去）。開心幀、面向右，穿上節日配件
+                     photo: photo != null ? { seed: photo, peek: { x: plaza.PHOTO_PEEK.x, y: plaza.PHOTO_PEEK.y },
+                                              front: photoFront(st, fest && festOpt.costume ? fest.acc : null) } : null,
                      event: ev ? { stage: ev.stage, win: ev.win, gaveUp: ev.gaveUp, keramonId: ev.keramonId, exiting: !!ev.exiting,
                                    battle: ev.battle || null, fighter: ev.fighter || null,
                                    keramonPage } : null,

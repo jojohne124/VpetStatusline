@@ -997,6 +997,68 @@ console.log('— 營地第二頁：分頁與對峙 —');
     } else skip++;
 }
 
+// ── 拍照：大家集合到一頁、隨機擺姿勢（圍爐照座位拍）─────────────────────
+console.log('— 拍照 —');
+if (core) {
+    const PL = require(path.join(__dirname, '..', 'src', 'daemon', 'plaza.js'));
+    const CH = ['agumon', 'gabumon', 'palmon', 'tentomon', 'biyomon', 'patamon', 'gomamon', 'renamon'];
+    const mk = (n) => ({ page2At: 1, pets: CH.slice(0, n).map((c, i) => ({ id: 'ph' + i, state: { characterId: c } })) });
+    const RW = PL.YARD_RENDER.w, RH = PL.YARD_RENDER.h, S = W.SPRITE;
+    for (const n of [1, 3, 4, 5, 8]) {
+        const o = PL.composeYardPhoto(core, mk(n), {}, 100, { seed: 12345 });
+        ok(o && o.placed.length === n, `拍照 ${n} 隻：照片裡不是 ${n} 隻`);
+        if (!o) continue;
+        ok(o.placed.every(p => p.dx >= 0 && p.dx + S <= RW && p.dy >= 0 && p.dy + S <= RH), `拍照 ${n} 隻：有人在照片（一頁）外面`);
+        ok(o.placed.every(p => PL.PHOTO_POSES.includes(p.pose)), `拍照 ${n} 隻：姿勢不在開心／跳＋開心／吃東西裡`);
+        ok(o.placed.every(p => p.pose !== 'HAPPY_JUMP' || p.dy < p.gy), `拍照 ${n} 隻：「跳＋開心」沒有跳起來`);
+        const sl = PL.photoSlots(n, 12345);
+        ok(o.placed.every(p => p.facing === sl[+p.ranchId.slice(2)].facing)
+           && sl.every(q => (q.x + S / 2 < RW / 2) === (q.facing === 'right')), `拍照 ${n} 隻：沒有朝向照片中間`);
+        ok(o.lines.length === RH / 2, `拍照 ${n} 隻：照片不是一頁的高度`);
+    }
+    // 同一個 seed → 同一張（輪詢每次都一樣）；換 seed → 姿勢會變（再拍一張）
+    const a = PL.photoPoses(8, 7).join(), b = PL.photoPoses(8, 7).join();
+    ok(a === b, '同一個 seed 姿勢不一樣（預覽時每次輪詢都會換姿勢）');
+    ok(new Set([1, 2, 3, 4, 5, 6].map(s => PL.photoPoses(8, s).join())).size > 1, '換 seed 姿勢都一樣（再拍一張不會重抽）');
+    const all = new Set(); for (let s = 0; s < 20; s++) PL.photoPoses(8, s).forEach(x => all.add(x));
+    ok(all.size === 3, '三種姿勢沒有都抽得到');
+    // 站位：靠中央、散開、不排成一直線、盡量不跟探頭重疊（小部分可以）；同一個 seed 同一張、換 seed 會換
+    // 探頭 = 16x16 轉 45 度的菱形（中心到尖角 8√2）：站位方塊伸進菱形多深（獨立重算，不用 photoPeekHit）
+    const PK = PL.PHOTO_PEEK, SEEDS = 60, MID = { x: (RW - S) / 2, y: 21 };
+    const depth = (q) => 8 * Math.SQRT2 - (Math.max(q.x - PK.x, 0, PK.x - (q.x + S)) + Math.max(q.y - PK.y, 0, PK.y - (q.y + S)));
+    for (let n = 1; n <= 8; n++) {
+        let ov = 0, deep = 0, touch = 0, flat = 0, d = 0, c = 0;
+        for (let sd = 0; sd < SEEDS; sd++) {
+            const s = PL.photoSlots(n, sd);
+            for (let i = 0; i < n; i++) {
+                const dp = depth(s[i]);
+                if (dp > 0) touch++;
+                if (dp > 4) deep++;
+                d += Math.hypot(s[i].x - MID.x, s[i].y - MID.y); c++;
+                for (let j = i + 1; j < n; j++) if (Math.abs(s[i].x - s[j].x) < S && Math.abs(s[i].y - s[j].y) < S) ov++;
+            }
+            // 一直線 = 最高跟最低差不到 10 細格（高度只差一兩格看起來還是一排）
+            if (n >= 3 && Math.max(...s.map(p => p.y)) - Math.min(...s.map(p => p.y)) < 10) flat++;
+        }
+        // 跟探頭重疊：只允許擦到邊（深度 4 細格以內），而且平均一張最多 1 隻碰到
+        ok(deep === 0, `拍照 ${n} 隻：有 ${deep} 次被探頭擋住一大塊`);
+        ok(touch / SEEDS <= 1.2, `拍照 ${n} 隻：太常跟探頭疊在一起（${SEEDS} 張共 ${touch} 次）`);
+        // 5 隻以內一定不重疊；6～8 隻空間有限，平均一張最多 2 對稍微碰到
+        ok(n <= 5 ? ov === 0 : ov / SEEDS <= 2, `拍照 ${n} 隻：重疊太多（${SEEDS} 張共 ${ov} 對）`);
+        ok(flat === 0, `拍照 ${n} 隻：有 ${flat} 張排成一直線（呆板）`);
+        // 靠中央為原則（2026-10-19）：2～6 隻平均離照片中心不超過 16.5 細格（只求散開的舊版是 20～23）
+        if (n >= 2 && n <= 6) ok(d / c <= 16.5, `拍照 ${n} 隻：沒往中間集中（平均離中心 ${(d / c).toFixed(1)} 細格）`);
+    }
+    ok(JSON.stringify(PL.photoSlots(6, 9)) === JSON.stringify(PL.photoSlots(6, 9)), '同一個 seed 站位不一樣（預覽時每次輪詢會跳）');
+    ok(new Set([1, 2, 3, 4].map(sd => JSON.stringify(PL.photoSlots(6, sd)))).size > 1, '換 seed 站位都一樣（再拍一張不會重排）');
+    // 圍爐：照原本的座位拍，只換姿勢
+    const r6 = mk(6);
+    const base = PL.composeYard(core, r6, {}, 100, { feast: true, caches: new Map() });
+    const ph = PL.composeYardPhoto(core, r6, {}, 100, { seed: 99, feast: true, caches: new Map() });
+    const pos = (o) => o.placed.map(p => p.ranchId + '@' + p.gx + ',' + p.gy).sort().join();
+    ok(base && ph && pos(base) === pos(ph), '圍爐拍照沒有照原本的座位');
+}
+
 // ── 兩頁交界不准停（停在線上兩頁都只看到半隻）──────────────────────
 console.log('— 兩頁交界不准停 —');
 {

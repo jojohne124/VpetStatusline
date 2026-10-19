@@ -64,7 +64,8 @@ const MAIN_SD = fs.mkdtempSync(path.join(require('os').tmpdir(), 'vpet-pagetest-
 }
 const child = spawn(process.execPath,
     [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
-    { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT), AGUMON_STATE_DIR: MAIN_SD }, stdio: 'ignore' });
+    { env: { ...process.env, AGUMON_DAEMON_PORT: String(PORT), AGUMON_STATE_DIR: MAIN_SD,
+             AGUMON_PHOTO_DIR: path.join(MAIN_SD, 'photos') }, stdio: 'ignore' });
 
 const done = (code) => { try { child.kill(); } catch (e) {} try { fs.rmSync(MAIN_SD, { recursive: true, force: true }); } catch (e) {} process.exit(code); };
 
@@ -736,6 +737,28 @@ setTimeout(async () => {
         const st = JSON.parse(await get('/state'));
         ok(typeof st.tick === 'number', '/state 沒有回傳 tick');
         ok(typeof st.bgV === 'number', '/state 沒帶底圖版本 bgV（底圖存檔後要重啟 daemon 才換得到）');
+
+        // 拍照：/yard?photo= 一頁、不帶走動範圍框；/photo 存到照片資料夾（測試指到暫存目錄）
+        {
+            const yp = JSON.parse(await get('/yard?photo=4242'));
+            if (yp.kept) {
+                ok(yp.photo && yp.photo.seed === 4242 && yp.pages === 1 && yp.zones.length === 0, '/yard?photo= 沒排成一頁的照片');
+                ok(yp.pets.length === yp.kept, '拍照少了人（' + yp.pets.length + '/' + yp.kept + '）');
+                ok(!yp.photo.front || (Array.isArray(yp.photo.front.dots) && yp.photo.front.dots.length >= 16), '前線探頭的點陣不對');
+            } else console.log('  （營地是空的，略過拍照排位）');
+            const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+            const sv = JSON.parse(await post(PORT, '/photo', { png }));
+            const dir = path.join(MAIN_SD, 'photos');
+            ok(sv.ok && sv.path && path.dirname(sv.path) === dir && fs.existsSync(sv.path), '照片沒存進照片資料夾：' + JSON.stringify(sv));
+            ok(sv.ok && /營地-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(sv.path), '照片檔名不是「營地-日期-時間.png」');
+            const sv2 = JSON.parse(await post(PORT, '/photo', { png }));
+            ok(sv2.ok && sv2.path !== sv.path && fs.existsSync(sv.path), '同一秒存兩張蓋掉了前一張');
+            const bad = JSON.parse(await post(PORT, '/photo', { png: 'data:text/html;base64,PGgxPg==' }));
+            ok(bad.ok === false, '不是 PNG 也照存');
+            // 資料夾外的路徑一律不開（這裡不送合法路徑 —— 那會真的打開檔案總管）
+            const op = JSON.parse(await post(PORT, '/photoOpen', { path: path.join(MAIN_SD, 'ranch.json') }));
+            ok(op.ok === false, '/photoOpen 開了照片資料夾以外的路徑');
+        }
 
         const y = JSON.parse(await get('/yard'));
         ok(y.ok === true, '/yard 回應失敗');
@@ -1449,6 +1472,25 @@ setTimeout(async () => {
     ok(/REVEAL_DELAY_MS=500/.test(src), '說明打完到 Keramon 出現不是 0.5 秒');
     const adv = (src.match(/function storyAdvance\(\)\{[\s\S]*?\n\}/) || [''])[0];
     ok(/storyShown\(\); return;/.test(adv), '點一下直接顯示完整句時沒通知「字打完了」（Keramon 就不會掉下來）');
+}
+
+// 拍照前端：預覽開著時輪詢要帶 photo（舞台維持拍照的樣子）、照片要鋪底色、前線探頭要轉 45 度不糊
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/if\(photoSeed!=null\) qs\.push\('photo='\+photoSeed\);/.test(src), '輪詢沒帶 photo（拍照時大家照樣在走）');
+    const comp = (src.match(/function photoCompose\([\s\S]*?\n\}/) || [''])[0];
+    ok(/fillRect\(0,0,c\.width,c\.height\)/.test(comp) && comp.indexOf('fillRect') < comp.indexOf('drawImage(s,0,0)'), '照片沒先鋪底色（透明天空存出來是透明的）');
+    ok(/getElementById\('wx'\)/.test(comp), '照片沒把天氣層放進去');
+    const peek = (src.match(/function photoPeek\([\s\S]*?\n\}/) || [''])[0];
+    ok(/imageSmoothingEnabled=false/.test(peek) && /rotate\(Math\.PI\/4\)/.test(peek), '前線探頭沒轉 45 度、或轉的時候糊掉');
+    const iP = src.indexOf("['photo',  '📷 拍照', { scope: 'yard' }]"), iA = src.indexOf("['album',  '📖 圖鑑'");
+    ok(iP > 0 && iA > iP && iA - iP < 200, '拍照鈕不在圖鑑左邊（或不是只在營地出現）');
+    // 只在營地的鈕要在伺服器端就先藏起來：剛打開頁面（前線）還沒跑 setView 的那一下也不能露臉
+    ok(/o\.scope === 'plaza' \|\| o\.scope === 'yard'\) \? ' style="display:none"'/.test(src), '拍照鈕剛打開頁面時在前線也看得到');
+    ok(/photoPeek\(g, front\.dots, peek\|\|/.test(src) && /translate\(peek\.x\*DW, peek\.y\*DH\)/.test(src), '探頭位置沒用伺服器給的（站位避開的那塊跟探頭對不上）');
+    ok(/if\(b\.dataset\.cmd==='photo'\)\{ photoTake\(\); return; \}/.test(src), '按拍照鈕沒有拍照（被當成指令送給 daemon）');
+    const close = (src.match(/function photoClose\(\)\{[\s\S]*?\n\}/) || [''])[0];
+    ok(/photoSeed=null/.test(close), '關掉照片後大家沒有回去走');
 }
 
 // 翻頁滑行時天氣的「蓋在角色身上」那層不能拿即時角色畫布當遮罩（那時已經是新的一頁），

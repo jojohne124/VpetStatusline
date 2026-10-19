@@ -281,6 +281,30 @@ function json(res, code, obj) {
     res.end(JSON.stringify(obj));
 }
 
+// 攻擊動畫展示（點角色時跟 CutIn 一起給）：待機兩幀、攻擊幀、子彈（一路飛出畫面，不爆炸）。
+// 面向**左**，跟上面的 CutIn 同一個方向（CutIn 原圖面左）：角色站右邊、子彈往左飛。
+// 素材跟前線戰鬥同一套（composeBattleScene 用的那幾份），不另外做美術。
+// 沒有子彈圖的角色 bullet = null（前端就只演攻擊動作）。讀不到就整包 null，彈窗照樣只顯示 CutIn。
+function attackShow(id) {
+    try {
+        const ch = loadCharacter(id);
+        const art = readJSON(ch.artFile);
+        if (!art || !Array.isArray(art.frames)) return null;
+        const F = ch.charDef.F || {}, ro = ch.charDef.RIGHT_OFFSET;
+        const rows = (fi) => fi == null ? null : core.getFacingRows(art, fi, 'left', ro);
+        const idle1 = rows(F.IDLE_1 != null ? F.IDLE_1 : 0);
+        const atk = rows(F.ATTACK != null ? F.ATTACK : F.ANGRY != null ? F.ANGRY : F.IDLE_1);
+        if (!idle1 || !atk) return null;
+        const bul = readJSON(ch.bulletArtFile);
+        return {
+            idle: [idle1, rows(F.IDLE_2 != null ? F.IDLE_2 : F.IDLE_1) || idle1],
+            attack: atk,
+            // 子彈原圖是往右飛的（我方的子彈），面左要翻過來
+            bullet: (bul && Array.isArray(bul.frames) && bul.frames[0]) ? core.flipRows(bul.frames[0]) : null,
+        };
+    } catch (e) { return null; }
+}
+
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
@@ -305,7 +329,7 @@ const server = http.createServer((req, res) => {
         try {
             const ch = loadCharacter(id);
             const art = readJSON(ch.cutinArtFile);
-            return json(res, 200, art ? { cells: art.frames[0] } : { cells: null });
+            return json(res, 200, { cells: art ? art.frames[0] : null, attack: attackShow(id) });
         } catch (e) { return json(res, 404, { error: 'no_cutin' }); }
     }
 

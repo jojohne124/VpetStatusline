@@ -333,7 +333,7 @@ console.log('— 圖鑑的蒐集程度 —');
         g2.window = g2; g2.globalThis = g2;
         vm3.createContext(g2);
         let err2 = null;
-        try { vm3.runInContext(mm[1] + ';globalThis.__a={label:(o,t)=>countLabel(o,t)};', g2, { timeout: 5000 }); }
+        try { vm3.runInContext(mm[1] + ';globalThis.__a={label:(o,t)=>countLabel(o,t),atkFrame:(a,t)=>atkFrame(a,t),ATK_W,ATK_LOOP,ATK_MS};', g2, { timeout: 5000 }); }
         catch (e) { err2 = e; }
         ok(!err2, '圖鑑頁面 script 執行就爆了：' + (err2 && err2.message));
         if (!err2 && g2.__a) {
@@ -359,7 +359,49 @@ console.log('— 圖鑑的蒐集程度 —');
             ok(/\d+\s*\/\s*\d+/.test(plain(L(42, 158))),
                '分子分母之間缺了斜線：' + plain(L(42, 158)));
             ok(pctOf(L(42, 158)) === 26, '42/158 無條件捨去應該是 26%，得到 ' + L(42, 158));
+            // 攻擊動畫的時間軸：待機 → 攻擊 → 子彈一路飛出畫面（不爆炸）→ 待機，一輪 ATK_LOOP 拍、一直循環
+            const A = g2.__a, px = (c) => [c[0], c[1], c[2], c[3], c[4], c[5]];
+            const blk = (r, g, b) => Array.from({ length: 8 }, () => Array.from({ length: 16 }, () => px([r, g, b, r, g, b])));
+            const fake = { idle: [blk(1, 1, 1), blk(2, 2, 2)], attack: blk(3, 3, 3), bullet: blk(4, 4, 4) };
+            const has = (buf, v) => buf.some(row => row.some(c => c && c[0] === v));
+            const at = (t) => A.atkFrame(fake, t);
+            const L2 = A.ATK_LOOP, seq = Array.from({ length: L2 }, (_, t) => at(t));
+            ok(seq[0].length === 8 && seq[0][0].length === A.ATK_W, '攻擊動畫的小舞台尺寸不對');
+            ok(has(seq[0], 1) && !has(seq[0], 3) && !has(seq[0], 4), '一開始應該是待機（不是攻擊幀、沒有子彈）');
+            const fly = seq.map((b, t) => has(b, 4) ? t : -1).filter(t => t >= 0);
+            ok(fly.length >= 4, '子彈飛的拍數太少');
+            // 面向左（跟 CutIn 同方向）：角色在右半邊，子彈往左飛，一路飛到左邊緣
+            const xs = (buf, v) => buf.flatMap(row => row.map((c, x) => c && c[0] === v ? x : -1)).filter(x => x >= 0);
+            const bx = fly.map(t => Math.min(...xs(seq[t], 4)));
+            ok(bx.every((x, i) => !i || x <= bx[i - 1]) && bx[bx.length - 1] < bx[0], '子彈沒有往左飛（攻擊展示要跟 CutIn 同一個面向）');
+            // 同前線戰鬥：攻擊幀跟子彈同一拍出來、子彈起點 = 角色往內 8 格（敵方 col 36 → 子彈 col 28）
+            // 動作順序：idle1 → idle2 → idle1 → attack（2026-10-19 指定）；一輪最後一拍是 idle2，接回開頭不會重複
+            const who = (b) => has(b, 3) ? 'atk' : has(b, 1) ? 'i1' : has(b, 2) ? 'i2' : '?';
+            ok(seq.slice(0, 4).map(who).join() === 'i1,i2,i1,atk', '動作順序不是 idle1 → idle2 → idle1 → attack：' + seq.slice(0, 4).map(who).join());
+            ok(who(seq[L2 - 1]) === 'i2', '一輪最後一拍不是 idle2（接回開頭會連續兩拍 idle1）');
+            const atk0 = seq.findIndex(b => has(b, 3));
+            ok(fly.length && atk0 === fly[0] && !has(seq[atk0 - 1], 3), '子彈慢了一步（實戰是攻擊幀跟子彈同一拍出來）');
+            ok(fly.length && bx[0] === Math.min(...xs(seq[atk0], 3)) - 8, '子彈起始位置跟實戰不同（應該在角色往內 8 格）');
+            ok(Math.min(...xs(seq[0], 1)) >= A.ATK_W / 2, '角色沒有站在右邊（面左時應該在右半邊）');
+            ok(bx[bx.length - 1] === 0 && Math.max(...xs(seq[fly[fly.length - 1]], 4)) < 8, '子彈沒有飛出左邊的畫面');
+            ok(!has(seq[fly[fly.length - 1] + 1] || seq[0], 4), '子彈飛出去之後還殘留在畫面上');
+            ok(!seq.some(b => b.some(row => row.some(c => c && c[0] >= 5))), '還在演爆炸（定案是飛過去就好）');
+            ok(has(seq[L2 - 1], 1) || has(seq[L2 - 1], 2), '一輪的最後沒有回待機');
+            ok(A.ATK_MS >= 500, '攻擊展示太快（一拍 ' + A.ATK_MS + 'ms；2026-10-19 定 500ms）');
+            ok(JSON.stringify(at(3)) === JSON.stringify(at(3 + L2)), '動畫沒有循環');
+            const noB = A.atkFrame({ ...fake, bullet: null }, fly[0] || 8);
+            ok(has(noB, 3) && !has(noB, 4), '沒有子彈圖的角色應該只演攻擊動作（不能壞掉）');
         } else if (!err2) { ok(false, '抓不到 countLabel'); }
+    }
+    // 彈窗關掉要停（不然背景一直空轉）；伺服器一起給攻擊動畫的素材
+    const AS = fs.readFileSync(path.join(__dirname, '..', 'src', 'album', 'album_server.js'), 'utf8');
+    const AH = fs.readFileSync(path.join(__dirname, '..', 'src', 'album', 'album.html'), 'utf8');
+    ok(/function closeModal\(\)\{[^}]*atkStop\(\)/.test(AH), '關掉彈窗攻擊動畫沒停');
+    ok(/atkPlay\(atk\);\n\}/.test(AH.replace(/\r\n/g, '\n')), '打開彈窗沒有播攻擊動畫');
+    ok(/getFacingRows\(art, fi, 'left', ro\)/.test(AS) && /core\.flipRows\(bul\.frames\[0\]\)/.test(AS), '攻擊展示的幀不是面左（要跟 CutIn 同方向）');
+    ok(/attack: attackShow\(id\)/.test(AS), '/cutin 沒有帶攻擊動畫的素材');
+    ok(AS.indexOf("if (!album.chars || !album.chars[id]) return json(res, 403") < AS.indexOf('attack: attackShow(id)'), '攻擊動畫沒有走「已取得才給看」那道關');
+    {
     }
 }
 

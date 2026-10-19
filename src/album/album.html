@@ -30,7 +30,10 @@
   #modal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;z-index:20}
   #modal.show{display:flex}
   #mbox{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;text-align:center}
-  #mbox canvas{image-rendering:pixelated;display:block;background:rgb(30,30,30);border-radius:6px}
+  /* CutIn 與攻擊展示各自一個框（2026-10-19） */
+  #mbox canvas{image-rendering:pixelated;display:block;background:rgb(30,30,30);border-radius:6px;
+               border:2px solid #6e7681;box-shadow:0 0 0 1px #0d1117}
+  #acv{margin-top:8px}
   #mname{margin-top:10px;font-size:14px;color:#e6edf3}
   #mat{font-size:11px;color:#7f868e;margin-top:3px}
   #empty{position:absolute;inset:44px 0 0 0;display:flex;align-items:center;justify-content:center;
@@ -39,11 +42,11 @@
 <div id="bar">
   <h1>📖 vpet 圖鑑</h1>
   <span id="count">–</span>
-  <span id="hint">拖曳平移　滾輪縮放　點角色看 CutIn</span>
+  <span id="hint">拖曳平移　滾輪縮放　點角色看 CutIn 與攻擊動畫</span>
 </div>
 <div id="view"><div id="world"><svg id="edges"></svg></div></div>
 <div id="empty" style="display:none"></div>
-<div id="modal"><div id="mbox"><canvas id="mcv"></canvas><div id="mname"></div><div id="mat"></div></div></div>
+<div id="modal"><div id="mbox"><canvas id="mcv"></canvas><canvas id="acv"></canvas><div id="mname"></div><div id="mat"></div></div></div>
 
 <script>
 const CELL=4;                 // idle 縮圖：1 邏輯像素 = 4x4
@@ -128,16 +131,67 @@ function tick(){
 setInterval(()=>{ frame^=1; tick(); }, 600);
 
 async function openCutin(x){
+  let atk=null;
   try{
     const r=await (await fetch('/cutin?char='+encodeURIComponent(x.id))).json();
     drawCells($('mcv'), r.cells, 8);
+    atk=r.attack||null;
   }catch(e){}
   $('mname').textContent=x.name;
   $('mat').textContent=x.at?('取得於 '+new Date(x.at).toLocaleString()):'';
   $('modal').classList.add('show');
+  atkPlay(atk);
 }
-$('modal').addEventListener('click',()=>$('modal').classList.remove('show'));
-addEventListener('keydown',e=>{ if(e.key==='Escape')$('modal').classList.remove('show'); });
+function closeModal(){ $('modal').classList.remove('show'); atkStop(); }
+$('modal').addEventListener('click',closeModal);
+addEventListener('keydown',e=>{ if(e.key==='Escape') closeModal(); });
+
+// ── 攻擊動畫展示（CutIn 下面的一條小舞台）──
+// 跟前線戰鬥同一套素材：待機 → 攻擊動作 → 子彈一路飛出畫面 → 回待機，一直循環（不爆炸，2026-10-19 定）。
+// 面向左（跟 CutIn 同方向）：角色站在右邊，子彈往左飛。伺服器給的幀已經是面左的。
+// 只在彈窗開著時跑（關掉就停），一次只有這一張小畫布在動，對效能沒有影響。
+const ATK_W=40, ATK_MS=500;   // 小舞台寬（cell）、一拍幾毫秒
+// 時間軸（拍）：0-2 待機（idle1 → idle2 → idle1，一拍換一幀）、3 起攻擊幀跟子彈**同一拍**出來（同前線戰鬥：攻擊那一拍 progress 0 子彈就在）、
+//   攻擊幀撐 4 拍（同戰鬥的 elapsed 8-11）、子彈一路飛到 12、7-17 待機，然後重來
+//   一輪拍數是偶數：最後一拍是 idle2，接回第 0 拍的 idle1 才不會連續兩拍同一幀
+// 位置（cell，左緣）：角色靠右；子彈起點 = 角色左緣再往內 8 格（同戰鬥：我方 col 0 → 子彈 col 8、敵方 col 36 → 子彈 col 28），
+//   一直飛到整顆出了左邊畫面
+const ATK_LOOP=18, ATK_FLY=3, ATK_FLY_N=10, ATK_HOLD=7;   // 拍：出發（攻擊幀也從這拍開始）、飛幾拍、攻擊幀撐到哪
+const ATK_CHAR=ATK_W-18, ATK_B0=ATK_CHAR-8, ATK_B1=-16;   // 位置：角色、子彈起點、終點（整顆出畫面）
+let atkTimer=null;
+function atkStop(){ if(atkTimer){ clearInterval(atkTimer); atkTimer=null; } }
+// cell 陣列疊到畫布緩衝上（-1 的半格透明，不蓋掉底下）
+function atkPaint(buf, rows, col){
+  if(!rows) return;
+  rows.forEach((row,ry)=>{ if(!buf[ry]) return; row.forEach((c,cx)=>{
+    const x=col+cx; if(!c||x<0||x>=ATK_W) return;
+    const o=buf[ry][x]||[-1,-1,-1,-1,-1,-1], n=o.slice();
+    if(c[0]>=0){ n[0]=c[0]; n[1]=c[1]; n[2]=c[2]; }
+    if(c[3]>=0){ n[3]=c[3]; n[4]=c[4]; n[5]=c[5]; }
+    buf[ry][x]=n;
+  }); });
+}
+function atkFrame(a, t){
+  const H=(a.idle[0]||a.attack).length, buf=Array.from({length:H},()=>new Array(ATK_W).fill(null));
+  const k=t%ATK_LOOP;
+  const flying=k>=ATK_FLY&&k<ATK_FLY+ATK_FLY_N, attacking=k>=ATK_FLY&&k<ATK_HOLD;
+  // 子彈先畫（角色身體擋住一半，像從體內冒出來，同前線戰鬥）
+  if(flying&&a.bullet) atkPaint(buf, a.bullet, Math.round(ATK_B0+(ATK_B1-ATK_B0)*(k-ATK_FLY)/(ATK_FLY_N-1)));
+  atkPaint(buf, attacking ? a.attack : a.idle[k&1], ATK_CHAR);
+  return buf;
+}
+function atkPlay(a){
+  atkStop();
+  const cv=$('acv');
+  if(!a||!a.attack){ cv.style.display='none'; return; }
+  cv.style.display='';
+  // 跟 CutIn 同寬（CutIn 沒有就用 6px 一格）
+  const px=Math.max(3, Math.floor(($('mcv').width||ATK_W*6)/ATK_W));
+  let t=0;
+  const draw=()=>drawCells(cv, atkFrame(a, t), px);
+  draw();
+  atkTimer=setInterval(()=>{ t++; draw(); }, ATK_MS);
+}
 
 // 平移 / 縮放
 let drag=null;

@@ -1840,7 +1840,7 @@ let lastFetch=Date.now();
 // 一個看院子，daemon 不需要知道。
 let view = 'home';
 // 營地第二頁（見下方「營地第二頁」那段）：目前看第幾頁、事件演到哪、空降中的那隻、對話框
-let yardPage=0, sliding=false;
+let yardPage=0, sliding=false, slideOv=null, slideMask=null;   // 翻頁滑行中：蓋在上面的快照／兩頁的角色層並排（天氣遮罩用）
 let p2Phase=null, p2WaitAt=0, p2NoticeShown=false, p2Drop=null;
 let story=null;   // { lines, i, done, typing, text }
 // 這個元素在目前的畫面要不要出現。廣場是例外：進去之後**只剩**廣場自己的東西
@@ -2062,7 +2062,14 @@ function wxDraw(ts){
     mg.globalCompositeOperation='source-over'; mg.clearRect(0,0,w,h);
     for(let i=0;i<WX_ON_PET;i++) mg.drawImage(P.fx,0,0);
     mg.globalCompositeOperation='destination-in';
-    mg.drawImage(pet,0,0,w,h);
+    // 翻頁滑行中：底下的角色畫布已經是新的一頁（而且藏起來了），拿它當遮罩的話，陽光會照出
+    // 新頁角色的輪廓（2026-10-19 回報，跟天空透出新頁同一類）。改用滑行用的「只有角色」那張
+    // 兩頁並排圖（slideMask，不含地板 —— 含地板的話整片地面都會被當成角色加亮），
+    // 照快照目前平移到的位置對齊。
+    if(slideOv&&slideMask){
+      const m=new DOMMatrixReadOnly(getComputedStyle(slideOv).transform), k=w/pet.offsetWidth;
+      mg.drawImage(slideMask, m.m41*k, 0, slideOv.offsetWidth*k, h);
+    } else mg.drawImage(pet,0,0,w,h);
     mg.globalCompositeOperation='source-over';
     g.drawImage(P.mk,0,0);
   }
@@ -3919,7 +3926,9 @@ async function slideToPage(to, dropId){
   ov.style.cssText='position:absolute;z-index:1;pointer-events:none;image-rendering:pixelated;max-width:none;'
     +'left:'+pet.offsetLeft+'px;top:'+pet.offsetTop+'px;width:'+(W*2)+'px;height:'+A.height+'px;'
     +'transition:transform '+SLIDE_MS+'ms ease-in-out;transform:translateX('+(dir>0?0:-W)+'px)';
-  document.getElementById('stage').appendChild(ov);
+  document.getElementById('stage').appendChild(ov); slideOv=ov;
+  const mk=document.createElement('canvas'); mk.width=W*2; mk.height=A.height;
+  mk.getContext('2d').drawImage(pet, dir>0?0:W, 0); slideMask=mk;
   const live=SLIDE_LIVE.map(id=>document.getElementById(id)).filter(Boolean);
   live.forEach(e=>{ e.style.visibility='hidden'; });
   try{
@@ -3928,12 +3937,13 @@ async function slideToPage(to, dropId){
     try{ await pollYard(); }catch(e){}
     sceneDraw(performance.now()+1e6);
     g.drawImage(snapStage(), dir>0?W:0, 0);   // 藏起來（visibility）照樣讀得到畫布內容
+    mk.getContext('2d').drawImage(pet, dir>0?W:0, 0);
     ov.getBoundingClientRect();
     ov.style.transform='translateX('+(dir>0?-W:0)+'px)';
     await new Promise(r=>setTimeout(r,SLIDE_MS+40));
   } finally {
     live.forEach(e=>{ e.style.visibility=''; });
-    ov.remove(); sliding=false;
+    ov.remove(); slideOv=null; slideMask=null; sliding=false;
   }
 }
 // 翻頁的箭頭與點點。事件進行中、滑行中都不給翻

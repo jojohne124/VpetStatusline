@@ -80,6 +80,8 @@ const STAY_MIN = 6, STAY_MAX = 14;     // 4.5 ~ 10.5 秒
 const STAY_CHANCE = 0.3;
 // 在牆邊抽到「停」時，先離開牆走幾步再停（見 legAt）。等於 MIN_LEG，短到不像在趕路。
 const WALL_STEP_OUT = 5;
+// 走出兩頁交界之後再多走幾步才結束這一段（剛出線就轉身的話很容易又踩回去）
+const SEAM_EXIT_EXTRA = 3;
 
 // 底部保留一個 cell 列（2 dot）給名牌。名牌固定標在**腳下**（見 plaza.js
 // buildLabels），沒有這段保留區的話，角色走到最底時腳下那一列會落到畫面外，
@@ -477,13 +479,43 @@ function legAt(seed, k, x, y, field = PLAZA_FIELD) {
         want = runWant;
     }
     const leg = (vx, vy, len) => ({ vx, vy, len, stay: false });
+    // 在兩頁交界上：這一段一定要**走出交界**，而且偏橫著走（直著走會沿著交界線一直被切成兩半）。
+    // 走出去再多走幾步就收（SEAM_EXIT_EXTRA），下一段照常抽 —— 允許穿過去換頁，只是不在線上逗留。
+    // 第一輪要偏橫向＋離開所貼的牆；第二輪放寬成任何方向。都找不到（分區整塊縮在交界裡）才照常走。
+    // 挑「最快出得去」的方向（不是掃到第一個就走）：不然常常往回走、把整條交界再走一遍。
+    if (onSeam) {
+        want = RUN_MAX;
+        for (let pass = 0; pass < 2; pass++) {
+            let best = null;
+            for (let i = 0; i < n; i++) {
+                const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
+                if (pass === 0 && (Math.abs(c[0]) < Math.abs(c[1]) || !leaves(c[0], c[1]))) continue;
+                const lim = fit(c[0], c[1]);
+                if (pass === 0 && lim < MIN_LEG) continue;   // 走不滿一段的方向（貼牆）先不考慮，免得一兩步就轉
+                for (let t = 1; t <= lim && (!best || t < best.t); t++) {
+                    if (!seamAt(x + offsetAt(c[0], c[1], t)[0])) { best = { c, t, lim }; break; }
+                }
+            }
+            if (best) { want = runWant; return leg(best.c[0], best.c[1], Math.min(best.lim, Math.max(MIN_LEG, best.t + SEAM_EXIT_EXTRA))); }
+        }
+        want = runWant;
+    }
+    // 一般的一段：終點不要落在交界上（落在上面下一段就得專門走出去，等於在線上多待一拍拍）。
+    // 先試著多走幾步穿過去，穿不過（被牆擋）就提早停在交界前；兩個都不行才照原長度。
+    const offSeamLen = (c, len) => {
+        if (!field.noStay || !seamAt(x + offsetAt(c[0], c[1], len)[0])) return len;
+        want = RUN_MAX; const lim = fit(c[0], c[1]); want = runWant;
+        for (let t = len + 1; t <= lim; t++) if (!seamAt(x + offsetAt(c[0], c[1], t)[0])) return t;
+        for (let t = len - 1; t >= MIN_LEG; t--) if (!seamAt(x + offsetAt(c[0], c[1], t)[0])) return t;
+        return len;
+    };
     let bestLen = 0, bestV = null;
     for (let pass = 0; pass < 2; pass++) {
         for (let i = 0; i < n; i++) {
             const c = DIR_VECTORS[(idx + i * DIR_SCAN_STRIDE) % n];
             if (pass === 0 && !leaves(c[0], c[1])) continue;
             const len = fit(c[0], c[1]);
-            if (len >= MIN_LEG) return leg(c[0], c[1], len);
+            if (len >= MIN_LEG) return leg(c[0], c[1], offSeamLen(c, len));
             if (len > bestLen) { bestLen = len; bestV = c; }
         }
         if (!onWall) break;   // 沒貼牆 → 第一輪就是全掃，不需要再來一次

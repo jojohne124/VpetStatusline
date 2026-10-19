@@ -1451,6 +1451,17 @@ setTimeout(async () => {
     ok(/storyShown\(\); return;/.test(adv), '點一下直接顯示完整句時沒通知「字打完了」（Keramon 就不會掉下來）');
 }
 
+// 翻頁滑行時天氣的「蓋在角色身上」那層不能拿即時角色畫布當遮罩（那時已經是新的一頁），
+// 不然陽光會照出新頁角色的輪廓；要用滑行那兩頁的「只有角色」並排圖，而且不能含地板
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/if\(slideOv&&slideMask\)\{[\s\S]{0,200}mg\.drawImage\(slideMask,/.test(src), '翻頁滑行時天氣遮罩還在用即時的角色畫布（陽光照出下一頁角色的輪廓）');
+    const sl = (src.match(/async function slideToPage\([\s\S]*?\n\}/) || [''])[0];
+    ok(/drawImage\(pet, dir>0\?0:W, 0\); slideMask=mk;/.test(sl) && /mk\.getContext\('2d'\)\.drawImage\(pet, dir>0\?W:0, 0\);/.test(sl),
+       '滑行用的角色遮罩沒有兩頁都放（或拿了含地板的快照，整片地面會被加亮）');
+    ok(/slideOv=null; slideMask=null; sliding=false;/.test(sl), '滑完沒把天氣遮罩換回即時角色畫布');
+}
+
 // 走動範圍編輯器每次開都重起（舊行程會一直跑舊程式，新的 EADDRINUSE 靜靜死掉）
 {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');

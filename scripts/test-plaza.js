@@ -1025,6 +1025,23 @@ console.log('— 兩頁交界不准停 —');
     ok(stops > 1000, `前提不成立：模擬裡幾乎沒停過（${stops}）`);
     ok(seamPass > 0, '前提不成立：沒有人走過交界（測不到）');
     ok(seamStops === 0, `有 ${seamStops} 拍停在兩頁交界上（兩頁都只看到半隻）`);
+    // 不只不停，也不在線上逗留：一被切到就走出去（最快出得去的方向），穿過去換頁可以，
+    // 但連續待在線上不超過一次橫越的時間。大塊跨頁的切法（像編輯器存的 cross2）最容易沿著線走。
+    const big = { exact: [[0, 59, 2, 9], [24, 83, 2, 9], [11, 74, 9, 16], [0, 59, 17, 24], [24, 83, 17, 24]] };
+    // 內建 8 隻下排中間那塊幾乎整塊都在交界上（左邊只剩 1 格），只能整個穿過去，所以門檻放寬一點
+    for (const [nm, Z, lim] of [['內建 8 隻', W.yardZones(8), 20], ['大塊跨頁', W.yardZones(5, W.YARD_FIELD_WIDE, undefined, big), 16]]) {
+        let on = 0, tot = 0, longest = 0;
+        Z.forEach((z, i) => { for (let sd = 0; sd < 3; sd++) {
+            const occ = { seed: W.hash2(77 + i * 31 + sd * 1009, 0), joinStep: 0, anchor: W.zoneAnchor(z) };
+            let cache = null, run = 0;
+            for (let s = 0; s < 6000; s++) {
+                const p = W.posAt(occ, s, cache, z); cache = p.cache; tot++;
+                if (p.x >= NS[0] && p.x <= NS[1]) { on++; run++; } else { longest = Math.max(longest, run); run = 0; }
+            }
+        } });
+        ok(longest <= lim, `${nm}：連續 ${longest} 拍被交界切到（應該一被切到就走出去，最多一次橫越）`);
+        ok(on / tot < 0.1, `${nm}：${(on / tot * 100).toFixed(1)}% 的時間被交界切到（沿著線走太久）`);
+    }
 }
 
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));

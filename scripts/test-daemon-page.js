@@ -1474,6 +1474,55 @@ setTimeout(async () => {
     ok(/storyShown\(\); return;/.test(adv), '點一下直接顯示完整句時沒通知「字打完了」（Keramon 就不會掉下來）');
 }
 
+// 下樓梯（docs/plaza-stairs-spec.md）：遊戲中每拍走推播、方向鍵攔在廣場走路之前、離開房間就關掉推播
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    const pp = (src.match(/async function pollPlaza\(\)\{[\s\S]*?\n\}/) || [''])[0];
+    ok(/stairsSync\(p\.stairs, p\.serverNow\)/.test(pp), '廣場輪詢沒有同步下樓梯的房間（按了沒反應）');
+    // 入口是「🎮 小遊戲」，點開再選遊戲／模式（2026-10-20）
+    ok(/<button id="minibtn"[^>]*>🎮 小遊戲<\/button>/.test(src) && !/id="stairsbtn"/.test(src), '廣場的入口不是「🎮 小遊戲」');
+    ok(/const MINI_GAMES=\[[\s\S]*?id:'stairs'[\s\S]*?\];/.test(src) && /sendCmd\('stairsOpen',\{mode:'endless',kind:b\.dataset\.g\}\)/.test(src), '小遊戲選單裡沒有下樓梯（或選了沒開房）');
+    ok(!/modes:\[/.test((src.match(/const MINI_GAMES=\[[\s\S]*?\];/) || [''])[0]), '下樓梯又分模式了（定案先不分）');
+    // 等待面板：每個人的 vpet ＋ 空位
+    ok(/class="st-pl[^"]*"><canvas width="64" height="64" data-c="/.test(src) && /function stPanelPets\(\)/.test(src), '等待面板沒有展示玩家的 vpet');
+    ok(/stairs: \{ rooms: plazaClient\.stairsRooms\(\), mine: plazaClient\.stairsMine\(\)/.test(src), '/plaza 沒帶下樓梯的房間');
+    ok(/new EventSource\('\/stairs\/stream'\)/.test(src) && /if \(req\.url === '\/stairs\/stream'\)/.test(src), '遊戲中沒有走推播（輪詢跟不上 50ms 一拍）');
+    const sync = (src.match(/function stairsSync\(s, serverNow\)\{[\s\S]*?\n\}/) || [''])[0];
+    ok(/if\(!m\)\{[^}]*stStream\(false\)/.test(sync), '不在房間了推播還開著');
+    ok(/window\.addEventListener\('keydown',e=>\{[\s\S]{0,200}stPlaying\(\)[\s\S]{0,200}stopImmediatePropagation\(\)[\s\S]{0,120}\},true\);/.test(src),
+       '遊戲中的方向鍵沒有攔在廣場走路前面（會一邊玩一邊在廣場走）');
+    ok(/function stSteer\(\)\{[\s\S]*?if\(d===stDir\) return;/.test(src), '方向沒變也在送（應該只在改變時送）');
+    ok(/onStairs: \(kind, d\) => stairsPush\(kind, d\)/.test(src), 'daemon 沒把廣場伺服器的遊戲事件推給瀏覽器');
+    ok(/for\(let i=0;i<ST_HP;i\+\+\) stHeart\(/.test(src) && /ST_HP=3;/.test(src), '血量不是三顆點陣心');
+    ok(/if\(stCur\.cd>0\)/.test(src), '沒有顯示開局倒數');
+    for (const c of ['stairsOpen', 'stairsStart', 'stairsLeave', 'stairsInput']) ok(new RegExp("action === '" + c + "'").test(src), '少了指令 ' + c);
+}
+
+// 小恐龍（docs/plaza-dino-spec.md）：模擬原樣內嵌、自己算、按跳攔在最前面、定時回報、影子
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/const DN=\$\{DINO_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ DINO_SRC/.test(src), '頁面沒有內嵌小恐龍的模擬（dino-sim.js）');
+    ok(/id:'dino', name:'🦖 小恐龍'/.test(src), '小遊戲選單裡沒有小恐龍');
+    // 選單裡每個遊戲都有排行榜鈕；結束後是結果面板＋「回到廣場」，不再有「再來一局」
+    ok(/data-g="'\+gm\.id\+'">開房<\/button><button data-b="'\+gm\.id\+'">🏆 排行榜<\/button>/.test(src) && /function miniBoard\(kind\)/.test(src), '小遊戲列表的開房旁邊沒有排行榜鈕');
+    ok(/sendCmd\('stairsBoard',\{kind\}\)/.test(src), '排行榜鈕沒有分遊戲去要排行榜');
+    // 加入別人的房間：聊天室的系統訊息後面有「加入」、選單列出正在等人的房間、頭上有 🦖／🪜
+    ok(/if\(m\.stairsRoom\)\{ const jb=document\.createElement\('button'\); jb\.className='stjoin'/.test(src) && /function stJoinButtons\(\)/.test(src), '聊天室開房的訊息後面沒有「加入」鈕');
+    ok(/<button data-j="'\+stEsc\(r\.id\)\+'"/.test(src), '小遊戲選單沒有列出正在等人的房間');
+    ok(/g\.fillText\(rk==='dino'\?'🦖':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🪜');
+    ok(/sendCmd\('stairsJoin',\{room\}\)/.test(src) && /action === 'stairsJoin'/.test(src), '加入房間沒有接到伺服器');
+    ok(/<button id="stback" class="pri">回到廣場<\/button>/.test(src) && !/再來一局/.test(src), '結束後不是回廣場（還有再來一局）');
+    ok(/action==='dinoReport'/.test((src.match(/const quiet=[\s\S]*?;/) || [''])[0]), '小恐龍回報（一秒 10 次）會一直洗「已送出」訊息');
+    ok(/window\.addEventListener\('keydown',e=>\{\s*const k=e\.key;\s*if\(!\(k===' '\|\|k==='ArrowUp'\)\|\|!dnPlaying\(\)\|\|typing\(\)\) return;\s*e\.preventDefault\(\); e\.stopImmediatePropagation\(\);/.test(src),
+       '小恐龍的跳鍵沒有攔在最前面（空白鍵會捲動頁面、廣場也會跟著動）');
+    ok(/cv\.addEventListener\('pointerdown',e=>\{\s*if\(!dnPlaying\(\)\) return;[\s\S]{0,120}DN\.press\(dnGame,true\)/.test(src) && /for\(const t of \['pointerup','pointercancel','pointerleave'\]\)/.test(src), '小恐龍點畫面不會跳（或放開不會下墜）');
+    ok(/const DN_REPORT_MS=100;/.test(src) && /if\(!force&&t-dnSent<DN_REPORT_MS\) return;/.test(src), '位置回報沒有節流（每一幀都送）');
+    ok(/if\(DN\.step\(g\)==='dead'\)\{ dnReport\(true\);/.test(src), '撞到的當下沒有馬上回報（要等下一次節流）');
+    ok(/stES\.addEventListener\('ghost'/.test(src) && /onStairs\('ghost', d\)/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'plaza-client.js'), 'utf8')), '別人的位置（影子）沒有接到頁面');
+    ok(/dnSpectate=\(Date\.now\(\)\+stSkew\)-info\.startAt>1500;/.test(src), '中途重新整理沒有改成觀戰（會從頭重跑、回報錯的距離）');
+    // 伺服器實際吐出來的頁面裡要真的有那段模擬（不是空的）
+}
+
 // 拍照前端：預覽開著時輪詢要帶 photo（舞台維持拍照的樣子）、照片要鋪底色、前線探頭要轉 45 度不糊
 {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');

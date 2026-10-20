@@ -28,6 +28,11 @@ function create(opts = {}) {
     // 對戰：我是其中一方時呼叫（daemon 據此開演前線的戰鬥）；邀請結束時也通知（給頁面顯示原因）
     const onBattle      = opts.onBattle      || (() => {});
     const onInviteClose = opts.onInviteClose || (() => {});
+    // 下樓梯（docs/plaza-stairs-spec.md）：遊戲事件原樣交給 daemon（它再推給瀏覽器的 /stairs/stream）
+    const onStairs      = opts.onStairs      || (() => {});
+    const STAIRS_VER    = 1;        // 跟 plaza-server 的 STAIRS_VER 對齊；對不上的房間不顯示
+    let stairsRooms = [];           // 廣場上的房間
+    let stairsEnd = null;           // 我那一房最近一局的結果（等待畫面顯示）
     const log     = opts.log    || (() => {});
 
     let me = null;              // { id, name, ... }
@@ -85,6 +90,7 @@ function create(opts = {}) {
     function cleanup() {
         gen++;
         me = null; members = new Map(); chat = []; lostSince = null; incoming = null; outgoing = null;
+        stairsRooms = []; stairsEnd = null;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
         if (streamReq) { try { streamReq.destroy(); } catch (e) {} }
         stream = null; streamReq = null;
@@ -95,6 +101,7 @@ function create(opts = {}) {
         if (event === 'hello' && Array.isArray(d.roster)) {
             members = new Map(d.roster.map(m => [m.id, m]));
             if (Array.isArray(d.chat)) chat = d.chat.slice(-CHAT_KEEP);
+            if (Array.isArray(d.stairs)) stairsRooms = d.stairs.filter(r => r.ver === STAIRS_VER);
             // 自己不在名單裡 = 伺服器已經把我清掉了（例如它重開過）
             if (!members.has(me.id)) lose('已被移出廣場');
         } else if (event === 'enter' && d.id) {
@@ -137,6 +144,19 @@ function create(opts = {}) {
             }
         } else if (event === 'walk' && d.id && members.has(d.id)) {
             members.get(d.id).walk = d.walk;
+        } else if (event === 'stairs:rooms' && Array.isArray(d.rooms)) {
+            stairsRooms = d.rooms.filter(r => r.ver === STAIRS_VER);
+            onStairs('rooms', { rooms: stairsRooms });
+        } else if (event === 'stairs:lobby' || event === 'stairs:start') {
+            if (event === 'stairs:start') stairsEnd = null;
+            onStairs(event.slice(7), d);
+        } else if (event === 'stairs:tick') {
+            onStairs('tick', d);
+        } else if (event === 'dino:ghost') {
+            onStairs('ghost', d);   // 小恐龍：同房的人的位置（約 10 次／秒）
+        } else if (event === 'stairs:end') {
+            stairsEnd = { kind: (d.room && d.room.kind) || 'stairs', result: d.result, records: d.records, board: d.board, at: Date.now() };
+            onStairs('end', d);
         } else if (event === 'kicked') {
             lose(d.reason === 'replaced' ? '你在別處進入了廣場' : d.reason === 'admin' ? '被管理員移出廣場' : '被移出廣場');
         }
@@ -271,6 +291,20 @@ function create(opts = {}) {
         return { ok: true };
     }
 
+    // 下樓梯：開房／出發／方向／離開房間／排行榜
+    async function stairs(what, body = {}) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/stairs/' + what, { id: me.id, ...body });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        if (what === 'leave') stairsEnd = null;
+        return r.body;
+    }
+    async function stairsBoard(kind) {
+        const r = await request('GET', '/stairs/board' + (kind === 'dino' ? '?kind=dino' : ''));
+        return r.body && r.body.ok ? r.body.board : [];
+    }
+
     async function leave() {
         if (!me) return { ok: true };
         const id = me.id;
@@ -281,6 +315,10 @@ function create(opts = {}) {
 
     return {
         join, leave, rename, update, move, say, emote, invite, answer, admin, active,
+        stairs, stairsBoard,
+        stairsRooms: () => stairsRooms.slice(),
+        stairsMine: () => (me && stairsRooms.find(r => r.ids.includes(me.id))) || null,
+        stairsEnd: () => stairsEnd,
         incoming: () => incoming, outgoing: () => outgoing,
         chat: () => chat.slice(),
         me: () => me,

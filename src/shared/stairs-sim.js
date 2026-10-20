@@ -36,7 +36,7 @@ const HEAL = 1;                // 回幾顆心
 const HEAL_EVERY = 3;          // 踩幾次普通階梯回一顆心（每踩一次就回的話，扣一顆馬上補回來，太簡單）
 const SPIKE_DMG = 1;           // 尖刺（階梯、天花板）扣幾顆心
 const HURT_S = 1.0;            // 被天花板刺到之後的無敵時間
-const FLIP_S = 0.35;           // 翻板站多久就翻掉
+const FLIP_S = 0.6;            // 翻板站多久就翻掉（2026-10-20：0.35 → 0.6，給畫面時間閃爍、變透明，看得出要翻了）
 const SAFE_FLOORS = 5;         // 前幾層只出普通階梯（剛開局不要一來就踩到刺）
 const TYPES = [                // [種類, 權重]（規格 4.2）
     ['normal', 50], ['spike', 15], ['convL', 7.5], ['convR', 7.5], ['spring', 10], ['flip', 10],
@@ -153,6 +153,7 @@ function step(g) {
                     if (pl.gone || pl.id === p.pass) continue;
                     if (b0 <= pl.y + d + 0.01 && b1 >= pl.y && overX(p, pl.x, pl.x + pl.w)) {
                         p.y = pl.y - S; p.vy = 0; p.on = pl.id; p.onAt = g.t; p.pass = null;
+                        if (pl.type === 'flip' && pl.touchAt == null) pl.touchAt = g.t;   // 畫面用：從第一次被踩開始閃、變透明
                         p.floor = Math.max(p.floor, pl.floor);
                         if (pl.type === 'normal' && p.hp < HP_MAX && ++p.healN >= HEAL_EVERY) {
                             p.healN = 0; p.hp = Math.min(HP_MAX, p.hp + HEAL); ev.push({ type: 'heal', id: p.id });
@@ -232,7 +233,9 @@ function snapshot(g) {
     return {
         k: g.tick, sc: r1(g.scroll), over: g.over,
         cd: g.t < COUNTDOWN_S ? Math.ceil(COUNTDOWN_S - g.t) : 0,   // 開局倒數（秒），前端顯示 2、1
-        pl: g.platforms.map(p => [p.id, r1(p.x), r1(p.y), p.w, p.type, p.gone ? 1 : 0]),
+        // 第 7 欄：翻板「快翻了」的進度 0～1（第一次被踩之後，畫面閃爍＋逐漸透明）
+        pl: g.platforms.map(p => [p.id, r1(p.x), r1(p.y), p.w, p.type, p.gone ? 1 : 0,
+                                  p.touchAt != null ? Math.min(1, Math.round((g.t - p.touchAt) / FLIP_S * 100) / 100) : 0]),
         p: g.players.map(p => [p.id, r1(p.x), r1(p.y), p.hp, p.alive ? 1 : 0, p.dir, p.floor,
                                  p.hurtUntil > g.t ? 1 : 0, p.rank || 0]),
     };

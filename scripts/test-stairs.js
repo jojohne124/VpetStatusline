@@ -109,6 +109,14 @@ console.log('— 模擬：階梯的效果 —');
     g = stage(['a'], [{ x: 20, y: 30, type: 'flip' }]); put(g, 'a', 100);
     ev = []; for (let i = 0; i < Math.ceil(ST.FLIP_S / ST.DT) + 2; i++) ev.push(...ST.step(g));
     ok(g.platforms[0].gone && P(g, 'a').on == null && ev.some(e => e.type === 'flip'), '翻板站久了沒有翻掉');
+    // 翻板快翻了：狀態裡帶進度（畫面閃爍、變透明），站上去前是 0、快翻時接近 1
+    g = stage(['a'], [{ x: 20, y: 30, type: 'flip' }]);
+    ok(ST.snapshot(g).pl[0][6] === 0, '還沒被踩的翻板就有翻板進度');
+    put(g, 'a', 100); g.platforms[0].touchAt = g.t;
+    for (let i = 0; i < Math.floor(ST.FLIP_S / ST.DT / 2); i++) ST.step(g);
+    const half = ST.snapshot(g).pl[0][6];
+    ok(half > 0.3 && half < 0.8, '翻板踩到一半，進度不對：' + half);
+    ok(ST.FLIP_S >= 0.5, '翻板翻太快（畫面來不及閃爍提醒）');
     // 輸送帶：不按方向也會被帶著走
     g = stage(['a'], [{ x: 10, y: 30, w: 40, type: 'convR' }]); put(g, 'a', 100, 4);
     let x0 = P(g, 'a').x; for (let i = 0; i < 10; i++) ST.step(g);

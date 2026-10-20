@@ -1494,6 +1494,9 @@ setTimeout(async () => {
     ok(/function stSteer\(\)\{[\s\S]*?if\(d===stDir\) return;/.test(src), '方向沒變也在送（應該只在改變時送）');
     ok(/onStairs: \(kind, d\) => stairsPush\(kind, d\)/.test(src), 'daemon 沒把廣場伺服器的遊戲事件推給瀏覽器');
     ok(/for\(let i=0;i<ST_HP;i\+\+\) stHeart\(/.test(src) && /ST_HP=3;/.test(src), '血量不是三顆點陣心');
+    ok(/const fade=q\[6\]\|\|0;/.test(src) && /if\(type==='flip'&&fade>0\) g\.globalAlpha=/.test(src), '翻板快翻了沒有閃爍／變透明');
+    ok(/g\.lineTo\(sx\+DW,Y\);/.test(src) && !/Y-DH\*1\.6/.test(src), '尖刺地板的刺又凸出地板上緣');
+    ok(/g\.rect\(X,Y,Wd,2\*DH\); g\.clip\(\);/.test(src) && /const sn=Math\.floor\(w\/2\)/.test(src), '尖刺地板寬度奇數時刺會超出右緣');
     ok(/if\(stCur\.cd>0\)/.test(src), '沒有顯示開局倒數');
     for (const c of ['stairsOpen', 'stairsStart', 'stairsLeave', 'stairsInput']) ok(new RegExp("action === '" + c + "'").test(src), '少了指令 ' + c);
 }

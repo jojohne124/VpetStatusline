@@ -4234,16 +4234,30 @@ function stDraw(){
     const p0=prevPl.get(q[0]); const x=q[1], y=p0?lerp(p0[2],q[2]):q[2], w=q[3], type=q[4];
     if(q[5]) continue;   // 翻掉了
     const X=x*DW, Y=y*DH, Wd=w*DW;
-    g.fillStyle=ST_COL[type]||'#8b7d6b'; g.fillRect(X,Y,Wd,2*DH);
-    g.fillStyle='rgba(255,255,255,.18)'; g.fillRect(X,Y,Wd,2);
-    if(type==='spike'){ g.fillStyle='#e8e8e8';
-      for(let i=0;i<w;i+=2){ g.beginPath(); g.moveTo(X+i*DW,Y); g.lineTo(X+(i+1)*DW,Y-DH*1.6); g.lineTo(X+(i+2)*DW,Y); g.fill(); } }
+    // 翻板快翻了：一邊閃爍、一邊變透明（伺服器給進度 0～1，從第一次被踩開始）
+    const fade=q[6]||0;
+    if(type==='flip'&&fade>0) g.globalAlpha=Math.max(0.15,1-fade*0.85)*(Math.floor(performance.now()/90)%2?0.45:1);
+    if(type==='spike'){
+      // 尖刺地板：刺長在地板的厚度裡（不凸出上緣，2026-10-20 回報），底下一條深色底座
+      g.fillStyle='#7a2f2f'; g.fillRect(X,Y+DH*1.4,Wd,DH*0.6);
+      // 寬度是奇數時最後一根刺會超出右緣 1 格 → 刺數取 floor(w/2) 置中，再裁在地板框裡保險（2026-10-20 二次回報）
+      g.save(); g.beginPath(); g.rect(X,Y,Wd,2*DH); g.clip();
+      const sn=Math.floor(w/2), so=X+(w-sn*2)/2*DW;
+      g.fillStyle='#e8e8e8';
+      for(let k=0;k<sn;k++){ const sx=so+k*2*DW; g.beginPath(); g.moveTo(sx,Y+DH*1.4); g.lineTo(sx+DW,Y); g.lineTo(sx+2*DW,Y+DH*1.4); g.fill(); }
+      g.fillStyle='#c94f4f'; for(let k=0;k<sn;k++) g.fillRect(so+(k*2+1)*DW-1,Y,2,2);
+      g.restore();
+    } else {
+      g.fillStyle=ST_COL[type]||'#8b7d6b'; g.fillRect(X,Y,Wd,2*DH);
+      g.fillStyle='rgba(255,255,255,.18)'; g.fillRect(X,Y,Wd,2);
+    }
     if(type==='convL'||type==='convR'){ g.fillStyle='rgba(255,255,255,.35)';
       const off=((t*14*(type==='convR'?1:-1))%4+4)%4;
       for(let i=-4;i<w+4;i+=4){ const sx=X+(i+off)*DW; if(sx>=X&&sx<X+Wd-DW) g.fillRect(sx,Y+DH*0.6,DW,DH*0.8); } }
     if(type==='spring'){ g.strokeStyle='#bdf0c8'; g.lineWidth=2; g.beginPath();
       for(let i=0;i<w;i+=2){ g.moveTo(X+i*DW,Y+DH*1.8); g.lineTo(X+(i+1)*DW,Y+DH*0.3); } g.stroke(); }
     if(type==='flip'){ g.fillStyle='rgba(0,0,0,.35)'; for(let i=0;i<w;i+=3) g.fillRect(X+i*DW,Y,DW,2*DH); }
+    g.globalAlpha=1;
   }
   // 天花板尖刺
   g.fillStyle='#3a3f4a'; g.fillRect(0,0,Wpx,DH*1.2);

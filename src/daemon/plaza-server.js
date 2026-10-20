@@ -25,6 +25,7 @@ const path   = require('path');
 const W      = require('../shared/plaza-walk.js');
 const ST     = require('../shared/stairs-sim.js');   // 下樓梯（docs/plaza-stairs-spec.md）
 const DN     = require('../shared/dino-sim.js');     // 小恐龍（docs/plaza-dino-spec.md）
+const DS     = require('../shared/duel-sim.js');     // 手動戰鬥（docs/plaza-duel-spec.md）
 
 const DEFAULT_PORT = 37373;
 const CAP          = 20;        // 同時在場上限（畫面可讀性決定，見規格 §九）
@@ -55,13 +56,13 @@ const STAIRS_BOARD_N  = 50;      // 排行榜留幾名
 const STAIRS_BOARD_FILE = process.env.VPET_STAIRS_BOARD || path.join(os.homedir(), '.vpet', 'stairs-board.json');
 // 小恐龍：位置各自算，伺服器只發 seed、轉送位置、收成績（規格 §二）
 const DINO_BOARD_FILE = process.env.VPET_DINO_BOARD || path.join(os.homedir(), '.vpet', 'dino-board.json');
-const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋' };   // 聊天室系統訊息用
+const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋', duel: '⚔ 手動戰鬥' };   // 聊天室系統訊息用
 // 五子棋（docs/plaza-gomoku-spec.md）：輪流下，伺服器判定（不吃時機，不用輸入同步）
 const GOMOKU_N = 15;
 const GOMOKU_END_MS = 2500;      // 連成五子之後，留幾毫秒讓大家看清楚最後一手，再結算
 // 打排球（docs/plaza-volley-spec.md）：1 對 1、輸入同步。伺服器只轉送每一格的按鍵、收結果
 const VOLLEY_COUNTDOWN_MS = 2000;
-const capOf = (r) => (r.kind === 'volley' || r.kind === 'gomoku' ? 2 : STAIRS_CAP);
+const capOf = (r) => (r.kind === 'volley' || r.kind === 'gomoku' || r.kind === 'duel' ? 2 : STAIRS_CAP);
 /** 五子棋：(x,y) 這一子往四個方向連了幾顆（取最長） */
 function gomokuLine(board, x, y) {
     const c = board[y * GOMOKU_N + x];
@@ -300,12 +301,14 @@ function createPlazaServer(opts = {}) {
         if (B.battle || busyIn(B.id)) return { status: 409, body: { ok: false, error: `${B.name} 正在對戰或有別的邀請` } };
         if (stairsRoomOf(A.id)) return { status: 409, body: { ok: false, error: '你在下樓梯的房間裡' } };
         if (stairsRoomOf(B.id)) return { status: 409, body: { ok: false, error: `${B.name} 正在玩下樓梯` } };
-        const inv = { inviteId: crypto.randomBytes(6).toString('hex'), from: A.id, to: B.id, at: now() };
+        // kind：'auto' = 原本的對戰（伺服器擲勝負、播前線演出）；'duel' = 手動戰鬥（docs/plaza-duel-spec.md）
+        const kind = body.kind === 'duel' ? 'duel' : 'auto';
+        const inv = { inviteId: crypto.randomBytes(6).toString('hex'), from: A.id, to: B.id, at: now(), kind };
         inv.timer = setTimeout(() => closeInvite(inv, 'timeout'), inviteMs);
         if (inv.timer.unref) inv.timer.unref();
         invites.set(inv.inviteId, inv);
-        send(B, 'invite', { inviteId: inv.inviteId, from: A.id, fromName: A.name, expiresAt: inv.at + inviteMs });
-        sys(`${A.name} 邀請 ${B.name} 對戰`);
+        send(B, 'invite', { inviteId: inv.inviteId, from: A.id, fromName: A.name, expiresAt: inv.at + inviteMs, kind });
+        sys(`${A.name} 邀請 ${B.name} ${kind === 'duel' ? '手動戰鬥' : '對戰'}`);
         return { status: 200, body: { ok: true, inviteId: inv.inviteId, expiresAt: inv.at + inviteMs } };
     }
     function answer(body) {
@@ -316,6 +319,11 @@ function createPlazaServer(opts = {}) {
         const A = members.get(inv.from), B = members.get(inv.to);
         invites.delete(inviteId); clearTimeout(inv.timer);
         if (!A || !B) return { status: 404, body: { ok: false, error: '對方已經不在廣場了' } };
+        if (inv.kind === 'duel') {
+            if (stairsRoomOf(A.id) || stairsRoomOf(B.id)) return { status: 409, body: { ok: false, error: '有人正在玩小遊戲' } };
+            duelStart(A, B);
+            return { status: 200, body: { ok: true } };
+        }
         startBattle(A, B);
         return { status: 200, body: { ok: true } };
     }
@@ -327,14 +335,7 @@ function createPlazaServer(opts = {}) {
         const t = now();
         const battleId = crypto.randomBytes(6).toString('hex');
         const winner = rand() < winProbA(A, B) ? A.id : B.id;
-        // 兩隻停在原地（用手動模式的「停著」表示，大家算出來的位置一致）。
-        // 原本的模式記在 m.mode，打完照它恢復。
-        for (const m of [A, B]) {
-            const cur = W.walkPos(m.walk, t, null, FIELD);
-            m.walk = { mode: 'manual', x: cur.x, y: cur.y, facing: cur.facing, vx: 0, vy: 0, at: t };
-            m.battle = battleId;
-            broadcast('member', pub(m));
-        }
+        freeze([A, B], battleId);
         const fighter = (m) => ({ id: m.id, name: m.name, char: m.char });
         broadcast('battle', { battleId, a: fighter(A), b: fighter(B), winner, at: t });
         sys(`${A.name} 對 ${B.name} 開打！`);
@@ -342,6 +343,17 @@ function createPlazaServer(opts = {}) {
         const timer = setTimeout(() => { battleTimers.delete(timer); endBattle(battleId, [A.id, B.id], winner); }, battleMs);
         if (timer.unref) timer.unref();
         battleTimers.add(timer);
+    }
+    // 兩隻停在原地（用手動模式的「停著」表示，大家算出來的位置一致），頭上畫 ⚔。
+    // 原本的模式記在 m.mode，打完（endBattle）照它恢復。
+    function freeze(ms, battleId) {
+        const t = now();
+        for (const m of ms) {
+            const cur = W.walkPos(m.walk, t, null, FIELD);
+            m.walk = { mode: 'manual', x: cur.x, y: cur.y, facing: cur.facing, vx: 0, vy: 0, at: t };
+            m.battle = battleId;
+            broadcast('member', pub(m));
+        }
     }
     function endBattle(battleId, ids, winner) {
         const t = now();
@@ -440,6 +452,10 @@ function createPlazaServer(opts = {}) {
                               dino: r.dino ? { seed: r.dino.seed, startAt: r.dino.startAt } : null,
                               mode: r.mode, n: r.ids.length, cap: capOf(r), state: r.state, ver: STAIRS_VER,
                               volley: r.volley ? { startAt: r.volley.startAt, sides: r.volley.sides } : null,
+                              // 手動戰鬥：雙方選了什麼不公開（只給「選好了沒」），回合結算後才在 last 裡
+                              duel: r.duel ? { sides: r.duel.sides, str: r.duel.str, hp: r.duel.hp, max: r.duel.max, row: r.duel.row,
+                                               round: r.duel.round, bg: r.duel.bg, startAt: r.duel.startAt, deadline: r.duel.deadline,
+                                               picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner } : null,
                               gomoku: r.gomoku ? { board: r.gomoku.board.join(''), turn: r.gomoku.turn, sides: r.gomoku.sides,
                                                    last: r.gomoku.last, expr: r.gomoku.expr, exprAt: r.gomoku.exprAt,
                                                    winner: r.gomoku.winner, n: GOMOKU_N } : null,
@@ -759,6 +775,81 @@ function createPlazaServer(opts = {}) {
         log(`五子棋結束：${result.map(x => x.name + (x.draw ? ' 和' : x.rank === 1 ? ' 勝' : ' 敗')).join('、')}（${why}，${moves} 手）`);
     }
 
+    // ── 手動戰鬥（docs/plaza-duel-spec.md）：對戰邀請選「手動戰鬥」→ 開一間 2 人房直接開打。
+    // 回合制、伺服器判定（duel-sim.js）：兩邊都選好或時限到 → 結算一回合、推 duel:round，頁面照結果演出
+    function duelStart(A, B) {
+        const t = now(), bg = DS.BGS[Math.floor(rand() * DS.BGS.length)];
+        const r = { id: crypto.randomBytes(5).toString('hex'), host: A.id, kind: 'duel', mode: 'endless', ids: [A.id, B.id],
+                    state: 'play', game: null, timer: null, ver: STAIRS_VER, startedAt: t };
+        const startAt = t + (opts.duelOpenMs ?? DS.OPEN_MS);
+        r.duel = { ...DS.createDuel([A.card.str, B.card.str], bg), sides: [A.id, B.id], startAt,
+                   deadline: startAt + (opts.duelPickMs ?? DS.PICK_MS), picks: [null, null], endAt: null };
+        rooms.set(r.id, r);
+        freeze([A, B], 'duel:' + r.id);
+        roomSend(r, 'stairs:start', { room: roomPub(r) });
+        roomsChanged();
+        sys(`${A.name} 對 ${B.name} 手動戰鬥開打！`);
+        r.timer = setInterval(() => duelTick(r), 100);
+        if (r.timer.unref) r.timer.unref();
+        return r;
+    }
+    function duelTick(r) {
+        const d = r.duel; if (!d) return;
+        if (d.winner != null) { if (now() >= d.endAt) duelEnd(r, d.winner >= 0 ? d.sides[d.winner] : null, 'done'); return; }
+        for (const i of d.sides) {
+            const m = members.get(i);
+            if (!m || (!m.stream && m.lostAt != null && now() - m.lostAt > stairsLostMs)) return duelEnd(r, d.sides.find(x => x !== i), 'lost');
+        }
+        if (now() >= d.deadline) duelResolve(r);   // 時限到：沒選的用預設（不動、打正前方、1 倍）
+    }
+    function duelResolve(r) {
+        const d = r.duel;
+        const picks = [0, 1].map(i => DS.normPick(d, i, d.picks[i]));
+        const last = DS.resolve(d, picks);
+        d.picks = [null, null];
+        const anim = opts.duelAnimMs ?? DS.ANIM_MS;
+        if (d.winner != null) d.endAt = now() + anim + (opts.duelEndMs ?? DS.END_MS);
+        else d.deadline = now() + anim + (opts.duelPickMs ?? DS.PICK_MS);
+        roomSend(r, 'duel:round', { last });
+        roomsChanged();
+    }
+    // 這回合的選擇：{ mv, aim, p }（可以只給一部分，沒給的用預設）。一回合只收一次；演出中還不收
+    function duelPick(body) {
+        const id = body && body.id, r = stairsRoomOf(id), d = r && r.duel;
+        if (!d || d.winner != null) return { status: 409, body: { ok: false, error: '不在對戰中' } };
+        const i = d.sides.indexOf(id);
+        const t = now(), open = Math.max(d.startAt, d.deadline - (opts.duelPickMs ?? DS.PICK_MS));
+        if (t < open || t >= d.deadline) return { status: 409, body: { ok: false, error: '還不能選' } };
+        if (d.picks[i]) return { status: 409, body: { ok: false, error: '這回合已經選好了' } };
+        const has = (k) => body[k] !== undefined && body[k] !== null;
+        const mv = Number(body.mv), aim = Number(body.aim), p = Number(body.p);
+        if ((has('mv') && !DS.okMove(d, i, mv)) || (has('aim') && ![0, 1, 2].includes(aim))
+            || (has('p') && !(p >= 0 && p <= 1))) return { status: 400, body: { ok: false, error: '選擇不合法' } };
+        d.picks[i] = { mv: has('mv') ? mv : undefined, aim: has('aim') ? aim : undefined, p: has('p') ? p : undefined };
+        if (d.picks[0] && d.picks[1]) duelResolve(r);
+        else roomsChanged();   // 讓對手看到「已選好」
+        return { status: 200, body: { ok: true } };
+    }
+    function duelResign(body) {
+        const id = body && body.id, r = stairsRoomOf(id), d = r && r.duel;
+        if (!d || d.winner != null) return { status: 409, body: { ok: false, error: '不在對戰中' } };
+        duelEnd(r, d.sides.find(x => x !== id), 'resign');
+        return { status: 200, body: { ok: true } };
+    }
+    function duelEnd(r, winner, why) {
+        const d = r.duel;
+        if (!d || !rooms.has(r.id)) return;
+        const result = d.sides.map((i, k) => ({ id: i, name: (members.get(i) || {}).name || '?', char: (members.get(i) || {}).char || null,
+                                               rank: winner == null ? 1 : i === winner ? 1 : 2, draw: winner == null,
+                                               why: winner != null && i !== winner ? why : null,
+                                               hp: d.hp[k], max: d.max[k], rounds: d.round - 1 }));
+        r.duel = null; r.state = 'lobby';
+        roomSend(r, 'stairs:end', { room: roomPub(r), result, records: [], board: [] });
+        closeRoom(r);
+        endBattle('duel:' + r.id, d.sides, winner);   // 解除原地不動、頭上的 ⚔（不記戰績、不算進化）
+        log(`手動戰鬥結束：${result.map(x => x.name + (x.draw ? ' 和' : x.rank === 1 ? ' 勝' : ' 敗')).join('、')}（${why}，${d.round - 1} 回合）`);
+    }
+
     function stairsInput(body) {
         const id = body && body.id, r = stairsRoomOf(id);
         if (!r || !r.game) return { status: 409, body: { ok: false, error: '不在遊戲中' } };
@@ -784,6 +875,7 @@ function createPlazaServer(opts = {}) {
             if (r.dino) dinoCheck(r);   // 走掉的是最後一個還在跑的 → 結束
             if (r.volley) volleyEnd(r, r.ids[0], 'left');   // 打到一半有人走了 → 留下來的贏
             // 已經分出勝負（等著結算）的照原本的結果；還在下的 → 留下來的贏
+            if (r.duel) { const dw = r.duel.winner; duelEnd(r, dw == null ? r.ids[0] : dw >= 0 ? r.duel.sides[dw] : null, dw == null ? 'left' : 'done'); }
             if (r.gomoku) { const gw = r.gomoku.winner; gomokuEnd(r, gw == null ? r.ids[0] : gw >= 0 ? r.gomoku.sides[gw] : null, gw == null ? 'left' : 'done'); }
         }
         roomsChanged();
@@ -870,7 +962,8 @@ function createPlazaServer(opts = {}) {
         const SR = { '/stairs/open': stairsOpen, '/stairs/start': stairsStart, '/stairs/input': stairsInput,
                      '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j),
                      '/stairs/vin': volleyInput, '/stairs/vend': volleyReport,
-                     '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign };
+                     '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign,
+                     '/stairs/dpick': duelPick, '/stairs/dresign': duelResign };
         if (req.method === 'POST' && SR[u.pathname]) {
             return readBody(req, (j) => { const r = SR[u.pathname](j); reply(res, r.status, r.body); });
         }

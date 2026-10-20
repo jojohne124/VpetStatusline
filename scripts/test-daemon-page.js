@@ -1519,6 +1519,17 @@ setTimeout(async () => {
     ok(/const fs=g\.f\+VB_DELAY;\s*if\(!vbMine\.has\(fs\)\)\{ const k=vbKeyBits\(\); vbMine\.set\(fs,k\); sendCmd\('volleyInput'/.test(src), '打排球沒有把按鍵延後 VB_DELAY 格送出');
     ok(/if\(mk===undefined\|\|tk===undefined\)\{ stalled=true; break; \}/.test(src), '對手的按鍵還沒到就往下算了（兩邊會分岔）');
     ok(/const fr=g0\.over\?\(g0\.winner===i\?5:3\):p\.atk>0\?4:/.test(src) && /\['IDLE_1', 'IDLE_2', 'HURT', 'SAD', 'ATTACK', 'HAPPY', 'ANGRY'\]/.test(src), '擊球時沒有用攻擊幀（ATTACK）');
+    // 手動戰鬥（docs/plaza-duel-spec.md）：判定內嵌（dev 測試用）、邀請選項、進房就開打、選擇送伺服器、dev 測試只在開發版
+    {
+        const ds = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'duel-sim.js'), 'utf8');
+        ok(!/[`\\]|\$\{|<\/script/i.test(ds), 'duel-sim.js 有不能內嵌進頁面的字元（反引號、反斜線、錢號大括號）');
+    }
+    ok(/const DS=\$\{DUEL_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ DUEL_SRC/.test(src), '頁面沒有內嵌手動戰鬥的判定（duel-sim.js）');
+    ok(/sendCmd\('plazaInvite',\{to:String\(t\.key\)\.slice\(2\),kind:'duel'\}\)/.test(src), '點別人的 vpet 沒有「邀請手動戰鬥」');
+    ok(/if\(m\.kind==='duel'\)\{[^]*?if\(m\.state==='play'&&m\.duel\)\{ document\.getElementById\('stairspanel'\)\.style\.display='none'; mbStart\(\); \}/.test(src), '手動戰鬥的房間開打了頁面沒開演');
+    ok(/sendCmd\('duelPick',args\)/.test(src) && /if\(comState\)\{ d\.picks\[0\]=pk;/.test(src), '手動戰鬥的選擇沒送伺服器（或 dev 測試沒在本地收）');
+    ok(/\+\(PLAZA_ADMIN&&DS\?'<div class="mp-game devonly"><b>⚔ 手動戰鬥（dev 測試）/.test(src) && /const DEV_ONLY\s*= new Set\(\[[^\]]*'duelDev'/.test(src), 'dev 測試對戰沒有擋在開發版');
+    ok(/cv\.style\.width=\(69\*CW\)\+'px'; cv\.style\.height=\(54\*\(CH\/2\)\)\+'px';/.test(src) && /mbStop\(\); mbUnstyle\(\);/.test(src), '手動戰鬥的畫布沒縮到跟其他小遊戲一樣大（或換遊戲時沒還原）');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

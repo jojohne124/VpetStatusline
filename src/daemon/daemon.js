@@ -4833,6 +4833,34 @@ function vbFrame(){
   }
   vbDraw(now);
 }
+// 開場倒數時的操作說明：置中的小卡片，按鍵畫成鍵帽（原本一整行字會超出畫面兩邊，2026-10-20）
+function vbHelpCard(g, cx, top){
+  const rows=[
+    [['k','←'],['k','→'],['t','移動'],['g'],['k','↑'],['t','跳']],
+    [['k','空白鍵'],['t','或點畫面'],['g'],['t','碰到球時用力打']],
+    [['t','在空中用力打＝殺球'],['g'],['t','先拿 '+VB.WIN+' 分贏']],
+  ];
+  const KF='bold 11px ui-monospace,Consolas,monospace', TF='12px sans-serif', RH=22, PAD=12;
+  const wOf=(it)=>{ if(it[0]==='g') return 14; g.font=it[0]==='k'?KF:TF; return it[0]==='k'?Math.max(20,g.measureText(it[1]).width+10):g.measureText(it[1]).width; };
+  const rowW=(r)=>r.reduce((s,it)=>s+wOf(it)+4,-4);
+  const cw=Math.max(...rows.map(rowW))+PAD*2, ch=rows.length*RH+PAD*2-6;
+  const rr=(x,y,w,h,r)=>{ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); };
+  g.fillStyle='rgba(255,255,255,.9)'; rr(cx-cw/2,top,cw,ch,8); g.fill();
+  g.strokeStyle='#d0d7de'; g.lineWidth=1; g.stroke();
+  g.textBaseline='middle'; g.textAlign='left';
+  rows.forEach((r,j)=>{
+    let x=cx-rowW(r)/2; const y=top+PAD+j*RH+5;
+    for(const it of r){
+      const w=wOf(it);
+      if(it[0]==='k'){ g.fillStyle='#d0d7de'; rr(x,y-9,w,19,4); g.fill(); g.fillStyle='#fff'; rr(x,y-9,w,17,4); g.fill();
+        g.strokeStyle='#8c959f'; rr(x,y-9,w,19,4); g.stroke();
+        g.font=KF; g.fillStyle='#1f2328'; g.textAlign='center'; g.fillText(it[1],x+w/2,y); g.textAlign='left'; }
+      else if(it[0]==='t'){ g.font=TF; g.fillStyle='#1f2328'; g.fillText(it[1],x,y+1); }
+      x+=w+4;
+    }
+  });
+  g.textBaseline='alphabetic';
+}
 function vbDraw(now){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   const DW=CW, DH=CH/2, U=VB.SUB, Wpx=VB.W/U*DW, Hpx=VB.H/U*DH, g0=vbGame;
@@ -4878,7 +4906,7 @@ function vbDraw(now){
   g.fillText(g0.score[0]+' : '+g0.score[1], Wpx/2, 22);
   g.font='12px sans-serif';
   if(now<vbStartAt){ g.fillStyle='#9a6700'; g.font='bold 40px ui-monospace,Consolas,monospace'; g.fillText(String(Math.ceil((vbStartAt-now)/1000)), Wpx/2, Hpx/2-10);
-    g.font='12px sans-serif'; g.fillStyle='#1f2328'; g.fillText('← → 移動　↑ 跳　碰到球時按空白鍵或點畫面＝用力打（空中是殺球）　先拿 '+VB.WIN+' 分', Wpx/2, Hpx/2+14); }
+    vbHelpCard(g, Wpx/2, 34); g.textAlign='center'; }
   else if(g0.pause&&!g0.over){ g.fillText('得分！', Wpx/2, 40); }
   if(vbStallAt&&performance.now()-vbStallAt>400){ g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(0,Hpx/2-16,Wpx,32);
     g.fillStyle='#fff'; g.font='bold 13px sans-serif'; g.fillText('等待對手連線…', Wpx/2, Hpx/2+5); }

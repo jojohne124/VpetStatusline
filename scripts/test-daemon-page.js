@@ -1497,6 +1497,7 @@ setTimeout(async () => {
     ok(/const fade=q\[6\]\|\|0;/.test(src) && /if\(type==='flip'&&fade>0\) g\.globalAlpha=/.test(src), '翻板快翻了沒有閃爍／變透明');
     ok(/g\.lineTo\(sx\+DW,Y\);/.test(src) && !/Y-DH\*1\.6/.test(src), '尖刺地板的刺又凸出地板上緣');
     ok(/g\.rect\(X,Y,Wd,2\*DH\); g\.clip\(\);/.test(src) && /const sn=Math\.floor\(w\/2\)/.test(src), '尖刺地板寬度奇數時刺會超出右緣');
+    ok(/vbHelpCard\(g, Wpx\/2, 34\)/.test(src) && !/g\.fillText\('← → 移動/.test(src), '排球倒數的說明又變回一整行字（會超出畫面）');
     ok(/if\(stCur\.cd>0\)/.test(src), '沒有顯示開局倒數');
     for (const c of ['stairsOpen', 'stairsStart', 'stairsLeave', 'stairsInput']) ok(new RegExp("action === '" + c + "'").test(src), '少了指令 ' + c);
 }

@@ -152,6 +152,10 @@ function create(opts = {}) {
             onStairs(event.slice(7), d);
         } else if (event === 'stairs:tick') {
             onStairs('tick', d);
+        } else if (event === 'gomoku:move') {
+            onStairs('gmove', d);   // 五子棋：有人下了一手（daemon 推給頁面 → 頁面馬上重抓）
+        } else if (event === 'volley:in') {
+            onStairs('vin', d);     // 打排球：對手這一格的按鍵（一秒 25 次）
         } else if (event === 'dino:ghost') {
             onStairs('ghost', d);   // 小恐龍：同房的人的位置（約 10 次／秒）
         } else if (event === 'stairs:end') {

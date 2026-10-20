@@ -456,7 +456,9 @@ function stairsSprites(chars) {
     for (const c of chars || []) {
         if (!c || out[c] || !/^[A-Za-z0-9_-]{1,40}$/.test(c)) continue;
         try {
-            const f = (facing) => ['IDLE_1', 'IDLE_2', 'HURT', 'SAD'].map((fr, i) =>
+            // 0 待機一、1 待機二、2 受傷、3 難過、4 攻擊（打排球擊球）、5 開心（贏了）
+            // 6 生氣（五子棋：被連成三）
+            const f = (facing) => ['IDLE_1', 'IDLE_2', 'HURT', 'SAD', 'ATTACK', 'HAPPY', 'ANGRY'].map((fr, i) =>
                 plaza.spriteDots(core, c, i === 1 ? 1 : 0, facing, i < 2 ? null : fr));
             out[c] = { r: f('right'), l: f('left') };
         } catch (e) {}
@@ -1164,7 +1166,7 @@ function applyCommand(action, args = {}) {
     }
     // 下樓梯：開房（第一期只有無限制）／出發／方向（-1/0/1，只在改變時送）／離開房間
     if (action === 'stairsOpen')  return plazaClient.stairs('open', { mode: args.mode === 'survival' ? 'survival' : 'endless',
-                                                                    kind: args.kind === 'dino' ? 'dino' : 'stairs' })
+                                                                    kind: ['dino', 'volley', 'gomoku'].includes(args.kind) ? args.kind : 'stairs' })
                                          .then(r => (r.ok ? { ok: true, action } : r));
     // 小恐龍：回報自己跑到哪（約 10 次／秒）。/cmd 只收字串，這裡轉回數字
     if (action === 'dinoReport') {
@@ -1183,6 +1185,19 @@ function applyCommand(action, args = {}) {
         return plazaClient.stairs('input', { dir }).then(r => (r.ok ? { ok: true, action } : r));
     }
     if (action === 'stairsBoard') return plazaClient.stairsBoard(args.kind).then(board => ({ ok: true, action, board }));
+    // 打排球：每一格的按鍵（一秒 25 次）、比賽結果（兩邊算的一樣，誰先報都行）
+    // 五子棋：下一手、認輸
+    if (action === 'gomokuMove') {
+        return plazaClient.stairs('gmove', { x: Number(args.x), y: Number(args.y) }).then(r => (r.ok ? { ok: true, action } : r));
+    }
+    if (action === 'gomokuResign') return plazaClient.stairs('gresign').then(r => (r.ok ? { ok: true, action } : r));
+    if (action === 'volleyInput') {
+        return plazaClient.stairs('vin', { f: Number(args.f), k: Number(args.k) }).then(r => (r.ok ? { ok: true, action } : r));
+    }
+    if (action === 'volleyEnd') {
+        return plazaClient.stairs('vend', { winner: args.winner, score: [Number(args.s0), Number(args.s1)] })
+            .then(r => (r.ok ? { ok: true, action } : r));
+    }
     if (action === 'plazaHappy') {
         return plazaClient.emote().then(r => (r.ok ? { ok: true, action } : r));
     }
@@ -1388,14 +1403,15 @@ const WIND_ART = loadWindArt();
 // 小恐龍的模擬（src/shared/dino-sim.js）原樣內嵌進頁面：瀏覽器自己算位置（docs/plaza-dino-spec.md）。
 // 頁面是 template literal → 那支不能有反引號、錢字號接大括號、反斜線；有的話就不內嵌（小恐龍停用），
 // 不能讓整個頁面壞掉。test-dino 會先擋。
-function loadDinoSrc() {
+function loadSimSrc(file, what) {
     try {
-        const src = fs.readFileSync(path.join(__dirname, '..', 'shared', 'dino-sim.js'), 'utf8');
-        if (/[`\\]|\$\{|<\/script/i.test(src)) { console.log('   ⚠️ dino-sim.js 有不能內嵌的字元，小恐龍停用'); return ''; }
+        const src = fs.readFileSync(path.join(__dirname, '..', 'shared', file), 'utf8');
+        if (/[`\\]|\$\{|<\/script/i.test(src)) { console.log('   ⚠️ ' + file + ' 有不能內嵌的字元，' + what + '停用'); return ''; }
         return src;
-    } catch (e) { console.log('   ⚠️ 讀不到 dino-sim.js，小恐龍停用：' + e.message); return ''; }
+    } catch (e) { console.log('   ⚠️ 讀不到 ' + file + '，' + what + '停用：' + e.message); return ''; }
 }
-const DINO_SRC = loadDinoSrc();
+const DINO_SRC = loadSimSrc('dino-sim.js', '小恐龍');
+const VOLLEY_SRC = loadSimSrc('volley-sim.js', '打排球');   // 打排球：兩邊各算同一套（輸入同步）
 
 // 教學助手（docs/tutorial-spec.md）：一般角色資料夾（characters/TerriermonAssistant，
 // 沒進 roster，玩家遇不到），拿 IDLE_1／IDLE_2 兩幀交替當講話。
@@ -1580,6 +1596,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 下樓梯：蓋在廣場畫面上（同一個舞台、一樣大） */
   #stairsbox{position:absolute;inset:0;z-index:5;display:none}
   #stairscv{position:absolute;image-rendering:pixelated;max-width:none}
+  #gmresign{position:absolute;right:8px;bottom:8px;z-index:2;font-size:11px;padding:2px 8px}
   /* 小遊戲選單（廣場的「🎮 小遊戲」）：跟等待面板同一個樣式，蓋在舞台中間 */
   #minipick{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;display:none;width:300px;max-width:92%;
             background:rgba(13,17,23,.95);border:1px solid #444c56;border-radius:8px;padding:10px 12px;
@@ -1719,7 +1736,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1837,6 +1854,7 @@ let CW=HOME_CW, CH=HOME_CH;
 // 寒風的點陣（天狐獸的子彈，依顏色分好組）。伺服器端抽好再內嵌，見 loadWindArt。
 const WIND_ART=${JSON.stringify(WIND_ART)};
 const DN=${DINO_SRC ? '(function(){const module={exports:{}};' + DINO_SRC + ';return module.exports;})()' : 'null'};   // 小恐龍的模擬（dino-sim.js）
+const VB=${VOLLEY_SRC ? '(function(){const module={exports:{}};' + VOLLEY_SRC + ';return module.exports;})()' : 'null'};   // 打排球的模擬（volley-sim.js）
 // 風往哪邊吹：+1 = 由左至右，-1 = 由右至左。
 // 造型會跟著轉向（見 wxGust），所以改這一個數字就好，不用動美術也不用動繪圖。
 // 子彈原圖是朝右的（角色預設朝右發射），所以 +1 時不鏡射。
@@ -3411,7 +3429,7 @@ function drawNameTags(tags, owner){
     const rk=stRoomKindOf(String(t.key||'').slice(2));
     if(rk&&!t.battling){
       const bx=t.x*DW, by=Math.max(2,t.top*DH-16);
-      g.fillText(rk==='dino'?'🦖':'🪜',bx,by);
+      g.fillText(rk==='dino'?'🦖':rk==='volley'?'🏐':rk==='gomoku'?'⚫':'🪜',bx,by);
     }
     // 手動模式放太久睡著了：頭上冒 z（跟家裡睡覺的 Zzz 同一個意思）
     if(t.sleeping){
@@ -3526,7 +3544,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4108,7 +4126,7 @@ function stairsSync(s, serverNow){
   document.getElementById('minibtn').style.display=(view==='plaza'&&!m)?'':'none';
   if(m) miniClose();
   if(!m){
-    stStream(false); stStop(); dnStop();
+    stStream(false); stStop(); dnStop(); vbStop(); gmStop();
     // 一局結束房間就解散了（伺服器）：結果面板蓋在廣場上，按「回到廣場」收掉
     const end=stairs&&stairs.end;
     if(end&&end.result&&end.at!==stEndSeen){ box.style.display='block'; stEndPanel(end); }
@@ -4118,6 +4136,20 @@ function stairsSync(s, serverNow){
   box.style.display='block';
   stStream(true);
   stLoadSprites(m);
+  if(m.kind==='gomoku'){
+    stStop(); dnStop(); vbStop();
+    if(m.state==='play'&&m.gomoku){ document.getElementById('stairspanel').style.display='none'; gmStart(); }
+    else { gmStop(); stPanel(m); }
+    return;
+  }
+  gmStop();
+  if(m.kind==='volley'){
+    stStop(); dnStop();
+    if(m.state==='play'&&m.volley){ document.getElementById('stairspanel').style.display='none'; vbBegin(m.volley); }
+    else { vbStop(); stPanel(m); }
+    return;
+  }
+  vbStop();
   if(m.kind==='dino'){
     stStop();
     if(m.state==='play'&&m.dino){ document.getElementById('stairspanel').style.display='none'; dnBegin(m.dino); }
@@ -4138,6 +4170,8 @@ function stStream(on){
     stES.addEventListener('end',()=>{ poll(); });
     stES.addEventListener('lobby',()=>{ poll(); });
     stES.addEventListener('ghost',e=>{ try{ dnGhost(JSON.parse(e.data)); }catch(x){} });
+    stES.addEventListener('vin',e=>{ try{ vbIn(JSON.parse(e.data)); }catch(x){} });
+    stES.addEventListener('gmove',()=>{ poll(); });
   } else if(!on&&stES){ stES.close(); stES=null; stPrev=stCur=null; }
 }
 // 角色點陣：開局（或房裡有人換）時抓一次
@@ -4269,12 +4303,14 @@ setInterval(()=>{ if(stMine()&&!stPlaying()) stPanelPets(); }, 300);
 const MINI_GAMES=[
   { id:'stairs', name:'🪜 下樓梯', desc:'左右移動踩階梯往下走，越深越快。三顆心，尖刺和天花板會扣血。層數記排行榜。' },
   { id:'dino', name:'🦖 小恐龍', desc:'空白鍵或 ↑ 跳過仙人掌、閃過飛鳥，越跑越快。大家跑同一條賽道，別人是影子。分數記排行榜。' },
+  { id:'gomoku', name:'⚫ 五子棋', desc:'1 對 1，輪流在棋盤上下子，先連成五顆就贏（黑子先下）。兩邊的 vpet 會隨著棋局做表情。', noBoard:true },
+  { id:'volley', name:'🏐 打排球', desc:'1 對 1。← → 移動、↑ 跳，碰到球時按空白鍵或點畫面用力打（空中是殺球）。先拿 7 分贏。', noBoard:true },
 ];
 function miniOpen(){
   const el=document.getElementById('minipick');
   el.innerHTML='<div class="mp-h">🎮 小遊戲</div>'+MINI_GAMES.map(gm=>
     '<div class="mp-game"><b>'+gm.name+'</b><div class="mp-desc">'+gm.desc+'</div><div class="mp-modes">'
-    +'<button class="pri" data-g="'+gm.id+'">開房</button><button data-b="'+gm.id+'">🏆 排行榜</button></div>'
+    +'<button class="pri" data-g="'+gm.id+'">開房</button>'+(gm.noBoard?'':'<button data-b="'+gm.id+'">🏆 排行榜</button>')+'</div>'
     +((stairs&&stairs.rooms)||[]).filter(r=>(r.kind||'stairs')===gm.id).map(r=>'<div class="mp-room"><span>'+stEsc(r.hostName)+' 的房間　'+r.n+'/'+(r.cap||4)
       +(r.state!=='lobby'?'　進行中':'')+'</span><button data-j="'+stEsc(r.id)+'"'+(stJoinable(r.id)?'':' disabled')+'>加入</button></div>').join('')
     +'</div>').join('')
@@ -4332,12 +4368,22 @@ function stBoardHtml(kind, board, meName, n){
 function stEndPanel(end){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   document.getElementById('stairscv').style.display='';
-  const dino=end.kind==='dino', me=end.result.find(r=>r.id===stairs.meId);
-  let h='<div class="st-h">'+(dino?'🦖 小恐龍':'🪜 下樓梯')+'　結束</div>';
-  if(me) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
+  const dino=end.kind==='dino', volley=end.kind==='volley', gomoku=end.kind==='gomoku', me=end.result.find(r=>r.id===stairs.meId);
+  let h='<div class="st-h">'+(gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'　結束</div>';
+  if(gomoku&&me){
+    const op=end.result.find(r=>r.id!==me.id);
+    h+='<div class="st-res"><b>'+(me.draw?'平手':me.rank===1?'你贏了！':'你輸了')+'</b>　共 '+me.moves+' 手'
+      +(op&&op.why==='resign'?'（對手認輸）':me.why==='resign'?'（認輸）':op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
+  }
+  if(volley&&me){
+    const op=end.result.find(r=>r.id!==me.id);
+    h+='<div class="st-res"><b>'+(me.rank===1?'你贏了！':'你輸了')+'</b>'+(me.score!=null&&op&&op.score!=null?'　'+me.score+' : '+op.score:'')
+      +(op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
+  }
+  else if(me&&!gomoku) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
   const rec=(end.records||[]).find(r=>r.id===stairs.meId);
   if(rec) h+='<div class="st-rec">'+(rec.top1?'🏆 全服第一！':'🎉 刷新個人紀錄！')+'</div>';
-  h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
+  if(!volley&&!gomoku) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
   h+='<div class="st-btns"><button id="stback" class="pri">回到廣場</button></div>';
   if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h;
     document.getElementById('stback').addEventListener('click',()=>{ stEndSeen=end.at; stairsSync(stairs); });
@@ -4347,15 +4393,17 @@ function stPanel(m){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   const host=stairs.meId===m.host, end=stairs.end;
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const dino=m.kind==='dino';
+  const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku';
   void end;
-  let h='<div class="st-h">'+(dino?'🦖 小恐龍':'🪜 下樓梯')+'</div>';
+  let h='<div class="st-h">'+(gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'</div>';
   // 房裡每個人的 vpet（待機動畫，stPanelPets 畫）＋名牌；沒人的位置畫虛線框，看得出還能來幾個
   h+='<div class="st-mem">'+m.names.map((n,i)=>'<div class="st-pl'+(m.ids[i]===m.host?' host':'')+'"><canvas width="64" height="64" data-c="'+esc(m.chars[i]||'')+'"></canvas><span>'+esc(n)+'</span></div>').join('')
     +Array.from({length:Math.max(0,(m.cap||4)-m.names.length)},()=>'<div class="st-pl empty"><canvas width="64" height="64"></canvas><span>空位</span></div>').join('')+'</div>';
-  h+='<div class="st-hint">'+(dino?'空白鍵、↑ 或點畫面跳（按住跳高一點），跳過仙人掌、閃過飛鳥；高的鳥站著就會從頭上飛過。撞到就結束，跑越遠分數越高。'
+  h+='<div class="st-hint">'+(gomoku?'1 對 1。房主執黑先下，輪流點棋盤下子，橫、直、斜任一方向先連成五顆就贏。下完一手兩邊的 vpet 會做表情。':volley?'1 對 1。← → 或 A D 移動、↑ 或 W 跳。碰到球就會彈回去；碰到的那一刻按空白鍵或點畫面＝用力打（球快很多，在空中是往下殺球）。球落在誰那邊，另一邊得分；先拿 7 分贏。'
+     :dino?'空白鍵、↑ 或點畫面跳（按住跳高一點），跳過仙人掌、閃過飛鳥；高的鳥站著就會從頭上飛過。撞到就結束，跑越遠分數越高。'
      :'← → 或 A D 移動。三顆心：尖刺、天花板各扣一顆，踩三次普通階梯回一顆；心沒了或掉出畫面就出局。')+'</div>';
-  h+='<div class="st-btns">'+(host?'<button id="stgo" class="pri">出發</button>':'<span class="st-wait">等房主出發…</span>')
+  const need2=(volley||gomoku)&&m.names.length<2;   // 打排球、五子棋要剛好 2 個人
+  h+='<div class="st-btns">'+(host?'<button id="stgo" class="pri"'+(need2?' disabled title="等對手加入"':'')+'>'+(need2?'等對手加入…':'出發')+'</button>':'<span class="st-wait">等房主出發…</span>')
     +'<button id="stleave">離開</button></div>';
   if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h; stPanelPets();
     const go=document.getElementById('stgo');
@@ -4460,7 +4508,7 @@ function dnDraw(now){
   const drawPet=(id,dist,y,alive,alpha)=>{
     const X=(DN.RX+dist-g0.dist)*DW; if(X>Wpx||X+DN.S*DW<0) return;
     const sp=stSprites[(info.get(id)||{}).char];
-    const fr=!alive?3:(y>0?0:Math.floor(dist/6)%2);   // 跑：兩幀交替；空中：待機；撞到：難過
+    const fr=!alive?3:(y>0?5:Math.floor(dist/6)%2);   // 跑：待機兩幀交替；跳：開心（HAPPY）；撞到：難過（SAD）
     const img=sp&&(sp.r[fr]||sp.r[0]);
     const Y=gy-(y+DN.S)*DH;
     g.globalAlpha=alpha;
@@ -4507,6 +4555,208 @@ window.addEventListener('keyup',e=>{
     if(!dnHeld){ dnHeld=true; DN.press(dnGame,true); }
   });
   for(const t of ['pointerup','pointercancel','pointerleave']) cv.addEventListener(t,up);
+})();
+// ── 五子棋（docs/plaza-gomoku-spec.md）────────────────────────────────────
+// 輪流下、伺服器判定：棋盤跟著 /plaza 的房間資料走（有人下了一手會推 gmove，頁面馬上重抓）。
+// 中間是棋盤，兩邊的 vpet 站在左右（左＝黑子、右＝白子），下完一手兩邊做表情（伺服器決定，大家看到一樣）。
+const GM_EXPR={ IDLE:-1, HURT:2, SAD:3, ATTACK:4, HAPPY:5, ANGRY:6 };   // 表情 → 角色點陣的第幾幀（-1 = 待機兩幀交替）
+const GM_EXPR_MS=2200;   // 表情維持多久（結束後的勝負表情一直維持）
+let gmRaf=0, gmHover=null;
+function gmData(){ const m=stMine(); return m&&m.kind==='gomoku'&&m.gomoku?m.gomoku:null; }
+function gmStart(){ if(!gmRaf) gmRaf=requestAnimationFrame(gmFrame); document.getElementById('gmresign').style.display=''; }
+function gmStop(){ if(gmRaf){ cancelAnimationFrame(gmRaf); gmRaf=0; } document.getElementById('gmresign').style.display='none'; }
+function gmFrame(){ gmRaf=requestAnimationFrame(gmFrame); gmDraw(); }
+// 棋盤在畫布上的位置：正中間的正方形（留邊給兩邊的 vpet）
+function gmGeom(Wpx,Hpx,n){ const size=Math.min(Hpx-24, Wpx-2*(64+20)); const x0=(Wpx-size)/2, y0=(Hpx-size)/2+6; return { x0, y0, size, cell:size/(n-1) }; }
+function gmDraw(){
+  const gm=gmData(); if(!gm) return;
+  const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
+  const Wpx=69*CW, Hpx=54*(CH/2);
+  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
+  cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
+  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  g.fillStyle='#2b2118'; g.fillRect(0,0,Wpx,Hpx);
+  const n=gm.n||15, G=gmGeom(Wpx,Hpx,n);
+  // 棋盤：木頭色、格線、星位
+  g.fillStyle='#dcb35c'; g.fillRect(G.x0-G.cell*0.6,G.y0-G.cell*0.6,G.size+G.cell*1.2,G.size+G.cell*1.2);
+  g.strokeStyle='#5a4320'; g.lineWidth=1;
+  for(let i=0;i<n;i++){ const p=Math.round(G.x0+i*G.cell)+0.5, q=Math.round(G.y0+i*G.cell)+0.5;
+    g.beginPath(); g.moveTo(p,G.y0); g.lineTo(p,G.y0+G.size); g.stroke();
+    g.beginPath(); g.moveTo(G.x0,q); g.lineTo(G.x0+G.size,q); g.stroke(); }
+  g.fillStyle='#5a4320';
+  for(const [a,b] of [[3,3],[3,11],[11,3],[11,11],[7,7]]){ g.beginPath(); g.arc(G.x0+a*G.cell,G.y0+b*G.cell,2.5,0,6.2832); g.fill(); }
+  // 棋子
+  const r=G.cell*0.44;
+  for(let y=0;y<n;y++) for(let x=0;x<n;x++){
+    const c=gm.board[y*n+x]; if(c==='0') continue;
+    const cx=G.x0+x*G.cell, cy=G.y0+y*G.cell;
+    g.fillStyle=c==='1'?'#111':'#f4f4f4'; g.beginPath(); g.arc(cx,cy,r,0,6.2832); g.fill();
+    g.strokeStyle=c==='1'?'#000':'#999'; g.lineWidth=1; g.stroke();
+  }
+  if(gm.last){ g.fillStyle='#e5534b'; g.beginPath(); g.arc(G.x0+gm.last.x*G.cell,G.y0+gm.last.y*G.cell,r*0.35,0,6.2832); g.fill(); }
+  // 輪到我：滑鼠停的位置顯示半透明的預覽子
+  const me=stairs&&stairs.meId, myTurn=gm.winner==null&&gm.sides[gm.turn]===me;
+  if(myTurn&&gmHover&&gm.board[gmHover.y*n+gmHover.x]==='0'){
+    g.globalAlpha=0.45; g.fillStyle=gm.turn===0?'#111':'#f4f4f4';
+    g.beginPath(); g.arc(G.x0+gmHover.x*G.cell,G.y0+gmHover.y*G.cell,r,0,6.2832); g.fill(); g.globalAlpha=1;
+  }
+  // 兩邊的 vpet：左黑右白，面向棋盤；表情由伺服器給（下完一手 GM_EXPR_MS 內）
+  const m=stMine(), info=new Map(((m&&m.ids)||[]).map((id,i)=>[id,{ name:m.names[i], char:m.chars[i] }]));
+  const t=performance.now(), fresh=gm.winner!=null||(Date.now()+stSkew)-gm.exprAt<GM_EXPR_MS;
+  gm.sides.forEach((id,i)=>{
+    const sp=stSprites[(info.get(id)||{}).char], face=i===0?'r':'l';
+    const ex=fresh?GM_EXPR[gm.expr[i]]:-1;
+    const fr=ex==null||ex<0?Math.floor(t/600)%2:ex;
+    const img=sp&&(sp[face][fr]||sp[face][0]);
+    const px=i===0?10:Wpx-74, py=Hpx/2-10;
+    // 輪到誰：腳下亮一圈
+    if(gm.winner==null&&gm.turn===i){ g.fillStyle='rgba(247,198,49,.35)'; g.beginPath(); g.ellipse(px+32,py+66,30,7,0,0,6.2832); g.fill(); }
+    if(img) g.drawImage(img,px,py,64,64);
+    g.fillStyle=i===0?'#111':'#f4f4f4'; g.beginPath(); g.arc(px+32,py-26,7,0,6.2832); g.fill(); g.strokeStyle='#888'; g.stroke();
+    g.fillStyle=id===me?'#f7c631':'#e6edf3'; g.font='11px sans-serif'; g.textAlign='center';
+    g.fillText((info.get(id)||{}).name||'?', px+32, py-8);
+  });
+  g.fillStyle='#e6edf3'; g.font='bold 12px sans-serif'; g.textAlign='center';
+  const msg=gm.winner!=null?(gm.winner<0?'平手！':(gm.sides[gm.winner]===me?'你贏了！':'你輸了…')):(myTurn?'輪到你（'+(gm.turn===0?'黑':'白')+'）':'等對手下…');
+  g.fillText(msg, Wpx/2, 14);
+}
+// 點棋盤：換算成最近的交叉點，輪到我、那裡沒子就下
+function gmCell(e){
+  const gm=gmData(); if(!gm) return null;
+  const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect();
+  const sx=(e.clientX-rc.left)*cv.width/rc.width, sy=(e.clientY-rc.top)*cv.height/rc.height;
+  const n=gm.n||15, G=gmGeom(cv.width,cv.height,n);
+  const x=Math.round((sx-G.x0)/G.cell), y=Math.round((sy-G.y0)/G.cell);
+  return x>=0&&y>=0&&x<n&&y<n?{ x, y }:null;
+}
+(function(){
+  const cv=document.getElementById('stairscv');
+  cv.addEventListener('mousemove',e=>{ gmHover=gmData()?gmCell(e):null; });
+  cv.addEventListener('mouseleave',()=>{ gmHover=null; });
+  cv.addEventListener('click',e=>{
+    const gm=gmData(); if(!gm||gm.winner!=null||gm.sides[gm.turn]!==(stairs&&stairs.meId)) return;
+    const c=gmCell(e); if(!c||gm.board[c.y*(gm.n||15)+c.x]!=='0') return;
+    sendCmd('gomokuMove',{ x:String(c.x), y:String(c.y) }).then(r=>{ if(r&&!r.ok) flashCmdMsg(r.error||'下不了','#f85149'); poll(); });
+  });
+  document.getElementById('gmresign').addEventListener('click',()=>{
+    if(confirm('確定要認輸嗎？')) sendCmd('gomokuResign').then(()=>poll());
+  });
+})();
+// ── 打排球（docs/plaza-volley-spec.md）────────────────────────────────────
+// 1 對 1、輸入同步（鎖步）：兩邊各算同一套模擬（volley-sim.js 原樣內嵌在 VB），只交換每一格的按鍵。
+// 我的按鍵延後 VB_DELAY 格才生效：處理第 f 格時，送出第 f+VB_DELAY 格的按鍵；
+// 第 f 格要等「我的、對手的」按鍵都到了才算 —— 網路卡一下畫面會停一下，但兩邊永遠一樣。
+const VB_DELAY=3;
+let vbGame=null, vbPrev=null, vbStartAt=0, vbSides=[], vbMe=0, vbMine=new Map(), vbTheirs=new Map(), vbRaf=0, vbKeys=new Set(), vbStallAt=0, vbEndSent=false, vbStepAt=0;
+function vbBegin(info){
+  if(!VB||!info) return;
+  if(vbGame&&vbStartAt===info.startAt){ if(!vbRaf) vbRaf=requestAnimationFrame(vbFrame); return; }
+  vbGame=VB.createGame(); vbPrev=null; vbStartAt=info.startAt; vbSides=info.sides||[];
+  vbMe=Math.max(0,vbSides.indexOf(stairs&&stairs.meId)); vbMine=new Map(); vbTheirs=new Map(); vbEndSent=false; vbStallAt=0;
+  if(!vbRaf) vbRaf=requestAnimationFrame(vbFrame);
+}
+function vbStop(){ if(vbRaf){ cancelAnimationFrame(vbRaf); vbRaf=0; } vbGame=null; vbKeys.clear(); }
+function vbPlaying(){ const m=stMine(); return !!(m&&m.kind==='volley'&&m.state==='play'&&vbGame&&!vbGame.over); }
+function vbIn(d){ if(d&&d.id!==(stairs&&stairs.meId)&&Number.isInteger(d.f)) vbTheirs.set(d.f,d.k|0); }
+function vbKeyBits(){
+  let k=0;
+  for(const c of vbKeys){ if(c==='arrowleft'||c==='a') k|=VB.K_LEFT; else if(c==='arrowright'||c==='d') k|=VB.K_RIGHT;
+    else if(c==='arrowup'||c==='w') k|=VB.K_JUMP; else if(c===' '||c==='enter'||c==='tap') k|=VB.K_SPIKE; }
+  return k;
+}
+function vbFrame(){
+  vbRaf=requestAnimationFrame(vbFrame);
+  const g=vbGame; if(!g) return;
+  const now=Date.now()+stSkew;
+  const due=Math.floor((now-vbStartAt)/VB.FRAME_MS);
+  let stalled=false;
+  while(g.f<due&&!g.over){
+    // 送出 VB_DELAY 格之後要用的按鍵（每格只送一次）
+    const fs=g.f+VB_DELAY;
+    if(!vbMine.has(fs)){ const k=vbKeyBits(); vbMine.set(fs,k); sendCmd('volleyInput',{ f:String(fs), k:String(k) }); }
+    const mk=g.f<VB_DELAY?0:vbMine.get(g.f), tk=g.f<VB_DELAY?0:vbTheirs.get(g.f);
+    if(mk===undefined||tk===undefined){ stalled=true; break; }   // 對手這一格的按鍵還沒到：等
+    vbPrev={ b:{ x:g.ball.x, y:g.ball.y }, p:g.players.map(p=>({ x:p.x, y:p.y })) };
+    const keys=vbMe===0?[mk,tk]:[tk,mk];
+    VB.step(g,keys); vbStepAt=performance.now();
+    vbMine.delete(g.f-1); vbTheirs.delete(g.f-1);
+  }
+  vbStallAt=stalled?(vbStallAt||performance.now()):0;
+  if(g.over&&!vbEndSent){
+    vbEndSent=true;   // 兩邊算的一樣：誰先報都可以，伺服器收第一個
+    sendCmd('volleyEnd',{ winner:vbSides[g.winner]||'', s0:String(g.score[0]), s1:String(g.score[1]) });
+  }
+  vbDraw(now);
+}
+function vbDraw(now){
+  const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
+  const DW=CW, DH=CH/2, U=VB.SUB, Wpx=VB.W/U*DW, Hpx=VB.H/U*DH, g0=vbGame;
+  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
+  cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
+  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const X=(v)=>v/U*DW, Y=(v)=>v/U*DH;
+  const sky=g.createLinearGradient(0,0,0,Y(VB.GROUND)); sky.addColorStop(0,'#7cc4f4'); sky.addColorStop(1,'#cfeefc');
+  g.fillStyle=sky; g.fillRect(0,0,Wpx,Y(VB.GROUND));
+  g.fillStyle='#e8cf8e'; g.fillRect(0,Y(VB.GROUND),Wpx,Hpx-Y(VB.GROUND));
+  g.fillStyle='#d4b670'; for(let i=0;i<30;i++) g.fillRect(((i*53)%Wpx), Y(VB.GROUND)+6+(i%4)*7, DW, DH/2);
+  // 網子
+  g.fillStyle='#f5f5f5'; g.fillRect(X(VB.NET_X),Y(VB.NET_TOP),X(VB.NET_W),Y(VB.GROUND-VB.NET_TOP));
+  g.fillStyle='#9aa4ad'; for(let y=VB.NET_TOP;y<VB.GROUND;y+=2*U) g.fillRect(X(VB.NET_X),Y(y),X(VB.NET_W),2);
+  // 補間：在上一格跟這一格之間（25 格／秒，不補會一頓一頓）
+  const a=vbPrev?Math.max(0,Math.min(1,(performance.now()-vbStepAt)/VB.FRAME_MS)):1;
+  const L=(p,c)=>p+(c-p)*a;
+  const m=stMine(), info=new Map(((m&&m.ids)||[]).map((id,i)=>[id,{ name:m.names[i], char:m.chars[i] }]));
+  g0.players.forEach((p,i)=>{
+    const id=vbSides[i], sp=stSprites[(info.get(id)||{}).char];
+    const px=vbPrev?L(vbPrev.p[i].x,p.x):p.x, py=vbPrev?L(vbPrev.p[i].y,p.y):p.y;
+    const face=i===0?'r':'l';
+    const air=p.y<VB.GROUND-VB.S;
+    // 擊球：攻擊幀（ATTACK）；結束：贏的開心、輸的難過；空中：待機一；平常：待機兩幀交替
+    const fr=g0.over?(g0.winner===i?5:3):p.atk>0?4:air?0:(Math.floor(g0.f/6)%2);
+    const img=sp&&(sp[face][fr]||sp[face][0]);
+    if(img) g.drawImage(img, X(px)+(X(VB.S)-64)/2, Y(py)+(Y(VB.S)-64), 64, 64);
+    else { g.fillStyle=i===0?'#d29922':'#58a6ff'; g.fillRect(X(px),Y(py),X(VB.S),Y(VB.S)); }
+    g.fillStyle=id===(stairs&&stairs.meId)?'#9a6700':'#1f2328'; g.font='11px sans-serif'; g.textAlign='center';
+    g.fillText((info.get(id)||{}).name||'?', X(px+VB.S/2), Y(py)-3);
+  });
+  // 球：白底紅線的點陣小球＋地上的影子
+  if(!g0.pause){
+    const bx=vbPrev?L(vbPrev.b.x,g0.ball.x):g0.ball.x, by=vbPrev?L(vbPrev.b.y,g0.ball.y):g0.ball.y, r=X(VB.BALL_R);
+    g.fillStyle='rgba(0,0,0,.18)'; g.beginPath(); g.ellipse(X(bx),Y(VB.GROUND)+2,r,r/3,0,0,6.2832); g.fill();
+    g.fillStyle='#ffffff'; g.beginPath(); g.arc(X(bx),Y(by),r,0,6.2832); g.fill();
+    g.strokeStyle='#e5534b'; g.lineWidth=2; g.beginPath(); g.arc(X(bx),Y(by),r*0.6,0.4,2.6); g.stroke();
+    g.strokeStyle='#57606a'; g.lineWidth=1; g.beginPath(); g.arc(X(bx),Y(by),r,0,6.2832); g.stroke();
+  }
+  // 比分
+  g.fillStyle='#1f2328'; g.font='bold 18px ui-monospace,Consolas,monospace'; g.textAlign='center';
+  g.fillText(g0.score[0]+' : '+g0.score[1], Wpx/2, 22);
+  g.font='12px sans-serif';
+  if(now<vbStartAt){ g.fillStyle='#9a6700'; g.font='bold 40px ui-monospace,Consolas,monospace'; g.fillText(String(Math.ceil((vbStartAt-now)/1000)), Wpx/2, Hpx/2-10);
+    g.font='12px sans-serif'; g.fillStyle='#1f2328'; g.fillText('← → 移動　↑ 跳　碰到球時按空白鍵或點畫面＝用力打（空中是殺球）　先拿 '+VB.WIN+' 分', Wpx/2, Hpx/2+14); }
+  else if(g0.pause&&!g0.over){ g.fillText('得分！', Wpx/2, 40); }
+  if(vbStallAt&&performance.now()-vbStallAt>400){ g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(0,Hpx/2-16,Wpx,32);
+    g.fillStyle='#fff'; g.font='bold 13px sans-serif'; g.fillText('等待對手連線…', Wpx/2, Hpx/2+5); }
+  if(g0.over){ g.fillStyle='rgba(0,0,0,.4)'; g.fillRect(0,Hpx/2-20,Wpx,40);
+    g.fillStyle='#fff'; g.font='bold 18px sans-serif'; g.fillText(g0.winner===vbMe?'你贏了！':'你輸了…', Wpx/2, Hpx/2+6); }
+}
+// 按鍵：← → / A D 移動、↑ / W 跳、空白鍵 / Enter 殺球（捕獲階段攔下，廣場不會一起動）
+const VB_KEYS=['arrowleft','arrowright','arrowup','a','d','w',' ','enter'];
+window.addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(!VB_KEYS.includes(k)||!vbPlaying()||typing()) return;
+  e.preventDefault(); e.stopImmediatePropagation(); vbKeys.add(k);
+},true);
+window.addEventListener('keyup',e=>{
+  const k=e.key.toLowerCase();
+  if(!vbKeys.has(k)) return;
+  e.stopImmediatePropagation(); vbKeys.delete(k);
+},true);
+window.addEventListener('blur',()=>vbKeys.clear());
+// 點畫面 = 殺球鍵（按住期間碰到球就用力打），同空白鍵
+(function(){
+  const cv=document.getElementById('stairscv');
+  cv.addEventListener('pointerdown',e=>{ if(!vbPlaying()) return; e.preventDefault(); e.stopPropagation(); vbKeys.add('tap'); });
+  for(const t of ['pointerup','pointercancel','pointerleave']) cv.addEventListener(t,()=>vbKeys.delete('tap'));
 })();
 // ── 拍照 ─────────────────────────────────────────────────────────────
 // 按下去：換一個 seed 跟伺服器要「大家排好、擺姿勢」的那一張（/yard?photo=），畫到舞台上，

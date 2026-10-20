@@ -55,7 +55,38 @@ const STAIRS_BOARD_N  = 50;      // 排行榜留幾名
 const STAIRS_BOARD_FILE = process.env.VPET_STAIRS_BOARD || path.join(os.homedir(), '.vpet', 'stairs-board.json');
 // 小恐龍：位置各自算，伺服器只發 seed、轉送位置、收成績（規格 §二）
 const DINO_BOARD_FILE = process.env.VPET_DINO_BOARD || path.join(os.homedir(), '.vpet', 'dino-board.json');
-const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍' };   // 聊天室系統訊息用
+const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋' };   // 聊天室系統訊息用
+// 五子棋（docs/plaza-gomoku-spec.md）：輪流下，伺服器判定（不吃時機，不用輸入同步）
+const GOMOKU_N = 15;
+const GOMOKU_END_MS = 2500;      // 連成五子之後，留幾毫秒讓大家看清楚最後一手，再結算
+// 打排球（docs/plaza-volley-spec.md）：1 對 1、輸入同步。伺服器只轉送每一格的按鍵、收結果
+const VOLLEY_COUNTDOWN_MS = 2000;
+const capOf = (r) => (r.kind === 'volley' || r.kind === 'gomoku' ? 2 : STAIRS_CAP);
+/** 五子棋：(x,y) 這一子往四個方向連了幾顆（取最長） */
+function gomokuLine(board, x, y) {
+    const c = board[y * GOMOKU_N + x];
+    let best = 1;
+    for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
+        let n = 1;
+        for (const s of [1, -1]) {
+            let i = x + dx * s, j = y + dy * s;
+            while (i >= 0 && j >= 0 && i < GOMOKU_N && j < GOMOKU_N && board[j * GOMOKU_N + i] === c) { n++; i += dx * s; j += dy * s; }
+        }
+        best = Math.max(best, n);
+    }
+    return best;
+}
+/**
+ * 五子棋的表情（下完一手之後兩邊的 vpet）：
+ *   下的人：連成五 → 開心；四 → 攻擊（逼對方）；三 → 開心；其他 → 待機
+ *   對手：  被連成四 → 受傷；三 → 生氣；其他 → 待機
+ */
+function gomokuExpr(len) {
+    if (len >= 5) return ['HAPPY', 'SAD'];
+    if (len === 4) return ['ATTACK', 'HURT'];
+    if (len === 3) return ['HAPPY', 'ANGRY'];
+    return ['IDLE', 'IDLE'];
+}
 const DINO_COUNTDOWN_MS = 2000;  // 出發後幾毫秒才起跑（大家用伺服器時間對齊）
 const DINO_STALE_MS     = 5000;  // 多久沒回報就當作撞到了（關分頁、當掉、重新整理）
 
@@ -407,7 +438,11 @@ function createPlazaServer(opts = {}) {
     const roomPub = (r) => ({ id: r.id, host: r.host, hostName: (members.get(r.host) || {}).name || '?',
                               kind: r.kind || 'stairs',
                               dino: r.dino ? { seed: r.dino.seed, startAt: r.dino.startAt } : null,
-                              mode: r.mode, n: r.ids.length, cap: STAIRS_CAP, state: r.state, ver: STAIRS_VER,
+                              mode: r.mode, n: r.ids.length, cap: capOf(r), state: r.state, ver: STAIRS_VER,
+                              volley: r.volley ? { startAt: r.volley.startAt, sides: r.volley.sides } : null,
+                              gomoku: r.gomoku ? { board: r.gomoku.board.join(''), turn: r.gomoku.turn, sides: r.gomoku.sides,
+                                                   last: r.gomoku.last, expr: r.gomoku.expr, exprAt: r.gomoku.exprAt,
+                                                   winner: r.gomoku.winner, n: GOMOKU_N } : null,
                               ids: r.ids.slice(),
                               names: r.ids.map(i => (members.get(i) || {}).name || '?'),
                               chars: r.ids.map(i => (members.get(i) || {}).char || null) });
@@ -422,7 +457,7 @@ function createPlazaServer(opts = {}) {
         if (stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '你已經在一個房間裡了' } };
         const mode = body.mode === 'survival' ? 'survival' : 'endless';
         if (mode === 'survival') return { status: 400, body: { ok: false, error: '生存制還沒開放（第二期）' } };
-        const kind = body.kind === 'dino' ? 'dino' : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
+        const kind = ['dino', 'volley', 'gomoku'].includes(body.kind) ? body.kind : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
         const r = { id: crypto.randomBytes(5).toString('hex'), host: m.id, kind, mode, ids: [m.id], state: 'lobby',
                     game: null, timer: null, ver: STAIRS_VER };
         rooms.set(r.id, r);
@@ -441,7 +476,7 @@ function createPlazaServer(opts = {}) {
         const r = rooms.get(body.room);
         if (!r) return { status: 404, body: { ok: false, error: '房間已經解散了' } };
         if (r.state !== 'lobby') return { status: 409, body: { ok: false, error: '這一局已經開始了，等下一局' } };
-        if (r.ids.length >= STAIRS_CAP) return { status: 409, body: { ok: false, error: `房間滿了（${STAIRS_CAP} 人）` } };
+        if (r.ids.length >= capOf(r)) return { status: 409, body: { ok: false, error: `房間滿了（${capOf(r)} 人）` } };
         r.ids.push(m.id);
         roomSend(r, 'stairs:lobby', { room: roomPub(r) });
         roomsChanged();
@@ -456,6 +491,8 @@ function createPlazaServer(opts = {}) {
         if (r.mode === 'survival' && r.ids.length < 2) return { status: 409, body: { ok: false, error: '生存制至少要 2 人' } };
         const seed = crypto.randomBytes(4).readUInt32BE(0);
         if (r.kind === 'dino') return dinoStart(r, seed);
+        if (r.kind === 'volley') return volleyStart(r);
+        if (r.kind === 'gomoku') return gomokuStart(r);
         r.game = ST.createGame({ seed, mode: r.mode, players: r.ids.map(i => ({ id: i })) });
         r.state = 'play'; r.startedAt = now();
         roomSend(r, 'stairs:start', { room: roomPub(r), seed });
@@ -606,6 +643,122 @@ function createPlazaServer(opts = {}) {
         log(`小恐龍結束：${result.map(x => x.name + ' ' + x.score).join('、')}`);
     }
 
+    // ── 打排球（docs/plaza-volley-spec.md）：輸入同步。伺服器不算球，只轉送按鍵、收結果 ──
+    function volleyStart(r) {
+        if (r.ids.length !== 2) return { status: 409, body: { ok: false, error: '打排球要剛好 2 個人' } };
+        const startAt = now() + (opts.volleyCountdownMs ?? VOLLEY_COUNTDOWN_MS);
+        r.volley = { startAt, sides: r.ids.slice(), last: new Map(r.ids.map(i => [i, now()])) };
+        r.state = 'play'; r.startedAt = now();
+        roomSend(r, 'stairs:start', { room: roomPub(r), startAt });
+        roomsChanged();
+        // 有人斷線太久 → 另一個人贏（不然對方一直等按鍵，整局卡住）
+        r.timer = setInterval(() => {
+            for (const i of r.volley.sides) {
+                const m = members.get(i);
+                if (!m || (!m.stream && m.lostAt != null && now() - m.lostAt > stairsLostMs)) {
+                    return volleyEnd(r, r.volley.sides.find(x => x !== i), 'lost');
+                }
+            }
+        }, Math.max(50, Math.min(1000, stairsLostMs / 4)));
+        if (r.timer.unref) r.timer.unref();
+        return { status: 200, body: { ok: true, startAt } };
+    }
+    // 一格的按鍵：{ f: 第幾格, k: 按鍵位元 }，原樣轉給對手（自己不用，自己本來就知道）
+    function volleyInput(body) {
+        const id = body && body.id, r = stairsRoomOf(id);
+        if (!r || !r.volley) return { status: 409, body: { ok: false, error: '不在比賽中' } };
+        const f = Number(body.f), k = Number(body.k);
+        if (!Number.isInteger(f) || f < 0 || f > 1e7 || !Number.isInteger(k) || k < 0 || k > 15) {
+            return { status: 400, body: { ok: false, error: '按鍵格式不對' } };
+        }
+        for (const i of r.ids) if (i !== id) { const m = members.get(i); if (m) send(m, 'volley:in', { id, f, k }); }
+        return { status: 200, body: { ok: true } };
+    }
+    // 結果：兩台算的一樣，誰先報都可以（報的只能是房裡的人、贏家要是房裡的人）
+    function volleyReport(body) {
+        const id = body && body.id, r = stairsRoomOf(id);
+        if (!r || !r.volley) return { status: 409, body: { ok: false, error: '不在比賽中' } };
+        if (!r.ids.includes(body.winner)) return { status: 400, body: { ok: false, error: '贏家不對' } };
+        const sc = Array.isArray(body.score) ? body.score.map(Number) : null;
+        volleyEnd(r, body.winner, 'done', sc && sc.length === 2 && sc.every(Number.isInteger) ? sc : null);
+        return { status: 200, body: { ok: true } };
+    }
+    function volleyEnd(r, winner, why, score) {
+        if (!r.volley) return;
+        const sides = r.volley.sides;
+        const result = sides.map((i, k) => ({ id: i, name: (members.get(i) || {}).name || '?', char: (members.get(i) || {}).char || null,
+                                             rank: i === winner ? 1 : 2, score: score ? score[k] : null, why: i === winner ? null : why }));
+        r.volley = null; r.state = 'lobby';
+        roomSend(r, 'stairs:end', { room: roomPub(r), result, records: [], board: [] });
+        closeRoom(r);
+        log(`打排球結束：${result.map(x => x.name + (x.rank === 1 ? ' 勝' : ' 敗')).join('、')}（${why}）`);
+    }
+
+    // ── 五子棋（docs/plaza-gomoku-spec.md）：輪流下，伺服器判定。黑子（房主）先下 ──
+    function gomokuStart(r) {
+        if (r.ids.length !== 2) return { status: 409, body: { ok: false, error: '五子棋要剛好 2 個人' } };
+        r.gomoku = { board: new Array(GOMOKU_N * GOMOKU_N).fill(0), turn: 0, sides: r.ids.slice(), last: null,
+                     expr: ['IDLE', 'IDLE'], exprAt: now(), winner: null, moves: 0 };
+        r.state = 'play'; r.startedAt = now();
+        roomSend(r, 'stairs:start', { room: roomPub(r) });
+        roomsChanged();
+        // 有人斷線太久 → 另一個人贏
+        r.timer = setInterval(() => {
+            if (!r.gomoku || r.gomoku.winner != null) return;
+            for (const i of r.gomoku.sides) {
+                const m = members.get(i);
+                if (!m || (!m.stream && m.lostAt != null && now() - m.lostAt > stairsLostMs)) {
+                    return gomokuEnd(r, r.gomoku.sides.find(x => x !== i), 'lost');
+                }
+            }
+        }, Math.max(50, Math.min(1000, stairsLostMs / 4)));
+        if (r.timer.unref) r.timer.unref();
+        return { status: 200, body: { ok: true } };
+    }
+    function gomokuMove(body) {
+        const id = body && body.id, r = stairsRoomOf(id), gm = r && r.gomoku;
+        if (!gm || gm.winner != null) return { status: 409, body: { ok: false, error: '不在對局中' } };
+        if (gm.sides[gm.turn] !== id) return { status: 409, body: { ok: false, error: '還沒輪到你' } };
+        const x = Number(body.x), y = Number(body.y);
+        if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= GOMOKU_N || y >= GOMOKU_N) {
+            return { status: 400, body: { ok: false, error: '位置不對' } };
+        }
+        if (gm.board[y * GOMOKU_N + x]) return { status: 409, body: { ok: false, error: '那裡已經有棋子了' } };
+        const me = gm.turn;
+        gm.board[y * GOMOKU_N + x] = me + 1; gm.moves++;
+        gm.last = { x, y, c: me };
+        const len = gomokuLine(gm.board, x, y), [mine, theirs] = gomokuExpr(len);
+        gm.expr = me === 0 ? [mine, theirs] : [theirs, mine]; gm.exprAt = now();
+        if (len >= 5) gm.winner = me;
+        else if (gm.moves >= GOMOKU_N * GOMOKU_N) gm.winner = -1;   // 下滿了：平手
+        else gm.turn = 1 - me;
+        roomSend(r, 'gomoku:move', { x, y, c: me, len });
+        roomsChanged();
+        if (gm.winner != null) {
+            // 留一下讓大家看清楚最後一手（連成的五顆），再結算
+            const t = setTimeout(() => gomokuEnd(r, gm.winner >= 0 ? gm.sides[gm.winner] : null, 'done'), opts.gomokuEndMs ?? GOMOKU_END_MS);
+            if (t.unref) t.unref();
+        }
+        return { status: 200, body: { ok: true, len } };
+    }
+    function gomokuResign(body) {
+        const id = body && body.id, r = stairsRoomOf(id), gm = r && r.gomoku;
+        if (!gm || gm.winner != null) return { status: 409, body: { ok: false, error: '不在對局中' } };
+        gomokuEnd(r, gm.sides.find(x => x !== id), 'resign');
+        return { status: 200, body: { ok: true } };
+    }
+    function gomokuEnd(r, winner, why) {
+        if (!r.gomoku || !rooms.has(r.id)) return;
+        const sides = r.gomoku.sides, moves = r.gomoku.moves;
+        const result = sides.map(i => ({ id: i, name: (members.get(i) || {}).name || '?', char: (members.get(i) || {}).char || null,
+                                         rank: winner == null ? 1 : i === winner ? 1 : 2, draw: winner == null,
+                                         why: winner != null && i !== winner ? why : null, moves }));
+        r.gomoku = null; r.state = 'lobby';
+        roomSend(r, 'stairs:end', { room: roomPub(r), result, records: [], board: [] });
+        closeRoom(r);
+        log(`五子棋結束：${result.map(x => x.name + (x.draw ? ' 和' : x.rank === 1 ? ' 勝' : ' 敗')).join('、')}（${why}，${moves} 手）`);
+    }
+
     function stairsInput(body) {
         const id = body && body.id, r = stairsRoomOf(id);
         if (!r || !r.game) return { status: 409, body: { ok: false, error: '不在遊戲中' } };
@@ -629,6 +782,9 @@ function createPlazaServer(opts = {}) {
             if (r.host === id) r.host = r.ids[0];
             roomSend(r, 'stairs:lobby', { room: roomPub(r) });
             if (r.dino) dinoCheck(r);   // 走掉的是最後一個還在跑的 → 結束
+            if (r.volley) volleyEnd(r, r.ids[0], 'left');   // 打到一半有人走了 → 留下來的贏
+            // 已經分出勝負（等著結算）的照原本的結果；還在下的 → 留下來的贏
+            if (r.gomoku) { const gw = r.gomoku.winner; gomokuEnd(r, gw == null ? r.ids[0] : gw >= 0 ? r.gomoku.sides[gw] : null, gw == null ? 'left' : 'done'); }
         }
         roomsChanged();
         void silent;
@@ -712,7 +868,9 @@ function createPlazaServer(opts = {}) {
             return reply(res, 200, { ok: true, board: boardPub(u.searchParams.get('kind') === 'dino' ? boardRead(dinoBoardFile, 'score') : stairsBoard()) });
         }
         const SR = { '/stairs/open': stairsOpen, '/stairs/start': stairsStart, '/stairs/input': stairsInput,
-                     '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j) };
+                     '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j),
+                     '/stairs/vin': volleyInput, '/stairs/vend': volleyReport,
+                     '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign };
         if (req.method === 'POST' && SR[u.pathname]) {
             return readBody(req, (j) => { const r = SR[u.pathname](j); reply(res, r.status, r.body); });
         }
@@ -748,7 +906,7 @@ function createPlazaServer(opts = {}) {
 
 module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
                    STAIRS_VER, STAIRS_CAP, STAIRS_LOST_MS, STAIRS_BOARD_N, STAIRS_BOARD_FILE,
-                   DINO_BOARD_FILE, DINO_COUNTDOWN_MS, DINO_STALE_MS,
+                   DINO_BOARD_FILE, DINO_COUNTDOWN_MS, DINO_STALE_MS, GOMOKU_N, gomokuLine, gomokuExpr,
                    CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
 
 if (require.main === module) {

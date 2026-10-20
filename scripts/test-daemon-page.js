@@ -1504,12 +1504,27 @@ setTimeout(async () => {
     ok(/const DN=\$\{DINO_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ DINO_SRC/.test(src), '頁面沒有內嵌小恐龍的模擬（dino-sim.js）');
     ok(/id:'dino', name:'🦖 小恐龍'/.test(src), '小遊戲選單裡沒有小恐龍');
     // 選單裡每個遊戲都有排行榜鈕；結束後是結果面板＋「回到廣場」，不再有「再來一局」
-    ok(/data-g="'\+gm\.id\+'">開房<\/button><button data-b="'\+gm\.id\+'">🏆 排行榜<\/button>/.test(src) && /function miniBoard\(kind\)/.test(src), '小遊戲列表的開房旁邊沒有排行榜鈕');
+    ok(/data-g="'\+gm\.id\+'">開房<\/button>'\+\(gm\.noBoard\?'':'<button data-b="'\+gm\.id\+'">🏆 排行榜<\/button>'\)/.test(src) && /function miniBoard\(kind\)/.test(src), '小遊戲列表的開房旁邊沒有排行榜鈕');
     ok(/sendCmd\('stairsBoard',\{kind\}\)/.test(src), '排行榜鈕沒有分遊戲去要排行榜');
     // 加入別人的房間：聊天室的系統訊息後面有「加入」、選單列出正在等人的房間、頭上有 🦖／🪜
     ok(/if\(m\.stairsRoom\)\{ const jb=document\.createElement\('button'\); jb\.className='stjoin'/.test(src) && /function stJoinButtons\(\)/.test(src), '聊天室開房的訊息後面沒有「加入」鈕');
     ok(/<button data-j="'\+stEsc\(r\.id\)\+'"/.test(src), '小遊戲選單沒有列出正在等人的房間');
-    ok(/g\.fillText\(rk==='dino'\?'🦖':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🪜');
+    ok(/g\.fillText\(rk==='dino'\?'🦖':rk==='volley'\?'🏐':rk==='gomoku'\?'⚫':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🏐／⚫／🪜');
+    // 打排球（docs/plaza-volley-spec.md）：模擬內嵌、輸入同步（送 f+延遲、兩邊都到才算）、擊球用攻擊幀
+    ok(/const VB=\$\{VOLLEY_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ VOLLEY_SRC/.test(src), '頁面沒有內嵌打排球的模擬（volley-sim.js）');
+    ok(/const fs=g\.f\+VB_DELAY;\s*if\(!vbMine\.has\(fs\)\)\{ const k=vbKeyBits\(\); vbMine\.set\(fs,k\); sendCmd\('volleyInput'/.test(src), '打排球沒有把按鍵延後 VB_DELAY 格送出');
+    ok(/if\(mk===undefined\|\|tk===undefined\)\{ stalled=true; break; \}/.test(src), '對手的按鍵還沒到就往下算了（兩邊會分岔）');
+    ok(/const fr=g0\.over\?\(g0\.winner===i\?5:3\):p\.atk>0\?4:/.test(src) && /\['IDLE_1', 'IDLE_2', 'HURT', 'SAD', 'ATTACK', 'HAPPY', 'ANGRY'\]/.test(src), '擊球時沒有用攻擊幀（ATTACK）');
+    // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
+    ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
+    // 打排球：點畫面也是殺球鍵
+    ok(/vbKeys\.add\('tap'\)/.test(src) && /c===' '\|\|c==='enter'\|\|c==='tap'/.test(src), '打排球點畫面不能用力打');
+    // 五子棋（docs/plaza-gomoku-spec.md）：棋盤點擊、表情、認輸
+    ok(/id:'gomoku', name:'⚫ 五子棋'/.test(src) && /sendCmd\('gomokuMove',\{ x:String\(c\.x\), y:String\(c\.y\) \}\)/.test(src), '五子棋沒接到選單或下子');
+    ok(/const GM_EXPR=\{ IDLE:-1, HURT:2, SAD:3, ATTACK:4, HAPPY:5, ANGRY:6 \};/.test(src) && /const ex=fresh\?GM_EXPR\[gm\.expr\[i\]\]:-1;/.test(src), '五子棋兩邊的 vpet 沒有照棋局做表情');
+    ok(/<button id="gmresign"/.test(src) && /sendCmd\('gomokuResign'\)/.test(src), '五子棋沒有認輸鈕');
+    ok(/stES\.addEventListener\('gmove',\(\)=>\{ poll\(\); \}\);/.test(src), '對手下了一手沒有馬上更新（要等輪詢）');
+    ok(/stES\.addEventListener\('vin'/.test(src) && /id:'volley', name:'🏐 打排球'/.test(src), '打排球沒接到選單或對手的按鍵');
     ok(/sendCmd\('stairsJoin',\{room\}\)/.test(src) && /action === 'stairsJoin'/.test(src), '加入房間沒有接到伺服器');
     ok(/<button id="stback" class="pri">回到廣場<\/button>/.test(src) && !/再來一局/.test(src), '結束後不是回廣場（還有再來一局）');
     ok(/action==='dinoReport'/.test((src.match(/const quiet=[\s\S]*?;/) || [''])[0]), '小恐龍回報（一秒 10 次）會一直洗「已送出」訊息');

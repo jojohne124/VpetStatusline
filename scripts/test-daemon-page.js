@@ -1522,11 +1522,27 @@ setTimeout(async () => {
     // 五子棋（docs/plaza-gomoku-spec.md）：棋盤點擊、表情、認輸
     ok(/id:'gomoku', name:'⚫ 五子棋'/.test(src) && /sendCmd\('gomokuMove',\{ x:String\(c\.x\), y:String\(c\.y\) \}\)/.test(src), '五子棋沒接到選單或下子');
     ok(/const GM_EXPR=\{ IDLE:-1, HURT:2, SAD:3, ATTACK:4, HAPPY:5, ANGRY:6 \};/.test(src) && /const ex=fresh\?GM_EXPR\[gm\.expr\[i\]\]:-1;/.test(src), '五子棋兩邊的 vpet 沒有照棋局做表情');
+    // 五子棋：vpet 跟棋盤之間留空（棋盤左緣要在 vpet 右緣外面至少 16px）、名字太長截斷
+    {
+        const gap = Number((src.match(/const GM_SIDE_GAP=(\d+);/) || [])[1]);
+        const W = 69 * 6, H = 54 * 6, size = Math.min(H - 24, W - 2 * (8 + 64 + gap) - 12), x0 = (W - size) / 2;
+        ok(gap && x0 - size / 14 * 0.6 - (8 + 64) >= 16, '五子棋的 vpet 離棋盤太近（棋盤外框到 vpet 不到 16px）');
+        ok(/g\.fillText\(gmFit\(g,\(info\.get\(id\)\|\|\{\}\)\.name\|\|'\?',64\+GM_SIDE_GAP\)/.test(src) && /function gmFit\(g,t,w\)/.test(src), '五子棋的名字太長沒有截斷');
+    }
+    // 小遊戲進行中不能回前線：按鈕停用、按了提示、daemon 也擋
+    ok(/if\(miniBusy\(\)\)\{ flashCmdMsg\(/.test(src) && /function miniBusy\(\)\{ const m=stMine\(\); return !!\(comState\|\|\(m&&m\.state==='play'\)\); \}/.test(src), '小遊戲進行中還能按離開廣場');
+    ok(/if \(room && room\.state === 'play'\) return \{ ok: false, error: '小遊戲進行中/.test(src), 'daemon 沒擋小遊戲中離開廣場');
+    ok(/name\|\|'\?',64\+GM_SIDE_GAP\), px\+32, py\+76\);/.test(src), '五子棋的名字不在 vpet 底下');
+    ok(!/if\(!g0\.pause\)\{/.test(src), '排球落地得分後球消失（應該留在落地的位置）');
     ok(/<button id="gmresign"/.test(src) && /sendCmd\('gomokuResign'\)/.test(src), '五子棋沒有認輸鈕');
     ok(/stES\.addEventListener\('gmove',\(\)=>\{ poll\(\); \}\);/.test(src), '對手下了一手沒有馬上更新（要等輪詢）');
     ok(/stES\.addEventListener\('vin'/.test(src) && /id:'volley', name:'🏐 打排球'/.test(src), '打排球沒接到選單或對手的按鍵');
     ok(/sendCmd\('stairsJoin',\{room\}\)/.test(src) && /action === 'stairsJoin'/.test(src), '加入房間沒有接到伺服器');
-    ok(/<button id="stback" class="pri">回到廣場<\/button>/.test(src) && !/再來一局/.test(src), '結束後不是回廣場（還有再來一局）');
+    ok(/<button id="stback" class="pri">回到廣場<\/button>/.test(src) && !/再來一局/.test((src.match(/function stEndPanel\(end\)\{[\s\S]*?\n\}/) || [''])[0]), '連線房間結束後不是回廣場（還有再來一局）');
+    // 跟電腦玩（打排球、五子棋）：本地跑、電腦是 Terriermon 助手、結束可以再來一局
+    ok(/const COM_ID='com', COM_CHAR='\$\{TUTOR_ID\}'/.test(src) && /<button data-c="'\+gm\.id\+'">🤖 跟電腦玩<\/button>/.test(src), '沒有跟電腦玩（或電腦不是 Terriermon 助手）');
+    ok(/VB\.step\(g,\[vbKeyBits\(\),comVolleyKeys\(g\)\]\)/.test(src) && /function comGomokuMove\(gm\)/.test(src), '跟電腦玩的排球／五子棋電腦沒接上');
+    ok(/if\(comState\)\{ comPlace\(c\.x,c\.y\); return; \}/.test(src), '跟電腦下五子棋，點棋盤還送去伺服器');
     ok(/action==='dinoReport'/.test((src.match(/const quiet=[\s\S]*?;/) || [''])[0]), '小恐龍回報（一秒 10 次）會一直洗「已送出」訊息');
     ok(/window\.addEventListener\('keydown',e=>\{\s*const k=e\.key;\s*if\(!\(k===' '\|\|k==='ArrowUp'\)\|\|!dnPlaying\(\)\|\|typing\(\)\) return;\s*e\.preventDefault\(\); e\.stopImmediatePropagation\(\);/.test(src),
        '小恐龍的跳鍵沒有攔在最前面（空白鍵會捲動頁面、廣場也會跟著動）');

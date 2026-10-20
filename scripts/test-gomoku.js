@@ -37,6 +37,56 @@ console.log('— 判定 —');
     ok(e1[0] === 'IDLE' && e1[1] === 'IDLE', '普通一手也在做表情');
 }
 
+console.log('— 跟電腦玩：五子棋的電腦（盡可能強）—');
+{
+    const AI = require('../src/shared/gomoku-ai.js');
+    const fs = require('fs'), path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'gomoku-ai.js'), 'utf8');
+    ok(!/[`\\]|\$\{|<\/script/i.test(src), 'gomoku-ai.js 有不能內嵌進頁面的字元 —— daemon 會退回簡單版電腦');
+    const N = AI.N;
+    const board = (black, white) => { const b = new Array(N * N).fill(0); for (const [x, y] of black) b[y * N + x] = 1; for (const [x, y] of white) b[y * N + x] = 2; return b; };
+    const eq = (a, b) => a[0] === b[0] && a[1] === b[1];
+    const oneOf = (m, list) => list.some(p => eq(m, p));
+    // 能連五就連五（不去擋對方的四）
+    let m = AI.choose(board([[3, 3], [4, 3], [5, 3], [6, 3]], [[3, 8], [4, 8], [5, 8], [6, 8]]), 2, { timeMs: 300 });
+    ok(oneOf(m, [[2, 8], [7, 8]]), '自己能連五卻沒連：' + m);
+    // 對方能連五一定擋
+    m = AI.choose(board([[3, 3], [4, 3], [5, 3], [6, 3], [10, 10]], [[2, 3], [9, 9], [12, 12]]), 2, { timeMs: 300 });
+    ok(eq(m, [7, 3]), '對方下一手連五沒擋：' + m);
+    // 對方活三一定擋（擋在兩頭或中間的空點）
+    m = AI.choose(board([[5, 7], [6, 7], [7, 7]], [[6, 6], [9, 12]]), 2, { timeMs: 600 });
+    ok(oneOf(m, [[4, 7], [8, 7], [3, 7], [9, 7]]), '對方活三沒擋：' + m);
+    // 連續衝四找殺（VCF）：白有兩條衝四可以連著衝，最後成活四／雙四
+    const why = [];
+    m = AI.choose(board([[2, 2], [12, 2], [2, 12], [12, 12], [7, 1]], [[5, 5], [6, 5], [7, 5], [5, 6], [5, 7], [5, 8]]), 2, { timeMs: 800, why });
+    ok(why[0] === 'open4' || why[0] === 'vcf' || why[0] === 'five', '有殺法卻沒找到（' + why[0] + '）：' + m);
+    // 對局：跟「只看一層」的簡單電腦各執黑白下 6 局，一局都不能輸
+    const simple = (b, c) => {
+        const sc = (x, y, cc) => { let t = 0; for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [1, -1]]) { let n = 1, open = 0;
+            for (const s of [1, -1]) { let i = x + dx * s, j = y + dy * s; while (i >= 0 && j >= 0 && i < N && j < N && b[j * N + i] === cc) { n++; i += dx * s; j += dy * s; } if (i >= 0 && j >= 0 && i < N && j < N && b[j * N + i] === 0) open++; }
+            t += n >= 5 ? 100000 : n === 4 ? (open === 2 ? 10000 : open === 1 ? 1200 : 0) : n === 3 ? (open === 2 ? 1000 : open === 1 ? 120 : 0) : n === 2 ? (open === 2 ? 100 : open === 1 ? 12 : 0) : (open === 2 ? 6 : 1); } return t; };
+        let best = -1, cs = []; for (const p of AI.candidates(b)) { const x = p % N, y = Math.floor(p / N); const s = sc(x, y, c) * 1.1 + sc(x, y, 3 - c); if (s > best) { best = s; cs = [p]; } else if (s === best) cs.push(p); }
+        const p = cs[0]; return [p % N, Math.floor(p / N)];
+    };
+    let lost = 0, won = 0, slow = 0;
+    for (let g = 0; g < 6; g++) {
+        const aiC = g % 2 ? 1 : 2, b = new Array(N * N).fill(0);
+        let t = 1, n = 0;
+        if (g >= 2) { b[7 * N + 7] = 1; b[6 * N + (5 + g)] = 2; t = 1; n = 2; }   // 換幾種開局
+        while (n < N * N) {
+            const t0 = Date.now();
+            const [x, y] = t === aiC ? AI.choose(b, aiC, { timeMs: 700 }) : simple(b, t);
+            if (t === aiC && Date.now() - t0 > 2000) slow++;
+            b[y * N + x] = t; n++;
+            if (AI.makesFive(b, x, y, t)) { if (t === aiC) won++; else lost++; break; }
+            t = 3 - t;
+        }
+    }
+    ok(lost === 0, `跟只看一層的簡單電腦下 6 局輸了 ${lost} 局（不夠強）`);
+    ok(won >= 5, `6 局只贏了 ${won} 局`);
+    ok(slow === 0, '電腦想太久（超過 2 秒）');
+}
+
 (async () => {
     console.log('— 伺服器 —');
     const ps = S.createPlazaServer({ gomokuEndMs: 120, stairsLostMs: 200, graceMs: 3000 });

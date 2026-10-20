@@ -22,11 +22,12 @@ const FPS = 25, FRAME_MS = 40;
 const RUN = 13;                      // 每格走幾單位（約 1.6 點）
 const JUMP = 58;                     // 起跳速度（每格往上幾單位）
 const GRAV = 6;                      // 角色的重力（每格加速）
-const BALL_GRAV = 2;                 // 球的重力
-const BALL_VMAX = 70;                // 球最快（每格）
-const HIT_UP = 50;                   // 一般碰到球：往上彈
-const SPIKE_X = 60, SPIKE_Y = 40;    // 空中殺球：往對面斜斜往下打
-const SMASH_X = 52, SMASH_Y = -34;   // 地上用力擊球：往對面又快又平的高球（比一般碰到快很多）
+// 球速（2026-10-20 調慢一半：原本殺球 0.2 秒就過半場，人來不及反應）
+const BALL_GRAV = 1;                 // 球的重力
+const BALL_VMAX = 36;                // 球最快（每格）
+const HIT_UP = 30;                   // 一般碰到球：往上彈
+const SPIKE_X = 30, SPIKE_Y = 22;    // 空中殺球：往對面斜斜往下打
+const SMASH_X = 26, SMASH_Y = -22;   // 地上用力擊球：往對面又快又平的高球（比一般碰到快很多）
 const ATTACK_FRAMES = 6;             // 擊球之後幾格顯示攻擊幀
 const WIN = 7;                       // 先拿幾分贏
 const PAUSE = 25;                    // 得分後停幾格（1 秒）再發球
@@ -85,7 +86,10 @@ function hitBall(g, p, k) {
     } else if (k & K_SPIKE) {
         b.vx = SMASH_X * toward; b.vy = SMASH_Y;
     } else {
-        b.vx = clamp(Math.trunc((b.x - cx) / 2), -40, 40);
+        b.vx = clamp(Math.trunc((b.x - cx) / 3), -22, 22);
+        // 正中間碰到會直直往上、落回頭上再彈 —— 站著不動就永遠打不完（2026-10-20 跟電腦玩實測卡住）。
+        // 至少往對面推一點
+        if (b.vx * toward < 3) b.vx = 3 * toward;
         b.vy = -HIT_UP - (p.vy < 0 ? Math.trunc(-p.vy / 3) : 0);
         if (b.y > cy) b.vy = -HIT_UP;   // 從下面碰到也往上
     }
@@ -105,8 +109,8 @@ function stepBall(g) {
     const nx0 = NET_X - BALL_R, nx1 = NET_X + NET_W + BALL_R;
     if (b.x > nx0 && b.x < nx1 && b.y > NET_TOP - BALL_R) {
         if (b.y - b.vy <= NET_TOP - BALL_R) { b.y = NET_TOP - BALL_R; b.vy = -Math.abs(b.vy); }
-        else if (b.x < NET_X + NET_W / 2) { b.x = nx0; b.vx = -Math.abs(b.vx) || -4; }
-        else { b.x = nx1; b.vx = Math.abs(b.vx) || 4; }
+        else if (b.x < NET_X + NET_W / 2) { b.x = nx0; b.vx = -Math.abs(b.vx) || -3; }
+        else { b.x = nx1; b.vx = Math.abs(b.vx) || 3; }
     }
 }
 

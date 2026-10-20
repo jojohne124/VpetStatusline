@@ -52,6 +52,9 @@ console.log('— 模擬 —');
     ok(g.over && Math.max(...g.score) === VB.WIN && g.winner === (g.score[0] > g.score[1] ? 0 : 1), '比賽沒有在先拿 ' + VB.WIN + ' 分時結束：' + g.score);
     ok(hits > 10, '自動駕駛幾乎沒有擊到球（' + hits + ' 次）');
     ok(atkSeen, '擊球之後沒有記攻擊幀（畫面要用 ATTACK）');
+    // 球速（2026-10-20 調慢：原本殺球 0.2 秒就過半場，人來不及反應）：最快的球過半場至少要 0.3 秒
+    const half = (VB.W - VB.NET_X) / VB.SUB, vmaxX = Math.max(VB.SPIKE_X, VB.SMASH_X, 22) / VB.SUB * VB.FPS;
+    ok(half / vmaxX >= 0.3, `球太快：最快 ${vmaxX.toFixed(0)} 點／秒，${(half / vmaxX).toFixed(2)} 秒就過半場`);
     // 同樣的輸入 → 同樣的結果
     const run = () => { const q = VB.createGame(); const out = [];
         for (let i = 0; i < 2000 && !q.over; i++) { VB.step(q, [bot(q, 0), bot(q, 1, true)]); if (i % 25 === 0) out.push(VB.hash(q)); } return out.join('|'); };
@@ -126,7 +129,7 @@ console.log('— 輸入同步（鎖步）—');
     }
     ok(divergeAt < 0, '兩台在第 ' + divergeAt + ' 格分岔了（輸入同步失敗）');
     ok(A.f === B.f && VB.hash(A) === VB.hash(B), '兩台最後的狀態不一樣');
-    ok(A.f > N / 2, '幾乎一直卡住（延遲處理有問題）：只跑了 ' + A.f + ' 格');
+    ok(A.over || A.f > N / 2, '幾乎一直卡住（延遲處理有問題）：只跑了 ' + A.f + ' 格');
     ok(stallA + stallB > 0, '前提不成立：模擬的網路沒有延遲（測不到等待）');
 }
 

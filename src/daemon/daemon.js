@@ -1274,6 +1274,12 @@ function applyCommand(action, args = {}) {
         return plazaClient.stairs('vend', { winner: args.winner, score: [Number(args.s0), Number(args.s1)] })
             .then(r => (r.ok ? { ok: true, action } : r));
     }
+    // 偷看盤（docs/plaza-peek-spec.md）：躲起來／回座位、查台股（伺服器擋：每人 1 分鐘一次）
+    if (action === 'plazaHide') return plazaClient.hide(args.on !== '0').then(r => (r.ok ? { ok: true, action } : r));
+    if (action === 'stockQuery') {
+        if (!args.code) return { ok: false, error: '要給股票代號' };
+        return plazaClient.stockQuery(String(args.code)).then(r => (r.ok ? { ok: true, action, quote: r.quote, at: r.at, trading: r.trading } : r));
+    }
     if (action === 'plazaHappy') {
         return plazaClient.emote().then(r => (r.ok ? { ok: true, action } : r));
     }
@@ -1674,6 +1680,32 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 廣場對戰：疊在廣場上的一層（壓暗 + 中間是前線的戰鬥畫面），不換畫面 */
   /* 下樓梯：蓋在廣場畫面上（同一個舞台、一樣大） */
   #stairsbox{position:absolute;inset:0;z-index:5;display:none}
+  /* 偷看盤（docs/plaza-peek-spec.md）：廁所場景蓋在廣場上（本人才看得到），手機是 HTML（要打字） */
+  #peekbtn{float:right;opacity:0;transition:opacity .25s;background:none;border:none;cursor:pointer;font-size:14px;padding:2px 6px}
+  #peekbtn:hover,#peekbtn:focus-visible{opacity:1}
+  #peekbox{position:absolute;z-index:6;display:none;overflow:hidden}
+  #peekcv{position:absolute;left:0;top:0;image-rendering:pixelated}
+  #peekphone{position:absolute;left:4%;top:8%;width:92%;height:53%;box-sizing:border-box;background:#0d0d0f;border-radius:24px;padding:6px;
+             box-shadow:0 4px 0 rgba(0,0,0,.35);font-family:system-ui,'Microsoft JhengHei',sans-serif}
+  #peekphone .island{position:absolute;left:13px;top:50%;width:9px;height:30px;margin-top:-15px;background:#000;border-radius:6px;border:1px solid #222}
+  #peekphone .scr{position:absolute;inset:6px;background:#0b0e14;border-radius:18px;padding:6px 10px 6px 30px;color:#e6edf3;display:flex;flex-direction:column;gap:3px;overflow:hidden}
+  #peekphone .r1{display:flex;gap:6px;align-items:center;font-size:12px}
+  #peekphone input{width:92px;font-size:12px;padding:2px 6px;border:1px solid #30363d;border-radius:6px;color:#e6edf3;background:#161b22}
+  #peekphone button{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#e6edf3;cursor:pointer}
+  #peekphone #peekmsg{color:#ff7b72;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #peekphone .main{display:flex;gap:10px;flex:1;min-height:0}
+  #peekphone .lf{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+  #pkname{font-size:12px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #pkprice{font-size:24px;font-weight:700;line-height:1.1}
+  #pkchg{font-size:12px;font-weight:600}
+  #pkinfo{font-size:10px;color:#8b949e;line-height:1.35}
+  #pkbook{font-size:10px;border-collapse:collapse;align-self:center}
+  #pkbook td{padding:0 5px;text-align:right}
+  #pkbook th{font-weight:400;color:#6e7681;padding:0 5px}
+  #peekphone .ft{display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#6e7681}
+  .pk-up{color:#ff5c5c} .pk-dn{color:#3fd47a}   /* 黑底的漲紅跌綠要亮一點 */
+  #peekfade{position:absolute;inset:0;z-index:7;background:#000;opacity:0;pointer-events:none;transition:opacity .3s}
+  body.peeking #plazahappy,body.peeking #minibtn,body.peeking #plazamode{display:none!important}
   #stairscv{position:absolute;image-rendering:pixelated;max-width:none}
   /* 前線玩小遊戲：畫布貼齊舞台左上（前線的 #pet 有留白），舞台撐到畫布那麼大（見 miniFrontFit） */
   body.minifront #stairscv{left:0!important;top:0!important}
@@ -1819,7 +1851,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -1869,6 +1901,7 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
       <button id="plazahappy" data-help="plazahappy" title="跳一下，大家都看得到">😄 開心</button>
       <button id="minibtn" data-help="minigame" title="跟廣場上的人一起玩小遊戲">🎮 小遊戲</button>
       <button id="plazaio" data-help="plazaio" style="float:right" title="辦公室的室內／室外（只影響你自己的畫面）">🏢 室內</button>
+      <button id="peekbtn" data-help="peekbtn" title="上班請專心">🤫</button>
       <div id="plazainvite" data-help="plazainvite"></div>
       <div class="form" data-help="plazaname" style="margin-top:4px">
         <span class="lbl">🏷 名牌</span><input id="plazaname" placeholder="新名牌"><button id="plazarename">改名</button>
@@ -2088,6 +2121,7 @@ function inScope(sc){
 // 每次切進營地換一個亂數，跟著 /yard 送出去：愚人節的變色版「進出一次抽一次」（見 festival.js swapChar）
 let yardSalt=Math.random().toString(36).slice(2,8);
 function setView(v){
+  if(v!=='plaza'&&typeof peekShow==='function') peekShow(false,true);   // 離開廣場：廁所場景直接收掉
   if(comState&&v!==view) comStop();   // 單機小遊戲玩到一半切畫面 → 收掉（不然畫布會留在新畫面上）
   if(v==='yard' && view!=='yard') yardSalt=Math.random().toString(36).slice(2,8);
   if(v!=='yard' && view==='yard'){ p2Reset(); if(v!=='plaza') renderBattle(null); }
@@ -3260,6 +3294,7 @@ async function pollPlaza(){
   renderBattle(p.battle);
   stMyChar=p.myChar||stMyChar;
   stairsSync(p.stairs, p.serverNow);
+  peekSync(p);
   document.querySelectorAll('#controls button[data-cmd="plazaLeave"]').forEach(b=>{ b.disabled=miniBusy(); b.title=miniBusy()?'小遊戲進行中，不能回前線':''; });
   syncWx();
 }
@@ -3643,7 +3678,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='plazaHide'||action==='stockQuery');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4990,6 +5025,154 @@ function gmCell(e){
     sendCmd('gomokuResign').then(()=>poll());
   });
 })();
+// ── 偷看盤（docs/plaza-peek-spec.md）─────────────────────────────────────
+// 廣場下方右邊一顆隱形的 🤫（滑鼠移過去才浮出來，提示「上班請專心」）。按下去：伺服器把我標成躲起來
+//（大家的廣場上我消失、聊天室「XXX 不知道躲去哪了...」），我自己這邊轉場進廁所，滑手機看台股。
+// 廁所是程式畫的點陣圖（1/3 解析度再放大），手機是 HTML（要打字）。vpet 從左下角斜斜探進來看手機。
+let peekOn=false, peekArt=null, peekArtChar='', peekRaf=0, peekBusy=false;
+const PEEK_L=3;   // 背景畫在 1/3 解析度再放大 → 點陣感
+// 背景第 2 版（2026-10-21）：鏡頭貼近馬桶，左右隔板斜斜收向後牆 → 像躲在一間裡面。
+// 第 1 版（peekBgV1，遠景、整間廁所）先留著，PEEK_BG 改回 1 就能換回去
+const PEEK_BG=2;
+function peekBg(W,H){ return PEEK_BG===1?peekBgV1(W,H):peekBgV2(W,H); }
+function peekBgV2(W,H){
+  const lw=Math.ceil(W/PEEK_L), lh=Math.ceil(H/PEEK_L), c=document.createElement('canvas'); c.width=lw; c.height=lh;
+  const g=c.getContext('2d'), R=(col,x,y,w,h)=>{ g.fillStyle=col; g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); };
+  const poly=(col,pts)=>{ g.fillStyle=col; g.beginPath(); g.moveTo(pts[0][0],pts[0][1]); for(const p of pts.slice(1)) g.lineTo(p[0],p[1]); g.closePath(); g.fill(); };
+  const ell=(x,y,rx,ry,col)=>{ g.fillStyle=col; g.beginPath(); g.ellipse(x,y,rx,ry,0,0,6.2832); g.fill(); };
+  // 後牆（隔間裡面那一面）：上半淺灰、下半深灰磁磚
+  const bx0=lw*0.17, bx1=lw*0.83, by0=lh*0.06, by1=lh*0.72, mid=lh*0.4;
+  R('#d9d9d6',0,0,lw,lh); R('#3e4045',bx0,mid,bx1-bx0,by1-mid);
+  for(let x=bx0;x<bx1;x+=(bx1-bx0)/6){ R('#c6c6c2',x,by0,1,mid-by0); R('#34363b',x,mid,1,by1-mid); }
+  R('#34363b',bx0,(mid+by1)/2,bx1-bx0,1);
+  // 地板（往鏡頭這邊張開的梯形）
+  poly('#2c2e32',[[bx0,by1],[bx1,by1],[lw,lh],[0,lh]]);
+  g.strokeStyle='#383a3f'; for(let i=0;i<=6;i++){ const u=i/6; g.beginPath(); g.moveTo(bx0+(bx1-bx0)*u,by1); g.lineTo(lw*u,lh); g.stroke(); }
+  // 左右隔板：從畫面邊緣斜斜收向後牆
+  poly('#e2e2df',[[0,0],[bx0,by0],[bx0,by1],[0,lh*1.02]]); poly('#d7d7d3',[[lw,0],[bx1,by0],[bx1,by1],[lw,lh*1.02]]);
+  g.strokeStyle='#b4b4af'; g.beginPath(); g.moveTo(bx0,by0); g.lineTo(bx0,by1); g.moveTo(bx1,by0); g.lineTo(bx1,by1); g.stroke();
+  // 左隔板上的捲筒衛生紙盒（大的銀色圓，跟著隔板斜一點）
+  ell(lw*0.085,lh*0.55,lw*0.07,lh*0.11,'#9aa0a6'); ell(lw*0.085,lh*0.55,lw*0.055,lh*0.09,'#c8cbcf'); R('#eef0f2',lw*0.06,lh*0.48,2,lh*0.1);
+  // 右隔板上的掛勾
+  R('#9aa0a6',lw*0.9,lh*0.3,3,2); R('#9aa0a6',lw*0.92,lh*0.3,1,4);
+  // 垃圾桶（後牆左下角）
+  const tx=lw*0.22, ty=by1-lh*0.13;
+  R('#8d9298',tx-1,ty-1,lw*0.08+2,3); R('#b8bcc1',tx,ty+1,lw*0.08,lh*0.13); R('#d6d9dc',tx+2,ty+2,2,lh*0.11); R('#222',tx+2,ty-1,lw*0.08-4,1);
+  // 馬桶（近景、大）：掀起的蓋子靠在後牆、馬桶圈、底座出畫面
+  const cx=lw*0.53;
+  ell(cx,by1-lh*0.1,lw*0.13,lh*0.11,'#c9c9c6'); ell(cx,by1-lh*0.1,lw*0.115,lh*0.095,'#f4f4f2');            // 蓋子
+  R('#c9c9c6',cx-lw*0.1,by1-lh*0.02,lw*0.2,lh*0.05); R('#f4f4f2',cx-lw*0.095,by1-lh*0.02,lw*0.19,lh*0.045);   // 鉸鏈那條
+  R('#c9c9c6',cx-lw*0.1,lh*0.86,lw*0.2,lh*0.2); R('#f0f0ee',cx-lw*0.09,lh*0.86,lw*0.18,lh*0.2);             // 底座（出畫面）
+  ell(cx,lh*0.84,lw*0.17,lh*0.1,'#c9c9c6'); ell(cx,lh*0.84,lw*0.155,lh*0.085,'#f4f4f2');                     // 馬桶圈
+  ell(cx,lh*0.845,lw*0.1,lh*0.05,'#b9bdc0'); ell(cx,lh*0.85,lw*0.07,lh*0.032,'#a7c4d4');                    // 裡面、水
+  return c;
+}
+function peekBgV1(W,H){
+  const lw=Math.ceil(W/PEEK_L), lh=Math.ceil(H/PEEK_L), c=document.createElement('canvas'); c.width=lw; c.height=lh;
+  const g=c.getContext('2d'), R=(col,x,y,w,h)=>{ g.fillStyle=col; g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); };
+  const wall=lh*0.52, panel=lh*0.76, sideL=lw*0.2, sideR=lw*0.84;
+  R('#d9d9d6',0,0,lw,wall);                                                      // 上半牆：淺灰大磁磚
+  for(let x=0;x<lw;x+=lw/6) R('#c6c6c2',x,0,1,wall); R('#c6c6c2',0,wall*0.45,lw,1);
+  R('#3e4045',0,wall,lw,panel-wall);                                             // 馬桶後面：深灰磁磚
+  for(let x=0;x<lw;x+=lw/8) R('#34363b',x,wall,1,panel-wall); R('#34363b',0,(wall+panel)/2,lw,1);
+  R('#2c2e32',0,panel,lw,lh-panel);                                              // 地板：深色磁磚
+  for(let x=-lw;x<lw*2;x+=lw/5) { g.strokeStyle='#383a3f'; g.beginPath(); g.moveTo(lw/2+(x-lw/2)*0.6,panel); g.lineTo(x,lh); g.stroke(); }
+  R('#383a3f',0,panel+(lh-panel)*0.45,lw,1);
+  R('#e4e4e1',0,0,sideL,lh*0.9); R('#bdbdb8',sideL,0,1,lh*0.9); R('#cfcfcb',0,lh*0.9-2,sideL,2);   // 左右隔板
+  R('#dededb',sideR,0,lw-sideR,lh*0.9); R('#bdbdb8',sideR,0,1,lh*0.9);
+  // 左牆的捲筒衛生紙盒（大的銀色圓）
+  g.fillStyle='#9aa0a6'; g.beginPath(); g.arc(sideL*0.5,wall*0.95,sideL*0.42,0,6.2832); g.fill();
+  g.fillStyle='#c8cbcf'; g.beginPath(); g.arc(sideL*0.5,wall*0.95,sideL*0.34,0,6.2832); g.fill();
+  R('#eef0f2',sideL*0.3,wall*0.95-sideL*0.25,2,sideL*0.3);
+  // 垃圾桶（銀色）
+  const tx=lw*0.27, ty=panel-lh*0.12;
+  R('#8d9298',tx-1,ty-1,lw*0.1+2,3); R('#b8bcc1',tx,ty+1,lw*0.1,lh*0.14); R('#d6d9dc',tx+2,ty+2,2,lh*0.12); R('#222',tx+2,ty-1,lw*0.1-4,1);
+  // 馬桶（坐墊掀起來）：水箱藏在後面，看得到掀起的蓋子、馬桶圈、底座
+  const cx=lw*0.53, ell=(x,y,rx,ry,col)=>{ g.fillStyle=col; g.beginPath(); g.ellipse(x,y,rx,ry,0,0,6.2832); g.fill(); };
+  ell(cx,panel-lh*0.13,lw*0.085,lh*0.06,'#c9c9c6'); ell(cx,panel-lh*0.13,lw*0.075,lh*0.05,'#f4f4f2');   // 掀起的蓋子
+  R('#c9c9c6',cx-lw*0.07,panel-lh*0.08,lw*0.14,lh*0.04); R('#f4f4f2',cx-lw*0.065,panel-lh*0.08,lw*0.13,lh*0.035);
+  ell(cx,panel+lh*0.01,lw*0.1,lh*0.055,'#c9c9c6'); ell(cx,panel+lh*0.01,lw*0.09,lh*0.045,'#f4f4f2');      // 馬桶圈
+  ell(cx,panel+lh*0.012,lw*0.06,lh*0.028,'#b9bdc0');
+  R('#c9c9c6',cx-lw*0.045,panel+lh*0.05,lw*0.09,lh*0.16); R('#f0f0ee',cx-lw*0.04,panel+lh*0.05,lw*0.08,lh*0.16);   // 底座
+  return c;
+}
+function peekLoadArt(ch){
+  if(!ch||ch===peekArtChar) return; peekArtChar=ch;
+  fetch('/stairs/sprites?c='+encodeURIComponent(ch),{cache:'no-store'}).then(r=>r.json()).then(j=>{
+    const a=j[ch]; if(!a) return;
+    const bake=(dots)=>{ const s=9, c=document.createElement('canvas'); c.width=dots[0].length*s; c.height=dots.length*s; const g=c.getContext('2d');
+      for(let y=0;y<dots.length;y++) for(let x=0;x<dots[y].length;x++){ const d=dots[y][x]; if(!d) continue; g.fillStyle='rgb('+d[0]+','+d[1]+','+d[2]+')'; g.fillRect(x*s,y*s,s,s); } return c; };
+    peekArt=[bake(a.r[0]),bake(a.r[1])];
+  }).catch(()=>{ peekArtChar=''; });
+}
+let peekBgCache=null;
+function peekFrame(){
+  peekRaf=requestAnimationFrame(peekFrame);
+  const box=document.getElementById('peekbox'), pet=document.getElementById('pet'), cv=document.getElementById('peekcv');
+  const W=69*CW, H=54*(CH/2);
+  box.style.left=pet.offsetLeft+'px'; box.style.top=pet.offsetTop+'px'; box.style.width=W+'px'; box.style.height=H+'px';
+  if(cv.width!==W||cv.height!==H){ cv.width=W; cv.height=H; peekBgCache=null; }
+  if(!peekBgCache) peekBgCache=peekBg(W,H);
+  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  g.drawImage(peekBgCache,0,0,peekBgCache.width*PEEK_L,peekBgCache.height*PEEK_L);
+  // vpet：從左下角斜斜探進來，抬頭看手機（一半在畫面外）；兩幀待機慢慢換
+  const img=peekArt&&peekArt[Math.floor(performance.now()/700)%2];
+  if(img){ g.save(); g.translate(W*0.17,H*0.86); g.rotate(-0.45); g.drawImage(img,-img.width/2,-img.height/2); g.restore(); }
+}
+// 開／關（轉場：黑幕淡入 → 換場景 → 淡出）。instant = 直接關（離開廣場、切畫面）
+function peekShow(on,instant){
+  if(on===peekOn) return;
+  peekOn=on;
+  const box=document.getElementById('peekbox'), fade=document.getElementById('peekfade');
+  const swap=()=>{
+    box.style.display=on?'block':'none';
+    document.body.classList.toggle('peeking',on);
+    if(on){ peekLoadArt(stMyChar); if(!peekRaf) peekRaf=requestAnimationFrame(peekFrame); setTimeout(()=>document.getElementById('peekcode').focus(),50); }
+    else if(peekRaf){ cancelAnimationFrame(peekRaf); peekRaf=0; }
+  };
+  if(instant){ swap(); fade.style.opacity=0; return; }
+  fade.style.opacity=1;
+  setTimeout(()=>{ swap(); fade.style.opacity=0; },320);
+}
+// 輪詢帶回來的狀態：我躲起來了沒（重新整理頁面也會回到廁所）、最近一筆報價（盤中伺服器每 30 秒推）
+function peekSync(p){
+  if(!peekBusy) peekShow(!!p.hidden);
+  if(p.hidden&&p.stock) peekRender(p.stock);
+}
+const pkFmt=(n)=>n==null?'—':(Math.round(n*100)/100).toLocaleString(undefined,{maximumFractionDigits:2});
+function peekRender(s){
+  const q=s&&s.quote; if(!q) return;
+  const up=q.change>0, dn=q.change<0, cls=up?'pk-up':dn?'pk-dn':'';
+  document.getElementById('pkname').textContent=q.name+'　'+q.code+(q.market==='otc'?'（櫃）':'');
+  const pr=document.getElementById('pkprice'); pr.textContent=pkFmt(q.price); pr.className=cls;
+  const ch=document.getElementById('pkchg'); ch.className=cls;
+  ch.textContent=q.change==null?'':(up?'▲ ':dn?'▼ ':'')+pkFmt(Math.abs(q.change))+'（'+(q.pct>0?'+':'')+(q.pct==null?'—':q.pct)+'%）';
+  document.getElementById('pkinfo').innerHTML='開 '+pkFmt(q.open)+'　高 '+pkFmt(q.high)+'<br>低 '+pkFmt(q.low)+'　昨收 '+pkFmt(q.prev)+'<br>量 '+(q.volume==null?'—':q.volume.toLocaleString())+' 張';
+  let h='<tr><th>買價</th><th>賣價</th></tr>';
+  for(let i=0;i<5;i++) h+='<tr><td class="pk-up">'+(q.bids[i]!=null?pkFmt(q.bids[i]):'')+'</td><td class="pk-dn">'+(q.asks[i]!=null?pkFmt(q.asks[i]):'')+'</td></tr>';
+  document.getElementById('pkbook').innerHTML=h;
+  document.getElementById('pktime').textContent=(q.time?q.time+'　':'')+(s.trading?'盤中・每 30 秒更新':'已收盤')+'　僅供參考';
+}
+function peekMsg(t){ const m=document.getElementById('peekmsg'); m.textContent=t||''; }
+function peekQuery(){
+  const code=document.getElementById('peekcode').value.trim().toUpperCase();
+  if(!code){ peekMsg('輸入代號'); return; }
+  peekMsg('查詢中…');
+  sendCmd('stockQuery',{code}).then(r=>{
+    if(!r||!r.ok){ peekMsg((r&&r.error)||'查不到'); return; }
+    peekMsg(''); peekRender({ quote:r.quote, at:r.at, trading:r.trading });
+  });
+}
+document.getElementById('peekbtn').addEventListener('click',()=>{
+  peekBusy=true;
+  sendCmd('plazaHide',{on:'1'}).then(r=>{ peekBusy=false; if(r&&r.ok) peekShow(true); else flashCmdMsg((r&&r.error)||'躲不了','#f85149'); });
+});
+document.getElementById('peekback').addEventListener('click',()=>{
+  peekBusy=true;
+  sendCmd('plazaHide',{on:'0'}).then(r=>{ peekBusy=false; if(r&&r.ok) peekShow(false); else peekMsg((r&&r.error)||'回不去'); });
+});
+document.getElementById('peekgo').addEventListener('click',peekQuery);
+document.getElementById('peekcode').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing){ e.preventDefault(); peekQuery(); } });
 // ── 手動戰鬥（docs/plaza-duel-spec.md）────────────────────────────────────
 // 九宮格回合制：A 欄自己（畫面左邊永遠是自己）、B 欄中間、C 欄對手。判定在伺服器（duel-sim.js），
 // 頁面照每回合的結果（last）演出：移動 → 發射 → 對波／打中 → 爆炸。
@@ -6010,13 +6193,16 @@ const server = http.createServer((req, res) => {
                     const ph = Math.floor(el / YT.JUMP_MS);
                     return { react: 'HAPPY', jump: ph < YT.JUMP_HOPS * 2 && ph % 2 === 0 ? YT.JUMP_H : 0 };
                 };
-                const occ = list.map(m => ({
+                // 偷看盤：躲起來的人不畫（名牌、對話泡泡、點擊判定都跟著沒有）
+                const occ = list.filter(m => !m.hidden).map(m => ({
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
                     battle: !!m.battle,
                     react: m.battle ? 'BATTLE' : undefined,   // 對戰中：IDLE_1 ↔ ANGRY 循環（開心鈕演出照樣蓋過去）
                     acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
                     swap: fest && m.costume !== false ? fest.swap || null : null,
                     ...(happy(m) || {}),
+                    // 彩蛋：跑車（聊天打 how do you turn this on）—— 開了幾毫秒，合成時照跑道畫
+                    carT: m.carAt && nowS - m.carAt >= 0 && nowS - m.carAt < plaza.CAR_MS ? nowS - m.carAt : undefined,
                 }));
                 const step = plazaClient.step();
                 // 場地與畫法比照營地（69x54 細格、角色 16 細格），原住民先不放。
@@ -6028,6 +6214,8 @@ const server = http.createServer((req, res) => {
                 const mine = list.find(m => m.id === me.id);
                 body = { ok: true, active: true, step, me: me.name, notice: plazaNotice,
                          mode: mine && mine.mode === 'manual' ? 'manual' : 'auto', feast,
+                         // 偷看盤：我躲起來了沒、最近一筆報價（盤中伺服器每 30 秒推）
+                         hidden: !!(mine && mine.hidden), stock: plazaClient.stock(),
                          // 對戰邀請：別人邀我（要回覆）／我邀別人（等回覆）
                          invite: (() => {
                              const inc = plazaClient.incoming(), out = plazaClient.outgoing();

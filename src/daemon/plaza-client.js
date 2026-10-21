@@ -125,6 +125,11 @@ function create(opts = {}) {
         } else if (event === 'emote' && d.id) {
             // 開心鈕：記在成員身上，合成時依 serverNow - emoteAt 演 HAPPY + 跳
             if (members.has(d.id)) members.get(d.id).emoteAt = d.at;
+        } else if (event === 'stock' && d.quote) {
+            stock = { quote: d.quote, at: d.at, trading: d.trading };   // 偷看盤：盤中更新
+        } else if (event === 'car' && d.id) {
+            // 彩蛋：跑車。記在成員身上，合成時依 serverNow - carAt 算繞到哪
+            if (members.has(d.id)) members.get(d.id).carAt = d.at;
         } else if (event === 'member' && d.id) {
             // 成員狀態整份換掉（走法、自動／手動、是否對戰中）
             const { serverNow, ...m } = d; void serverNow;
@@ -262,6 +267,25 @@ function create(opts = {}) {
         return { ok: true, seq: r.body.seq };
     }
 
+    // 偷看盤（docs/plaza-peek-spec.md）：躲起來／回座位、查股票。最近一筆報價記在 stock（盤中伺服器每 30 秒推 stock）
+    let stock = null;
+    async function hide(on) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/hide', { id: me.id, hidden: on !== false });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
+        if (on === false) stock = null;
+        return { ok: true };
+    }
+    async function stockQuery(code) {
+        if (!me) return { ok: false, error: '不在廣場' };
+        const r = await request('POST', '/stock/query', { id: me.id, code });
+        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）'), wait: r.body && r.body.wait };
+        stock = { quote: r.body.quote, at: r.body.at, trading: r.body.trading };
+        return { ok: true, ...stock };
+    }
+
     // 開心鈕。成功就先記在自己身上（推播也會到，結果相同），按下去立刻有反應
     async function emote() {
         if (!me) return { ok: false, error: '不在廣場' };
@@ -322,7 +346,7 @@ function create(opts = {}) {
     }
 
     return {
-        join, leave, rename, update, move, say, emote, invite, answer, admin, active,
+        join, leave, rename, update, move, say, emote, invite, answer, admin, active, hide, stockQuery, stock: () => stock,
         stairs, stairsBoard,
         stairsRooms: () => stairsRooms.slice(),
         stairsMine: () => (me && stairsRooms.find(r => r.ids.includes(me.id))) || null,

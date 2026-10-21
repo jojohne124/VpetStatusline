@@ -354,6 +354,55 @@ function feastTable(t, step) {
 }
 
 /** 真的廣場：在場名單（伺服器發的）→ 畫面。原住民（NPC）先不放。 */
+// ── 彩蛋：跑車（世紀帝國 2 的 how do you turn this on）──────────────────
+// 藍色敞篷跑車、白色賽車條紋（2026-10-21：原作是藍的），面右（面左就整張翻）。擋風玻璃靠車頭。vpet 坐在中間，下半身被車身擋住。
+const CAR_MS = 4500;           // 一圈多久（含開出去、開回來各 500ms）
+const CAR_ART = [
+    '...................GK.......',
+    '..................GGK.......',
+    '..KKKKKKK........GGKKKKK....',
+    '.KBBBBBBBKKKKKKKKKKBBBBBKK..',
+    'KRLLLLLLLLLLLLLLLLLLLLLLLBK.',
+    'KBWWWWWWWWWWWWWWWWWWWWWWWBYK',
+    'KBBKKKKBBBBBBBBBBBBKKKKBBBBK',
+    'KBKTTTTKBBBBBBBBBBKTTTTKBBK.',
+    '.KTTHHTTKKKKKKKKKKTTHHTTKK..',
+    '..TTHHTT..........TTHHTT....',
+    '...TTTT............TTTT.....',
+];
+// 2026-10-21 改版：長車頭、後車廂矮、座艙開口（vpet 坐在裡面）、擋風玻璃斜靠車頭、輪拱＋大輪胎、車頭燈／尾燈
+const CAR_COL = { K: [20, 20, 28], B: [36, 92, 204], L: [86, 140, 232], W: [241, 241, 241], G: [196, 228, 246],
+                  T: [44, 44, 48], H: [170, 170, 170], Y: [255, 216, 74], R: [220, 50, 50] };
+const CAR_SEAT = { x: 4, y: 8 };   // vpet（16x16）的左上角放在合成圖的 (4,0)，車身從第 8 列開始（座艙開口在 vpet 腳下）
+// vpet + 跑車合成一張（寬 28、高 19）；畫的時候往左挪 CAR_SEAT.x、往上挪到車輪底對齊原本的腳底
+function carSprite(pet, facing) {
+    const w = CAR_ART[0].length, h = CAR_SEAT.y + CAR_ART.length, out = [];
+    for (let y = 0; y < h; y++) out.push(new Array(w).fill(null));
+    if (pet) for (let y = 0; y < pet.length; y++) for (let x = 0; x < pet[y].length; x++) if (pet[y][x]) out[y][CAR_SEAT.x + x] = pet[y][x];
+    CAR_ART.forEach((row, j) => { for (let i = 0; i < w; i++) {
+        const c = row[facing === 'left' ? w - 1 - i : i]; if (c !== '.') out[CAR_SEAT.y + j][i] = CAR_COL[c]; } });
+    return out;
+}
+// 開了 t 毫秒在哪：先從原地開到橢圓跑道上（500ms）→ 順時針繞一整圈 → 開回現在走路的位置（500ms）。
+// 跑道是場地中間的橢圓，起點選在離原地最近的角度，看起來是「原地發車、繞一圈回來」
+function carPos(t, x0, y0, field) {
+    // 車身比 vpet 寬（左邊多 CAR_SEAT.x、右邊多到 28），跑道往內縮，車頭車尾才不會被畫面切掉
+    const lo = field.minX + CAR_SEAT.x, hi = field.maxX - (CAR_ART[0].length - CAR_SEAT.x - 16);
+    const cx = (lo + hi) / 2, cy = (field.minY + field.maxY) / 2;
+    const rx = Math.max(4, (hi - lo) / 2), ry = Math.max(3, (field.maxY - field.minY) / 2 - 1);
+    const th0 = Math.atan2((y0 - cy) / ry, (x0 - cx) / rx);
+    const at = (th) => ({ x: cx + rx * Math.cos(th), y: cy + ry * Math.sin(th) });
+    const IN = 500, OUT = 500, LAP = CAR_MS - IN - OUT, s = at(th0);
+    const lerp = (a, b, u) => a + (b - a) * u;
+    let x, y, facing;
+    if (t < IN) { const u = t / IN; x = lerp(x0, s.x, u); y = lerp(y0, s.y, u); facing = s.x >= x0 ? 'right' : 'left'; }
+    else if (t < IN + LAP) {
+        const th = th0 + 2 * Math.PI * (t - IN) / LAP, q = at(th);
+        x = q.x; y = q.y; facing = Math.sin(th) > 0 ? 'left' : 'right';   // 順時針：下半圈往左、上半圈往右
+    } else { const u = Math.min(1, (t - IN - LAP) / OUT); x = lerp(s.x, x0, u); y = lerp(s.y, y0, u); facing = x0 >= s.x ? 'right' : 'left'; }
+    return { x: Math.round(x), y: Math.round(y), facing };
+}
+
 function composePlazaLive(core, occupants, step, opts = {}) {
     return composePlaza(core, occupants, step, { ...opts, npc: false, field: PLAZA_LIVE_FIELD, textLabels: false });
 }
@@ -397,6 +446,12 @@ function composePlaza(core, occupants, step, opts = {}) {
         // o.facing：指定面向（拍照：大家朝向照片中間）。沒給就照走路的面向。
         placed.push({ ...o, key, x: p.x, y: p.y, facing: o.facing || p.facing, moving: p.moving,
                       sleeping: !!p.sleeping, react });
+        // 彩蛋：開跑車中（o.carT = 開了幾毫秒）→ 位置、面向照跑道走，不睡覺、不跳
+        // 春節圍爐（opts.feast）大家坐在座位上，不開車：彩蛋無效（聊天照常）
+        if (!opts.feast && o.carT != null && o.carT >= 0 && o.carT < CAR_MS) {
+            const c = carPos(o.carT, p.x, p.y, o.field || field), q = placed[placed.length - 1];
+            q.x = c.x; q.y = c.y; q.facing = c.facing; q.car = true; q.sleeping = false; q.react = 'HAPPY'; q.jump = 0;
+        }
     }
 
     // 2b. 圍爐：位置換成座位（畫的座標），角色縮成座位表決定的大小。不睡覺（手動模式的
@@ -473,6 +528,8 @@ function composePlaza(core, occupants, step, opts = {}) {
             sp = scaleDots(sp, k); aox = Math.round(aox * k); aoy = Math.round(aoy * k);
             if (p.accTop) p.accTop = Math.round(p.accTop * k);
         }
+        // 坐上跑車：整張往上挪，讓車輪底對齊原本的腳底（名牌在腳下，不會壓到車輪）
+        if (p.car && sp) { sp = carSprite(sp, p.facing); aox -= CAR_SEAT.x; aoy -= sp.length - W.SPRITE; }
         const toDraw = render && !p.seated ? render.toDraw : (x, y) => ({ x, y });
         // dx/dy = **畫出來**的位置（細格；含跳躍）。前端的命中判定要用這個。
         const at = toDraw(p.x, p.y - p.jumpDy);
@@ -1020,7 +1077,7 @@ module.exports = {
     YARD_PAGE_SIZE, yardWide, yardPageCount, yardPageX, yardPageAt, composeYardStandoff,
     YARD_RENDER_WIDE, YARD_GEOM, YARD_GEOM_WIDE,
     PLAZA_W: W.PLAZA_W, PLAZA_H: W.PLAZA_H, YARD_FIELD: W.YARD_FIELD, SPRITE: W.SPRITE,
-    cellsToDots, dotsToCells, blit,
+    cellsToDots, dotsToCells, blit, CAR_MS, carPos, carSprite,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, nameTags, NAME_DEFAULT_COLOR, cellToAnsi, occluded, NPCS,
     yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,

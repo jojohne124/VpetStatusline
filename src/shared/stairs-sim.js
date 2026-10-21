@@ -71,6 +71,7 @@ function addPlatform(g, y, type) {
 }
 // 角色大小看人數（2026-10-21 回報：4 個人擠在一起動不了）：1～2 人 12、3 人 10、4 人 9
 const sizeFor = (n) => (n <= 2 ? S : n === 3 ? 10 : 9);
+const START_STAGGER = 6;   // 多人開局：相鄰兩塊高低差（點）
 const padOf = (s) => Math.max(1, Math.round(s * HIT_PAD / S));   // 碰撞身體左右縮的點數跟著比例
 
 /**
@@ -82,20 +83,22 @@ function createGame({ seed = 1, players = [], mode = 'endless' } = {}) {
     const g = { seed: seed >>> 0, rand: rng(seed), mode, tick: 0, t: 0, scroll: SCROLL0, S: s,
                 floors: 0, nextId: 0, platforms: [], players: [], over: false, started: players.length };
     // 開局：一人一塊（2026-10-21：大家擠在同一塊上，夾在中間的人左右都被擋住、出不去）。
-    // 場地切成 n 段，每段中間一塊；一個人的時候就是原本那塊在正中間
+    // 場地切成 n 段，每段中間一塊；一個人的時候就是原本那塊在正中間。
+    // 相鄰的一高一低（START_STAGGER）：同一個高度的話縫太窄，走出去會直接踩到隔壁那塊，等於還是下不去（第二次回報）。
+    // 高的那塊走出去就掉到隔壁低的（往下走了一階）；低的那塊兩邊都是高的，從底下走過去就掉下去
     const sy = 34;   // 開局站得低一點：離天花板有幾秒的距離
     const slot = W / n, sw = n === 1 ? PLAT_W[1] : Math.min(Math.floor(slot) - 4, Math.max(PLAT_W[0], s + 6));
     g.floors = 1;
     const starts = [];
     for (let i = 0; i < n; i++) {
         const x = Math.round(slot * i + (slot - sw) / 2);
-        const pl = { id: ++g.nextId, floor: 1, x, y: sy, w: sw, type: 'normal', gone: false };
+        const pl = { id: ++g.nextId, floor: 1, x, y: sy - (n > 1 && i % 2 ? START_STAGGER : 0), w: sw, type: 'normal', gone: false };
         g.platforms.push(pl); starts.push(pl);
     }
     for (let y = sy + GAP; y < H + GAP; y += GAP) addPlatform(g, y, 'normal');
     players.forEach((p, i) => {
         const pl = starts[i];
-        g.players.push({ id: p.id, s, x: Math.round(pl.x + (pl.w - s) / 2), y: sy - s, vx: 0, vy: 0, dir: 0, hp: HP_MAX, healN: 0, alive: true,
+        g.players.push({ id: p.id, s, x: Math.round(pl.x + (pl.w - s) / 2), y: pl.y - s, vx: 0, vy: 0, dir: 0, hp: HP_MAX, healN: 0, alive: true,
                          floor: 1, on: pl.id, onAt: 0, hurtUntil: 0, pass: null, diedAt: null, rank: null });
     });
     return g;

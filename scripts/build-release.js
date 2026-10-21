@@ -120,6 +120,11 @@ copyRel(path.join('tools', 'vpet-standalone.applescript'));
 // tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）
 for (const f of ['vpet-tray.ps1', 'vpet.ico'])
     if (fs.existsSync(path.join(REPO, 'tools', f))) copyRel(path.join('tools', f));
+// vpet mini（桌面小視窗，WebView2）：腳本＋WebView2 SDK 三個 dll（Microsoft 簽章、可隨附散布，授權見 lib/LICENSE.txt）。
+// 只收這些固定檔名 —— 小視窗自己產生的 mini-web.json、webview-data\、除錯 log 不出貨
+for (const f of ['vpet-mini-web.ps1', 'vpet-mini.vbs', 'README.md',
+                 'lib/Microsoft.Web.WebView2.Core.dll', 'lib/Microsoft.Web.WebView2.WinForms.dll', 'lib/WebView2Loader.dll', 'lib/LICENSE.txt'])
+    if (fs.existsSync(path.join(REPO, 'tools', 'vpet-mini', f))) copyRel(path.join('tools', 'vpet-mini', f));
 
 // characters：roster + 每角色 4 個部署用 json（跳過 PNG / pixels / bullet.json / .bak / evo-layout）
 copyRel(path.join('characters', 'roster.json'));

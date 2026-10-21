@@ -228,7 +228,8 @@ if (hasDitto && hasArt) {
        && /if \(swMe\)  \{ meArt = swMe\.a; meRightOffset = swMe\.off; \}/.test(src)
        && /if \(swOpp\) \{ enemyArt = swOpp\.a; enemyRightOffset = swOpp\.off; \}/.test(src), '廣場對戰沒有把打架的換成百變怪');
     ok(!/CutInArt\s*=\s*sw/.test(src), '廣場對戰的 CutIn 應該照原圖');
-    ok(/swap: fest && m\.costume !== false \? fest\.swap \|\| null : null,/.test(src), '廣場每個人沒有帶 swap（或沒跟著本人的開關）');
+    ok(/swap: fest && m\.costume !== false && me\.costume !== false \? fest\.swap \|\| null : null,/.test(src), '廣場每個人沒有帶 swap（或沒跟著本人的開關）');
+    ok(/acc: fest && m\.costume !== false && me\.costume !== false \? fest\.acc : null,/.test(src), '我關掉節慶造型，廣場上別人的造型還在');
     ok(/swap: \(\(\) => \{ const f = festNow\(Date\.now\(\), args\.fest\); return f && readFest\(\)\.costume \? f\.swap \|\| null : null; \}\)\(\),/.test(src), '營地拿起來的那隻沒有帶 swap');
 }
 

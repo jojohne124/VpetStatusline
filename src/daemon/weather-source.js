@@ -47,7 +47,7 @@ function writeCache(stateDir, data) {
 function url(cfg) {
     return 'https://api.open-meteo.com/v1/forecast'
          + `?latitude=${encodeURIComponent(cfg.lat)}&longitude=${encodeURIComponent(cfg.lon)}`
-         + '&current=temperature_2m,weather_code';
+         + '&current=temperature_2m,weather_code,cloud_cover';   // 雲量：晴但雲多就判陰（見 weather.js 的 CLOUDY_PCT）
 }
 
 /**
@@ -62,12 +62,12 @@ function url(cfg) {
 function parse(json) {
     const cur = (json && json.current) || {};
     const num = (v) => (Number.isFinite(v) ? v : null);
-    return { code: num(cur.weather_code), tempC: num(cur.temperature_2m), at: Date.now() };
+    return { code: num(cur.weather_code), tempC: num(cur.temperature_2m), cloud: num(cur.cloud_cover), at: Date.now() };
 }
 
 /** 原始觀測 + 設定 → 對外的天氣狀態。每次 get() 都重算，所以改對照表立刻生效。 */
 function view(raw, cfg) {
-    const w = WX.classify(raw.code, raw.tempC, { coldBelowC: cfg.coldBelowC });
+    const w = WX.classify(raw.code, raw.tempC, { coldBelowC: cfg.coldBelowC, cloud: raw.cloud });
     const out = { ...w, city: cfg.city, at: raw.at || 0 };
     if (!raw.at) out.stale = true;
     return out;
@@ -82,7 +82,7 @@ function create({ installRoot, stateDir, log = () => {} }) {
     // 只留原始觀測。舊版的快取檔存的是判定過的物件，但那個物件裡本來就有 code/tempC，
     // 所以直接沿用同一個檔、不需要遷移，讀進來就會用新的對照表重新判定。
     const c0 = readCache(stateDir) || {};
-    let raw = { code: c0.code ?? null, tempC: c0.tempC ?? null, at: c0.at || 0 };
+    let raw = { code: c0.code ?? null, tempC: c0.tempC ?? null, cloud: c0.cloud ?? null, at: c0.at || 0 };
     let inflight = false;
     let nextTry = 0;
 

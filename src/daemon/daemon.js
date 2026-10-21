@@ -1671,7 +1671,9 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #chatlog div:hover .del{display:inline}
   #plazaadmin select{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
                      padding:3px 5px;font:inherit;font-size:12px;max-width:150px}
-  #chatin{width:268px !important}
+  /* 輸入框撐滿整列、送出鈕靠右（2026-10-21：原本固定寬度，送出右邊空一截） */
+  #chatin{flex:1;min-width:0;width:auto !important}
+  #chatrow{flex-wrap:nowrap}
   /* 表情符號面板：點 😀 開，點選插入到游標位置 */
   #emojipick{display:none;position:absolute;z-index:40;background:#161b22;border:1px solid #30363d;
              border-radius:8px;padding:6px;width:272px;box-shadow:0 6px 20px rgba(0,0,0,.5);
@@ -1685,7 +1687,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 下樓梯：蓋在廣場畫面上（同一個舞台、一樣大） */
   #stairsbox{position:absolute;inset:0;z-index:5;display:none}
   /* 偷看盤（docs/plaza-peek-spec.md）：廁所場景蓋在廣場上（本人才看得到），手機是 HTML（要打字） */
-  #peekbtn{float:right;opacity:0;transition:opacity .25s;background:none;border:none;cursor:pointer;font-size:14px;padding:2px 6px}
+  #peekbtn{float:right;opacity:0;transition:opacity .25s;background:none;border:none;cursor:pointer;font-size:14px;padding:2px 6px;margin-right:6px}   /* 跟「室內／室外」隔開，同其他按鈕的 6px（2026-10-21：原本黏在一起） */
   #peekbtn:hover,#peekbtn:focus-visible{opacity:1}
   #peekbox{position:absolute;z-index:6;display:none;overflow:hidden}
   #peekcv{position:absolute;left:0;top:0;image-rendering:pixelated}
@@ -1916,7 +1918,7 @@ ${FEST.FESTIVALS.map(f => `        <option value="${f.id}">${f.name}</option>`).
         <label class="k" title="名牌顏色">顏色 <input type="color" id="plazacolor" value="${plaza.NAME_DEFAULT_COLOR}"></label>
       </div>
       <div id="chatlog" data-help="chatlog"></div>
-      <div class="form" data-help="chat" style="margin-top:4px;position:relative">
+      <div class="form" id="chatrow" data-help="chat" style="margin-top:4px;position:relative">
         <button id="chatemoji" title="表情符號">😀</button><input id="chatin" maxlength="${PlazaServer.CHAT_MAX}" placeholder="說點什麼…（Enter 送出）"><button id="chatsend">送出</button>
         <div id="emojipick"></div>
       </div>
@@ -2028,21 +2030,30 @@ function drawLayer(layer){
 }
 function draw(petLines, target){
   const cv=target||document.getElementById('pet'),ctx=cv.getContext('2d');
-  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
   if(!petLines){return;}
   const rows=petLines.map(parseAnsi);
   const maxW=Math.max(0,...rows.map(r=>r.length));
-  cv.width=Math.max(1,maxW*CW); cv.height=Math.max(1,rows.length*CH);
+  // 前線（卡片、進化樹的字都在這）：內部解析度乘上 devicePixelRatio（2026-10-21 玩家回報）。
+  // 瀏覽器縮放低於 100% 時，畫布原本是先畫成 100% 再被 pixelated 縮小 → 丟列，字缺筆畫。
+  // 改成直接畫在實際的裝置像素上，CSS 尺寸不變（只設寬，高靠 height:auto 跟著比例）。
+  // 只做前線：營地、廣場的拍照合成、圍爐圖層、天氣層都直接拿這張畫布的寬高對位，不去動它們。
+  const dpr=(!target&&view==='home')?(window.devicePixelRatio||1):1;
+  const cssW=Math.max(1,maxW*CW), cssH=Math.max(1,rows.length*CH);
+  cv.width=Math.max(1,Math.round(cssW*dpr)); cv.height=Math.max(1,Math.round(cssH*dpr));
+  cv.style.width=dpr!==1?cssW+'px':''; cv._dpr=dpr;
   ctx.textBaseline='top'; ctx.font='13px ui-monospace, Consolas, monospace';
-  // 半格像素
+  // 半格像素：直接畫在裝置像素上、邊界取整數（倍率不是整數時，小數座標會在格子之間留下細縫）
+  const P=(v)=>Math.round(v*dpr);
   for(let r=0;r<rows.length;r++){
     for(let c=0;c<rows[r].length;c++){
       const cell=rows[r][c]; if(!cell||cell.ch!==undefined)continue;
-      const x=c*CW,y=r*CH;
-      if(cell.top){ctx.fillStyle='rgb('+cell.top.join(',')+')';ctx.fillRect(x,y,CW,CH/2);}
-      if(cell.bot){ctx.fillStyle='rgb('+cell.bot.join(',')+')';ctx.fillRect(x,y+CH/2,CW,CH/2);}
+      const x0=P(c*CW), x1=P((c+1)*CW), y0=P(r*CH), ym=P(r*CH+CH/2), y1=P((r+1)*CH);
+      if(cell.top){ctx.fillStyle='rgb('+cell.top.join(',')+')';ctx.fillRect(x0,y0,x1-x0,ym-y0);}
+      if(cell.bot){ctx.fillStyle='rgb('+cell.bot.join(',')+')';ctx.fillRect(x0,ym,x1-x0,y1-ym);}
     }
   }
+  ctx.setTransform(dpr,0,0,dpr,0,0);   // 文字照原本的 CSS 座標畫，交給 transform 換成裝置像素
   // 文字（卡片欄位 / 進化樹名稱 / PvP 名牌）：整段一起畫，再水平縮放到剛好 = 該段格數×CW。
   // 逐字 fillText 會壞掉：格距只有 8px，但 13px 字型的字寬更寬 → 互相擠壓，
   // 且最後一個字會超出 canvas 右緣被切掉（進化樹名字被截就是這個原因）。
@@ -2551,7 +2562,7 @@ function sceneRect(g,x,y,w,h,c,a){
 function sceneKind(){
   // 營地：節日背景顯示中就換成節日的（地板一起換，互斥），否則是草地
   if(view==='yard') return festShown() && festState.hasBg ? '' : 'yard';
-  if(view==='plaza' && !festState.hasBg) return plazaOutdoor ? 'outdoor' : 'office';
+  if(view==='plaza' && !(festState.hasBg && festState.bg)) return plazaOutdoor ? 'outdoor' : 'office';
   return '';
 }
 // 室內：天氣只在窗外，整片的天氣層不畫
@@ -2846,7 +2857,8 @@ function festFloor(g,ts,W,H,id){
   }
 }
 // 節日背景現在有沒有在畫（廣場一律、營地看開關）
-function festShown(){ return !!festState.id && (view==='plaza' || (view==='yard' && festState.bg)); }
+// 廣場、營地都看同一顆「顯示節慶造型」：關掉 = 自己看到的畫面不過節（2026-10-21：廣場原本只拿掉自己的帽子）
+function festShown(){ return !!festState.id && (view==='plaza' || view==='yard') && festState.bg; }
 function festDraw(ts){
   const cv=document.getElementById('fest');
   const on = festShown();
@@ -2998,8 +3010,8 @@ function festDraw(ts){
 function applyFestival(f, opts){
   festState.id = f ? f.id : null;
   festState.hasBg = !!(f && f.bg !== false);
-  const io=document.getElementById('plazaio'); if(io) io.style.display = festState.hasBg ? 'none' : '';
-  if(opts && opts.costume!=null) festState.bg = !!opts.costume;   // 營地背景跟造型同一顆開關
+  if(opts && opts.costume!=null) festState.bg = !!opts.costume;   // 營地、廣場：背景跟造型同一顆開關
+  const io=document.getElementById('plazaio'); if(io) io.style.display = festState.hasBg && festState.bg ? 'none' : '';
   document.querySelectorAll('.festname').forEach(el=>{ el.textContent = f ? f.name : ''; });
   // 營地、廣場同一顆，排在控制列最右（跟「顯示天氣日期」並排）
   document.getElementById('festplaza').style.display = (f && (view==='yard'||view==='plaza')) ? 'flex' : 'none';
@@ -3175,8 +3187,10 @@ document.addEventListener('scroll',closeCtx,true);
 function evDot(ev){
   const cv=document.getElementById('pet'), r=cv.getBoundingClientRect();
   // 畫布可能被 CSS 縮放過 → 用 width/rect 的比例換回內部座標，再換成 dot
-  return { dx:(ev.clientX-r.left)*(cv.width/r.width)/CW,
-           dy:(ev.clientY-r.top )*(cv.height/r.height)/(CH/2) };
+  // 前線畫布的內部解析度乘過 devicePixelRatio（見 draw）→ 先除回 CSS 像素
+  const k=cv._dpr||1;
+  return { dx:(ev.clientX-r.left)*(cv.width/k/r.width)/CW,
+           dy:(ev.clientY-r.top )*(cv.height/k/r.height)/(CH/2) };
 }
 function yardHit(ev){
   if(view!=='yard'||!lastYard||!lastYard.pets||!lastYard.pets.length) return null;
@@ -5214,7 +5228,7 @@ document.getElementById('peekcode').addEventListener('keydown',e=>{ if(e.key==='
 // 九宮格回合制：A 欄自己（畫面左邊永遠是自己）、B 欄中間、C 欄對手。判定在伺服器（duel-sim.js），
 // 頁面照每回合的結果（last）演出：移動 → 發射 → 對波／打中 → 爆炸。
 // dev 測試對戰（comState.kind==='duel'）：同一套 duel-sim 在頁面本地跑，對手每回合隨機選。
-const MB={ W:552, H:432, GX:30, GW:164, GY:100, GH:90, PS:6, BS:8, CS:6, BOOM:8, PANEL:56, BAR_MS:1400 };   // vpet 6 倍、子彈 8 倍（2026-10-20 再放大）
+const MB={ W:552, H:432, GX:30, GW:164, GY:100, GH:90, PS:6, BS:8, CS:6, BOOM:8, PANEL:56, BAR_MS:1400, BAR_MIN_MS:900, BAR_MAX_MS:1600 };   // 力度條一趟（來回）幾毫秒：每回合在 MIN～MAX 之間隨機   // vpet 6 倍、子彈 8 倍（2026-10-20 再放大）
 let mbRaf=0, mbArt={}, mbArtKey='', mbBoom=null, mbSel=null, mbAnim=null, mbBtns=[], mbBgCache={};
 function mbData(){
   if(comState) return comState.kind==='duel'?comState.duel:null;
@@ -5344,11 +5358,14 @@ function mbSelFor(d){
   if(!mbSel||mbSel.round!==d.round) mbSel={ round:d.round, step:0, cur:0, mv:null, aim:null, barT0:0, sent:false };
   return mbSel;
 }
-function mbBarVal(){ const ph=((performance.now()-mbSel.barT0)%MB.BAR_MS)/MB.BAR_MS; return ph<0.5?ph*2:2-ph*2; }
+// 力度條：每回合（每次進到這一步）速度、起點、方向都隨機（2026-10-21：固定 1.4 秒一趟、每次從 0 往上，節奏背起來就一直 ×2）。
+// barPh = 起始相位 0～1：前半是往上、後半是往下，所以起點和方向一起決定
+function mbBarVal(){ const ms=mbSel.barMs||MB.BAR_MS, ph=(((performance.now()-mbSel.barT0)/ms+(mbSel.barPh||0))%1+1)%1; return ph<0.5?ph*2:2-ph*2; }
 // 一次只能走一格（上／不動／下）而且不能出界。原本只檢查出界 → 隔兩格的位置也會出現虛影、點了被伺服器退回（2026-10-21）
 function mbMoveOk(d,mi,mv){ const r=d.row[mi]+mv; return (mv===-1||mv===0||mv===1)&&r>=0&&r<3; }
 function mbChooseMove(d,mi,mv){ if(!mbMoveOk(d,mi,mv)) return; mbSel.mv=mv; mbSel.step=1; mbSel.cur=d.row[mi]+mv; }
-function mbChooseAim(a){ mbSel.aim=a; mbSel.step=2; mbSel.barT0=performance.now(); }
+function mbChooseAim(a){ mbSel.aim=a; mbSel.step=2; mbSel.barT0=performance.now();
+  mbSel.barMs=MB.BAR_MIN_MS+Math.random()*(MB.BAR_MAX_MS-MB.BAR_MIN_MS); mbSel.barPh=Math.random(); }
 function mbBack(){ if(mbSel.step===2){ mbSel.step=1; mbSel.cur=mbSel.aim; } else if(mbSel.step===1){ mbSel.step=0; mbSel.cur=mbSel.mv; } }
 function mbSend(p){
   const d=mbData(); if(!d||mbSel.sent) return;
@@ -6247,8 +6264,9 @@ const server = http.createServer((req, res) => {
                     key: 'p:' + m.id, code: m.name, color: m.color || null, char: m.char, walk: m.walk,
                     battle: !!m.battle,
                     react: m.battle ? 'BATTLE' : undefined,   // 對戰中：IDLE_1 ↔ ANGRY 循環（開心鈕演出照樣蓋過去）
-                    acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
-                    swap: fest && m.costume !== false ? fest.swap || null : null,
+                    // 本人決定給不給看；我自己關掉「顯示節慶造型」→ 我看到的大家都不過節（跟營地一樣）
+                    acc: fest && m.costume !== false && me.costume !== false ? fest.acc : null,
+                    swap: fest && m.costume !== false && me.costume !== false ? fest.swap || null : null,
                     ...(happy(m) || {}),
                     // 彩蛋：跑車（聊天打 how do you turn this on）—— 開了幾毫秒，合成時照跑道畫
                     carT: m.carAt && nowS - m.carAt >= 0 && nowS - m.carAt < plaza.CAR_MS ? nowS - m.carAt : undefined,

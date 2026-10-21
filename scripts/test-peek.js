@@ -73,9 +73,11 @@ console.log('— 報價來源 —');
         ok(!q2.ok && q2.wait > 0, '1 分鐘內可以連查（應該被擋，還要說等幾秒）');
         // 同一檔在快取時間內：不再打證交所
         await b.hide();
+        trading = false;   // 先停掉盤中自動更新（它也會打 2330），才量得到「查詢」本身有沒有打出去
         const n0 = calls.length;
         await b.stockQuery('2330');
         ok(calls.length === n0, '同一檔剛查過（快取還新）又打了一次證交所');
+        trading = true;
 
         // 盤中合併更新：兩個人各看一檔 → 一個請求帶兩檔；推給各自
         await sleep(450);

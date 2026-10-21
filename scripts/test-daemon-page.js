@@ -1162,7 +1162,7 @@ setTimeout(async () => {
                 // 辦公室常駐、不能關（沒有選單），節日有背景時讓給節日（互斥）
                 ok(!/id="plazascene"/.test(html), '廣場還有背景選單（辦公室應該常駐）');
                 const sjs = (html.match(/<script>([\s\S]*)<\/script>/) || [])[1] || '';
-                ok(/sceneDraw\(ts\);[^\n]*\n\s*festDraw\(ts\);/.test(sjs) && /if\(view==='plaza' && !festState\.hasBg\) return plazaOutdoor \? 'outdoor' : 'office';/.test(sjs),
+                ok(/sceneDraw\(ts\);[^\n]*\n\s*festDraw\(ts\);/.test(sjs) && /if\(view==='plaza' && !\(festState\.hasBg && festState\.bg\)\) return plazaOutdoor \? 'outdoor' : 'office';/.test(sjs),
                    '辦公室不是常駐，或節日背景跟辦公室沒有互斥');
                 ok(/for\(const id of \['scene','fest','festfront'\]\)/.test(sjs), '常駐背景畫布沒有跟角色畫布對位');
                 ok(/festState\.hasBg = !!\(f && f\.bg !== false\);/.test(sjs), '節日有沒有背景沒接上');
@@ -1190,7 +1190,8 @@ setTimeout(async () => {
                 ok(/y:2\.5\+Math\.random\(\)\*3,/.test(js) && /festFireworks\(g,ts/.test(js) && !/festFireworks\(gf/.test(js), '煙火不在畫面最上緣，或跑到角色前面了');
                 ok(/id="festplaza"/.test(html) && !/id="festcos"/.test(html) && !/id="festyard"/.test(html), '頁面沒有節日開關，或營地還留著另一顆');
                 ok(/applyFestival\(p\.festival/.test(js) && /applyFestival\(y\.festival/.test(js), '前端沒有套用節日');
-                ok(/view==='plaza' \|\| \(view==='yard' && festState\.bg\)/.test(js), '廣場的節日背景不該吃營地的開關');
+                // 2026-10-21 改：廣場也吃「顯示節慶造型」—— 關掉 = 自己看到的廣場不過節（原本只拿掉自己的帽子，背景、別人的造型都還在）
+                ok(/function festShown\(\)\{ return !!festState\.id && \(view==='plaza' \|\| view==='yard'\) && festState\.bg; \}/.test(js), '廣場關掉節慶造型，節日背景還在');
                 // 造型勾選框排在「離開廣場」那一列（#controls）的右邊，文案「顯示節慶造型」
                 const ctl = (html.match(/<div id="controls">[\s\S]*?\n    <\/div>/) || [''])[0];
                 ok(/id="festplaza"[^>]*margin-left:auto[\s\S]*?顯示節慶造型<\/label>/.test(ctl), '造型勾選框沒有排在離開廣場那一列的右邊');
@@ -1576,6 +1577,21 @@ setTimeout(async () => {
     ok(/r\.n<\(r\.cap\|\|4\)&&!stMine\(\)&&!comState\);/.test(src), '跟電腦玩到一半還能從聊天室加入別的房');
     ok(/const left=!comState&&gm\.winner==null&&gm\.turnAt&&gm\.turnMs\?/.test(src), '連線五子棋沒有每手倒數');
     ok(/#ctx button \.ci\{display:inline-block;width:1\.6em;text-align:center\}/.test(src) && /<span class="ci">⚔️<\/span>/.test(src), '點人選單的圖示沒固定寬度（字對不齊）');
+    // 前線畫布乘上 devicePixelRatio（縮放低於 100% 時卡片字缺筆畫）；點擊座標除回來；像素邊界取整數
+    ok(/const dpr=\(!target&&view==='home'\)\?\(window\.devicePixelRatio\|\|1\):1;/.test(src) && /cv\.width=Math\.max\(1,Math\.round\(cssW\*dpr\)\)/.test(src)
+       && /const k=cv\._dpr\|\|1;/.test(src) && /ctx\.setTransform\(dpr,0,0,dpr,0,0\);/.test(src), '前線畫布沒有照 devicePixelRatio 畫（縮放低於 100% 字會糊）');
+    {   // 手動戰鬥的力度條：每回合速度、起點隨機（不然節奏背起來就一直 ×2）—— 從頁面抽出來實際跑
+        const f1 = src.match(/function mbBarVal\(\)\{[^\n]*\}/), f2 = src.match(/function mbChooseAim\(a\)\{[^]*?mbSel\.barPh=Math\.random\(\); \}/);
+        let starts = [], speeds = new Set();
+        try {
+            const MB = { BAR_MS: 1400, BAR_MIN_MS: 900, BAR_MAX_MS: 1600 };
+            const run = new Function('MB', 'performance', 'return function(){ let mbSel={}; ' + f1[0] + ' ' + f2[0] + ' mbChooseAim(1); return [mbBarVal(), mbSel.barMs]; };');
+            const t = run(MB, { now: () => 1000 });
+            for (let i = 0; i < 40; i++) { const [v, ms] = t(); starts.push(v); speeds.add(Math.round(ms)); }
+        } catch (e) {}
+        ok(starts.length === 40 && Math.max(...starts) - Math.min(...starts) > 0.5 && speeds.size > 10 && [...speeds].every(ms => ms >= 900 && ms <= 1600),
+           '手動戰鬥的力度條每回合還是同一個速度、從同一個地方開始（節奏背得起來）');
+    }
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

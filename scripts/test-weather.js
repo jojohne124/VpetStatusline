@@ -17,6 +17,11 @@ const eq = (a, b, msg) => ok(JSON.stringify(a) === JSON.stringify(b), `${msg}（
 console.log('— WMO 對照 —');
 eq(WX.classify(0,  25).sky, WX.SKY.CLEAR,  '碼 0 應為晴');
 eq(WX.classify(1,  25).sky, WX.SKY.CLEAR,  '碼 1 應為晴');
+// 雲量（2026-10-21）：晴但雲多就判陰；下雨不看雲量；沒有雲量（舊快取）照碼判
+eq(WX.classify(1, 25, { cloud: 35 }).sky, WX.SKY.CLOUDY, '碼 1、雲量 35% 應判陰（窗外是陰的）');
+eq(WX.classify(0, 25, { cloud: WX.CLOUDY_PCT - 1 }).sky, WX.SKY.CLEAR, '雲量沒到門檻還是晴');
+eq(WX.classify(61, 25, { cloud: 90 }).sky, WX.SKY.RAIN, '下雨不該因為雲多被改成陰');
+eq(WX.classify(1, 25, { cloud: null }).sky, WX.SKY.CLEAR, '沒有雲量（舊快取）時不該亂改');
 eq(WX.classify(3,  25).sky, WX.SKY.CLOUDY, '碼 3（陰）應為陰');
 eq(WX.classify(45, 25).sky, WX.SKY.CLOUDY, '碼 45（霧）歸到陰');
 eq(WX.classify(61, 25).sky, WX.SKY.RAIN,   '碼 61（小雨）應為雨');
@@ -92,6 +97,9 @@ console.log('— 來源解析 —');
     eq(w.city, SRC.DEFAULTS.city, '城市應沿用設定');
 
     // 回應形狀跑掉（API 改版、被 proxy 換成錯誤頁）也不能 throw
+    ok(SRC.view(SRC.parse({ current: { weather_code: 1, temperature_2m: 26, cloud_cover: 35 } }), cfg).sky === WX.SKY.CLOUDY,
+       '抓回來的雲量沒用上（碼 1、雲量 35% 還是晴）');
+    ok(/cloud_cover/.test(SRC.url ? SRC.url(cfg) : require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'daemon', 'weather-source.js'), 'utf8')), '沒有跟 Open-Meteo 要雲量');
     ok(SRC.view(SRC.parse({}), cfg).sky === WX.SKY.CLEAR, '空回應應退回晴天');
     ok(SRC.view(SRC.parse(null), cfg).sky === WX.SKY.CLEAR, 'null 回應應退回晴天');
 

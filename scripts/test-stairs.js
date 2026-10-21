@@ -57,11 +57,22 @@ console.log('— 模擬：基本 —');
     ok(starts.every((pl, i) => !i || pl.x >= starts[i - 1].x + starts[i - 1].w + 2), '開局的階梯黏在一起（中間的人還是出不去）');
     ok(g.S === 9 && g.players.every(p => p.s === 9) && ST.snapshot(g).s === 9 && ST.sizeFor(1) === ST.S && ST.sizeFor(2) === ST.S && ST.sizeFor(3) === 10,
        '角色大小沒有跟著人數縮（1～2 人 12、3 人 10、4 人 9）');
-    {   // 夾在中間的人：往左走得下去
-        const g2 = ST.createGame({ seed: 3, players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] });
-        const b0 = g2.players[1].on;
-        for (let i = 0; i < 40; i++) { ST.setInput(g2, 'b', -1); ST.step(g2); }
-        ok(g2.players[1].on !== b0 && g2.players[1].alive, '夾在中間的人走不下自己那塊');
+    // 每個人都下得去（2026-10-21 第二次回報）：只看「換了一塊」不夠 —— 同一個高度的話會直接走到隔壁那塊，
+    // 等於還在原地。要真的往下（y 變大）。中間的人左右都要下得去；邊上的人至少往裡面下得去
+    for (const n of [2, 3, 4]) {
+        const ids = ['a', 'b', 'c', 'd'].slice(0, n);
+        ids.forEach((id, i) => {
+            const down = (dir) => {
+                const g2 = ST.createGame({ seed: 3, players: ids.map(x => ({ id: x })) });
+                const y0 = g2.players[i].y;
+                for (let k = 0; k < 30; k++) { ST.setInput(g2, id, dir); ST.step(g2); }
+                ST.setInput(g2, id, 0); for (let k = 0; k < 10; k++) ST.step(g2);
+                return g2.players[i].y > y0 + 3;
+            };
+            const mid = i > 0 && i < n - 1;
+            ok(mid ? down(-1) && down(1) : down(i === 0 ? 1 : -1),
+               `${n} 人開局：第 ${i + 1} 個人${mid ? '左右' : '往裡面'}走不下去`);
+        });
     }
     // 開局倒數：這段時間不捲動（一出發就被推向天花板太趕）
     const yc = g.platforms[1].y; ST.step(g);

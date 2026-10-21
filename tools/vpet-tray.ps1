@@ -11,7 +11,12 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $ErrorActionPreference = 'Stop'
+# 只開一個 tray（第二次雙擊 vpet-standalone.vbs 直接結束，不會再起第二個 daemon 搶 3010）。
+# tools\vpet-mini 的小視窗也看這個 Mutex：tray 在 = daemon 是我們管的，自動更新的空檔多等一下
+$mutex = New-Object System.Threading.Mutex($false, 'Local\vpet-tray')
+if (-not $mutex.WaitOne(0, $false)) { exit 0 }
 $root    = Split-Path -Parent $PSScriptRoot         # repo / 安裝根目錄
+$miniVbs = Join-Path $PSScriptRoot 'vpet-mini\vpet-mini.vbs'   # 小視窗（同事做的 vpet mini，2026-10-21 併進來）
 $daemon  = Join-Path $root 'src\daemon\daemon.js'
 $icoPath = Join-Path $PSScriptRoot 'vpet.ico'
 $port    = if ($env:AGUMON_DAEMON_PORT) { $env:AGUMON_DAEMON_PORT } else { '3010' }
@@ -51,9 +56,24 @@ $ni.Visible = $true
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $open = $menu.Items.Add('開啟 vpet 視窗')
 $open.add_Click({ Start-Process $url })
+# 桌面小視窗：只有面板大小、永遠最上層、可拖、可縮放（tools\vpet-mini，WebView2）
+if (Test-Path $miniVbs) {
+    $mini = $menu.Items.Add('開啟 vpet mini 視窗')
+    $mini.add_Click({ Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $miniVbs + '"') })
+}
 $menu.Items.Add('-') | Out-Null
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class VpetTrayNative {
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+}
+'@
+# 結束時小視窗一起關（送 WM_CLOSE，讓它自己存位置）
+function Close-Mini { try { $h = [VpetTrayNative]::FindWindow([NullString]::Value, 'vpet mini'); if ($h -ne [IntPtr]::Zero) { [void][VpetTrayNative]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) } } catch {} }
 $quit = $menu.Items.Add('結束 vpet')
 $quit.add_Click({
+    Close-Mini
     try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
     $ni.Visible = $false
     $ni.Dispose()

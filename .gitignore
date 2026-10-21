@@ -38,3 +38,8 @@ dist/
 
 # macOS 免小黑窗啟動器（由 tools/vpet-standalone.applescript 編譯產生）
 vpet-standalone.app/
+
+# vpet mini（tools/vpet-mini）自己產生的：位置／縮放設定、WebView2 瀏覽器資料、除錯檔
+tools/vpet-mini/mini-web.json
+tools/vpet-mini/webview-data/
+tools/vpet-mini/_*

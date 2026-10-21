@@ -172,6 +172,34 @@ console.log('— 根目錄乾淨、預設安裝是純 daemon —');
     ok(crlf.length === 0, '這些 shell 啟動檔是 CRLF：' + crlf.join(', '));
 }
 
+console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
+{
+    const files = ['tools/vpet-mini/vpet-mini-web.ps1', 'tools/vpet-mini/vpet-mini.vbs', 'tools/vpet-mini/README.md',
+                   'tools/vpet-mini/lib/Microsoft.Web.WebView2.Core.dll', 'tools/vpet-mini/lib/Microsoft.Web.WebView2.WinForms.dll',
+                   'tools/vpet-mini/lib/WebView2Loader.dll', 'tools/vpet-mini/lib/LICENSE.txt'];
+    const miss = files.filter(f => !has(f));
+    ok(!miss.length, 'release 少了 vpet mini 的檔案：' + miss.join('、'));
+    ok(!all.some(f => /^tools\/vpet-mini\/(mini-web\.json|webview-data\/|_)/.test(f)), 'vpet mini 自己產生的設定／瀏覽器資料／除錯檔跟著出貨了');
+    // dll 是二進位：大小要一模一樣（打包時被當文字處理就會壞）
+    for (const f of files.filter(f => f.endsWith('.dll')))
+        ok(has(f) && fs.statSync(path.join(OUT, f)).size === fs.statSync(path.join(REPO, f)).size, f + ' 出貨後大小不一樣（被當文字處理了？）');
+    const mini = read('tools/vpet-mini/vpet-mini-web.ps1'), tray = read('tools/vpet-tray.ps1');
+    ok(mini.charCodeAt(0) === 0xFEFF && tray.charCodeAt(0) === 0xFEFF, 'PowerShell 腳本沒有 UTF-8 BOM（5.1 會把中文拆壞）');
+    // 新視窗只放行 http／https（Start-Process 收到本機路徑會直接執行程式）
+    ok(/if \(\$u\.Scheme -eq 'http' -or \$u\.Scheme -eq 'https'\) \{ Start-Process \$u\.AbsoluteUri \}/.test(mini) && !/try \{ Start-Process \$e2\.Uri \}/.test(mini),
+       'vpet mini 的新視窗沒有限制只開 http／https');
+    ok(/if\(e\.id==='chatlog'\) return true;/.test(mini), 'vpet mini 的聊天紀錄會被當成空白拖曳（字沒辦法反白複製）');
+    // 系統匣只有一個（repo 自己的），選單開小視窗、結束時一起關；小視窗看同一個 Mutex
+    ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /TryOpenExisting\('Local\\vpet-tray'/.test(mini),
+       'tray 跟小視窗沒有用同一個 Mutex（自動更新空檔的判斷會錯）');
+    ok(/\$menu\.Items\.Add\('開啟 vpet mini 視窗'\)/.test(tray) && /Close-Mini/.test(tray), 'tray 選單沒有「開啟 vpet mini 視窗」（或結束時沒關小視窗）');
+    ok(!has('tools/vpet-mini/vpet-tray.ps1') && !has('tools/vpet-mini/vpet.vbs'), '同事版的另一個系統匣也出貨了（會變成兩個 tray）');
+    // 跟頁面的約定：/state 的 kind、整列 .form 的 data-cmd、#chatlog（改到要一起改小視窗）
+    const page = read('src/daemon/daemon.js');
+    ok(/id="chatlog"/.test(page) && /<div class="form\$\{f\.dev \? ' devonly' : ''\}" data-help=/.test(page) && /kind: result\.kind/.test(page),
+       '頁面改到 vpet mini 依賴的東西了（#chatlog、.form 的 data-cmd、/state 的 kind）—— 小視窗要一起改');
+}
+
 try { fs.rmSync(OUT, { recursive: true, force: true }); } catch (_) {}
 
 console.log('— 狀態列的 vpet 暫停：statusline 照常、右側桌寵只擋不刪 —');

@@ -1561,6 +1561,12 @@ setTimeout(async () => {
     ok(/gotAt: st\.lastEvolveAt \|\| st\.birthAt \|\| null,/.test(src) && /'<br>獲得於 '\+\s*\(hit\.gotAt\?new Date\(hit\.gotAt\)\.toLocaleString\(\):'—'\)/.test(src) && !/'<br>收於 '/.test(src),
        '營地右鍵選單顯示的不是這一隻的獲得時間');
     ok(/carT: m\.carAt && nowS - m\.carAt >= 0 && nowS - m\.carAt < plaza\.CAR_MS \? nowS - m\.carAt : undefined,/.test(src), '廣場合成沒有把跑車彩蛋（carT）帶進去');
+    ok(/const occ = list\.filter\(m => !m\.hidden\)\.map\(m => \(\{/.test(src), '偷看盤：躲起來的人還畫在廣場上');
+    // 偷看盤：隱形的 🤫（滑鼠移過去才看得到、提示上班請專心）、躲起來 → 廁所場景、查股票、沖水回座位、輪詢同步
+    ok(/<button id="peekbtn" data-help="peekbtn" title="上班請專心">🤫<\/button>/.test(src) && /#peekbtn\{float:right;opacity:0;/.test(src) && /#peekbtn:hover,#peekbtn:focus-visible\{opacity:1\}/.test(src),
+       '偷看盤的按鈕不是隱形的（或滑鼠移過去不會浮出來、沒有「上班請專心」）');
+    ok(/sendCmd\('plazaHide',\{on:'1'\}\)/.test(src) && /sendCmd\('plazaHide',\{on:'0'\}\)/.test(src) && /sendCmd\('stockQuery',\{code\}\)/.test(src) && /peekSync\(p\);/.test(src),
+       '偷看盤沒接上（躲起來／回座位／查股票／輪詢同步）');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

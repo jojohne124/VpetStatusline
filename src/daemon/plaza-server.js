@@ -26,6 +26,7 @@ const W      = require('../shared/plaza-walk.js');
 const ST     = require('../shared/stairs-sim.js');   // 下樓梯（docs/plaza-stairs-spec.md）
 const DN     = require('../shared/dino-sim.js');     // 小恐龍（docs/plaza-dino-spec.md）
 const DS     = require('../shared/duel-sim.js');     // 手動戰鬥（docs/plaza-duel-spec.md）
+const STOCK  = require('./stock-source.js');         // 偷看盤（docs/plaza-peek-spec.md）：台股報價
 
 const DEFAULT_PORT = 37373;
 const CAP          = 20;        // 同時在場上限（畫面可讀性決定，見規格 §九）
@@ -42,6 +43,11 @@ const EMOTE_MS     = 1800;
 // 比對時只看英文字母（大小寫、空白、標點都不管）。一人冷卻 60 秒；冷卻中照常當一般聊天送出
 const CAR_PHRASE   = 'howdoyouturnthison';
 const CAR_COOLDOWN_MS = 60000;
+// 偷看盤（docs/plaza-peek-spec.md）：躲起來看台股。玩家查新代號每人 1 分鐘一次；
+// 正在看的盤面盤中每 30 秒合併查一次（plaza-host 一個出口，人多人少都只有一個請求），失敗就放慢，最多 5 分鐘
+const STOCK_QUERY_GAP_MS = 60000;
+const STOCK_REFRESH_MS   = 30000;
+const STOCK_BACKOFF_MAX  = 300000;
 const isCarPhrase  = (text) => String(text).toLowerCase().replace(/[^a-z]/g, '') === CAR_PHRASE;
 // 對戰（規格 §八）
 const INVITE_MS    = 30000;     // 邀請多久沒回就當作拒絕
@@ -151,7 +157,8 @@ function createPlazaServer(opts = {}) {
     // costume：要不要讓別人看到我的節日造型（本人決定，大家看到的一樣）。
     // 伺服器只轉送這個旗標，不管今天是不是節日 —— 那由各台 daemon 用伺服器時間判斷。
     const pub = (m) => ({ id: m.id, name: m.name, color: m.color, char: m.char, stage: m.stage, walk: m.walk,
-                          mode: m.mode || 'auto', battle: !!m.battle, costume: m.costume !== false });
+                          mode: m.mode || 'auto', battle: !!m.battle, costume: m.costume !== false,
+                          hidden: !!m.hidden });   // 偷看盤：躲起來了（廣場上不畫、點不到）
     const roster = () => [...members.values()].map(pub);
 
     function send(m, event, data) {
@@ -302,6 +309,8 @@ function createPlazaServer(opts = {}) {
         if (!A) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
         if (!B) return { status: 404, body: { ok: false, error: '對方已經不在廣場了' } };
         if (A.id === B.id) return { status: 400, body: { ok: false, error: '不能跟自己對戰' } };
+        if (A.hidden) return { status: 409, body: { ok: false, error: '你躲起來了，先回座位' } };
+        if (B.hidden) return { status: 409, body: { ok: false, error: `找不到 ${B.name}（不知道躲去哪了）` } };
         if (A.battle || busyIn(A.id)) return { status: 409, body: { ok: false, error: '你已經有一場邀請或對戰了' } };
         if (B.battle || busyIn(B.id)) return { status: 409, body: { ok: false, error: `${B.name} 正在對戰或有別的邀請` } };
         if (stairsRoomOf(A.id)) return { status: 409, body: { ok: false, error: '你在下樓梯的房間裡' } };
@@ -392,7 +401,7 @@ function createPlazaServer(opts = {}) {
         const e = pushChat({ from: id, name: m.name, color: m.color, text });
         // 彩蛋：跑車（對戰中不演；冷卻中只當一般聊天）
         let car = null;
-        if (isCarPhrase(text) && !m.battle) {
+        if (isCarPhrase(text) && !m.battle && !m.hidden) {
             if (!m.carAt || t - m.carAt >= (opts.carCooldownMs ?? CAR_COOLDOWN_MS)) {
                 m.carAt = t; car = 'go';
                 broadcast('car', { id, at: t });
@@ -409,12 +418,94 @@ function createPlazaServer(opts = {}) {
         const m = members.get(id);
         if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
         if (m.battle) return { status: 409, body: { ok: false, error: '對戰中' } };
+        if (m.hidden) return { status: 409, body: { ok: false, error: '你躲起來了' } };
         const t = now();
         if (m.emoteAt && t - m.emoteAt < EMOTE_MS) return { status: 429, body: { ok: false, error: '還在開心中' } };
         m.emoteAt = t;
         broadcast('emote', { id, at: t });
         return { status: 200, body: { ok: true, at: t } };
     }
+
+    // ── 偷看盤（docs/plaza-peek-spec.md）──────────────────────────────────
+    // 躲起來：廣場上不畫（各台 daemon 看 hidden 跳過）、點不到、不能邀、不能玩小遊戲；聊天照常（只是沒有泡泡）。
+    // 對戰中、有邀請、在小遊戲房裡不能躲（先處理完）
+    function hide(body) {
+        const m = members.get(body && body.id);
+        if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (m.hidden) return { status: 200, body: { ok: true } };
+        if (m.battle || busyIn(m.id) || stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '對戰中、有邀請或在小遊戲裡，先處理完' } };
+        m.hidden = true;
+        broadcast('member', pub(m));
+        sys(`${m.name} 不知道躲去哪了...`);
+        return { status: 200, body: { ok: true } };
+    }
+    function unhide(body) {
+        const m = members.get(body && body.id);
+        if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (!m.hidden) return { status: 200, body: { ok: true } };
+        m.hidden = false; m.stockWatch = null;
+        broadcast('member', pub(m));
+        sys(`${m.name} 若無其事地回來了`);
+        return { status: 200, body: { ok: true } };
+    }
+    // 報價快取：代號 -> { q, at }。同一時間只有一個請求在飛（排隊），不會一口氣打好幾個出去
+    const stockFetch = opts.stockFetch || STOCK.fetchMis;
+    const stockTrading = opts.stockTrading || STOCK.isTradingTime;
+    const stockGap = opts.stockQueryGapMs ?? STOCK_QUERY_GAP_MS;
+    const stockRefreshMs = opts.stockRefreshMs ?? STOCK_REFRESH_MS;
+    const stockCacheMs = opts.stockCacheMs ?? stockRefreshMs;   // 玩家查詢時，快取多新就直接用（預設跟盤中更新同一個 30 秒）
+    const quotes = new Map();
+    let stockChain = Promise.resolve(), stockWait = stockRefreshMs, stockNextAt = 0, stockRefreshing = false;
+    function stockCall(codes) {
+        const p = stockChain.then(() => stockFetch(codes));
+        stockChain = p.catch(() => {});
+        return p;
+    }
+    const stockSave = (r) => { const t = now(); for (const k in r) quotes.set(k, { q: r[k], at: t }); };
+    // 查一檔（要先躲起來）。查不到／格式不對不算次數；查到了就記成「正在看」，之後跟著盤中更新
+    async function stockQuery(body) {
+        const m = members.get(body && body.id);
+        if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (!m.hidden) return { status: 409, body: { ok: false, error: '要先躲起來才能偷看盤' } };
+        const code = String((body && body.code) || '').trim().toUpperCase();
+        if (!STOCK.validCode(code)) return { status: 400, body: { ok: false, error: '代號不對（台股 4～6 碼數字）' } };
+        const t = now();
+        if (m.stockAt && t - m.stockAt < stockGap) {
+            const wait = Math.ceil((stockGap - (t - m.stockAt)) / 1000);
+            return { status: 429, body: { ok: false, error: `查太快了，${wait} 秒後再查`, wait } };
+        }
+        let c = quotes.get(code);
+        if (!c || t - c.at > stockCacheMs) {
+            try { stockSave(await stockCall([code])); c = quotes.get(code); }
+            catch (e) { log('偷看盤：證交所查不到 ' + code + '（' + e.message + '）'); if (!c) return { status: 502, body: { ok: false, error: '證交所連不上，等一下再試' } }; }
+        }
+        if (!c) return { status: 404, body: { ok: false, error: `查不到 ${code}` } };
+        if (!members.has(m.id) || !m.hidden) return { status: 409, body: { ok: false, error: '已經回座位了' } };
+        m.stockAt = now(); m.stockWatch = code;
+        return { status: 200, body: { ok: true, quote: c.q, at: c.at, trading: stockTrading(now()) } };
+    }
+    // 盤中更新：大家正在看的代號合併成一個請求；非交易時間不查；失敗就放慢
+    function stockTick() {
+        const t = now();
+        if (stockRefreshing || t < stockNextAt || !stockTrading(t)) return;
+        const watchers = [...members.values()].filter(m => m.hidden && m.stockWatch);
+        const codes = [...new Set(watchers.map(m => m.stockWatch))];
+        if (!codes.length) return;
+        stockRefreshing = true;
+        stockCall(codes).then((r) => {
+            stockSave(r); stockWait = stockRefreshMs;
+            for (const m of watchers) {
+                const c = quotes.get(m.stockWatch);
+                if (c && m.hidden) send(m, 'stock', { quote: c.q, at: c.at, trading: true });
+            }
+        }).catch((e) => {
+            stockWait = Math.min(STOCK_BACKOFF_MAX, stockWait * 2);
+            log('偷看盤：盤中更新失敗（' + e.message + '），' + Math.round(stockWait / 1000) + ' 秒後再試');
+        }).finally(() => { stockRefreshing = false; stockNextAt = now() + stockWait; });
+        stockNextAt = t + stockWait;
+    }
+    const stockTimer = setInterval(stockTick, Math.min(5000, Math.max(20, stockRefreshMs / 6)));
+    stockTimer.unref();
 
     // ── 管理（dev）──────────────────────────────────────────────────────
     // 金鑰比對用固定時間比較（先雜湊成同長度）。沒設金鑰 = 整組關掉。
@@ -483,6 +574,7 @@ function createPlazaServer(opts = {}) {
     function stairsOpen(body) {
         const m = members.get(body && body.id);
         if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (m.hidden) return { status: 409, body: { ok: false, error: '你躲起來了，先回座位' } };
         if (m.battle || busyIn(m.id)) return { status: 409, body: { ok: false, error: '對戰中或有邀請，先處理完' } };
         if (stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '你已經在一個房間裡了' } };
         const mode = body.mode === 'survival' ? 'survival' : 'endless';
@@ -501,6 +593,7 @@ function createPlazaServer(opts = {}) {
     function stairsJoin(body) {
         const m = members.get(body && body.id);
         if (!m) return { status: 404, body: { ok: false, error: '不在廣場名單裡' } };
+        if (m.hidden) return { status: 409, body: { ok: false, error: '你躲起來了，先回座位' } };
         if (m.battle || busyIn(m.id)) return { status: 409, body: { ok: false, error: '對戰中或有邀請，先處理完' } };
         if (stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '你已經在一個房間裡了' } };
         const r = rooms.get(body.room);
@@ -968,6 +1061,12 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'POST' && u.pathname === '/answer') {
             return readBody(req, (j) => { const r = answer(j); reply(res, r.status, r.body); });
         }
+        if (req.method === 'POST' && u.pathname === '/hide') {
+            return readBody(req, (j) => { const r = (j && j.hidden === false ? unhide : hide)(j); reply(res, r.status, r.body); });
+        }
+        if (req.method === 'POST' && u.pathname === '/stock/query') {
+            return readBody(req, (j) => { stockQuery(j).then(r => reply(res, r.status, r.body), (e) => reply(res, 500, { ok: false, error: e.message })); });
+        }
         if (req.method === 'POST' && u.pathname === '/move') {
             return readBody(req, (j) => { const r = move(j); reply(res, r.status, r.body); });
         }
@@ -1006,7 +1105,7 @@ function createPlazaServer(opts = {}) {
     pinger.unref();
 
     function close() {
-        clearInterval(reaper); clearInterval(pinger);
+        clearInterval(reaper); clearInterval(pinger); clearInterval(stockTimer);
         for (const r of rooms.values()) if (r.timer) clearInterval(r.timer);
         for (const inv of invites.values()) clearTimeout(inv.timer);
         for (const t of battleTimers) clearTimeout(t);
@@ -1021,7 +1120,8 @@ function createPlazaServer(opts = {}) {
 module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
                    STAIRS_VER, STAIRS_CAP, STAIRS_LOST_MS, STAIRS_BOARD_N, STAIRS_BOARD_FILE,
                    DINO_BOARD_FILE, DINO_COUNTDOWN_MS, DINO_STALE_MS, GOMOKU_N, gomokuLine, gomokuExpr,
-                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, CAR_COOLDOWN_MS, isCarPhrase, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
+                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, CAR_COOLDOWN_MS, isCarPhrase,
+                   STOCK_QUERY_GAP_MS, STOCK_REFRESH_MS, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
 
 if (require.main === module) {
     const port = parseInt(process.env.VPET_PLAZA_PORT || String(DEFAULT_PORT), 10);

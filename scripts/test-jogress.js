@@ -358,5 +358,29 @@ console.log('— 真資料 —');
 }
 } finally { cleanup(); }
 
-console.log(`\n結果：${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// 圖鑑（2026-10-21）：合體結果排在兩個來源中間、兩邊各拉一條（紫色虛線）過去。真的把圖鑑伺服器跑起來問 /data
+(async () => {
+    console.log('— 圖鑑：合體進化的連線與位置 —');
+    const os2 = require('os'), path2 = require('path'), fs2 = require('fs'), http2 = require('http');
+    const { spawn } = require('child_process');
+    const SD = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'vpet-albumjg-'));
+    fs2.writeFileSync(path2.join(SD, 'album.json'), JSON.stringify({ v: 1, chars: { gatomon: 1, angewomon: 2, ladydevimon: 3, mastemon: 4, agumon: 5, greymon: 6 } }));
+    const PORT = 3000 + Math.floor(Math.random() * 900) + 7000;
+    const srv = spawn(process.execPath, [path2.join(__dirname, '..', 'src', 'album', 'album_server.js')],
+        { env: { ...process.env, AGUMON_STATE_DIR: SD, AGUMON_ALBUM_PORT: String(PORT) }, stdio: 'ignore' });
+    const get = () => new Promise((res, rej) => http2.get({ host: '127.0.0.1', port: PORT, path: '/data' }, r => { let d = ''; r.on('data', c => d += c); r.on('end', () => res(d)); }).on('error', rej));
+    let data = null;
+    for (let i = 0; i < 60 && !data; i++) { try { data = JSON.parse(await get()); } catch (e) { await new Promise(r => setTimeout(r, 100)); } }
+    srv.kill();
+    try { fs2.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
+    if (!data) { fail++; console.log('  ✗ 圖鑑伺服器起不來'); }
+    else {
+        const row = (id) => (data.nodes.find(n => n.id === id) || {}).row;
+        const jog = data.edges.filter(e => e.jog && e.to === 'mastemon').map(e => e.from).sort().join(',');
+        ok(jog === 'angewomon,ladydevimon', '圖鑑上 Mastemon 沒有從 Angewomon 和 LadyDevimon 各拉一條線（' + jog + '）');
+        const a = row('angewomon'), b = row('ladydevimon'), m = row('mastemon');
+        ok(m >= Math.min(a, b) - 1 && m <= Math.max(a, b) + 1, `圖鑑上 Mastemon 沒有排在兩個來源中間（${a}、${b} → ${m}）`);
+    }
+    console.log(`\n結果：${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+})();

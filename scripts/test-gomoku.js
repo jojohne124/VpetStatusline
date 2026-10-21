@@ -89,7 +89,7 @@ console.log('— 跟電腦玩：五子棋的電腦（盡可能強）—');
 
 (async () => {
     console.log('— 伺服器 —');
-    const ps = S.createPlazaServer({ gomokuEndMs: 120, stairsLostMs: 200, graceMs: 3000 });
+    const ps = S.createPlazaServer({ gomokuEndMs: 120, stairsLostMs: 200, graceMs: 3000, gomokuTurnMs: 1200 });
     await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
     const url = 'http://127.0.0.1:' + ps.server.address().port;
     const seen = { a: [], b: [], c: [] };
@@ -154,6 +154,14 @@ console.log('— 跟電腦玩：五子棋的電腦（盡可能強）—');
         await b.stairs('leave');
         ok(await until(() => seen.a.some(([k]) => k === 'end')), '對手中途離開，棋局沒結束');
         ok(seen.a.find(([k]) => k === 'end')[1].result.find(r => r.id === a.me().id).rank === 1, '對手離開，留下來的沒贏');
+        // 每手倒數：房間資料帶時限；超時由電腦代下一手、輪到對手（2026-10-21）
+        await newGame();
+        ok(await until(() => { const gt = a.stairsMine() && a.stairsMine().gomoku; return gt && gt.turnMs === 1200 && typeof gt.turnAt === 'number'; }),
+           '房間資料沒有每手的時限（頁面沒辦法倒數）');
+        ok(await until(() => room() && room().gomoku && room().gomoku.moves === 1 && room().gomoku.turn === 1, 3000), '黑子超時，電腦沒有代下一手');
+        ok(await until(() => seen.b.some(([k, d]) => k === 'gmove' && d.auto === true)), '超時代下的那一手沒有推給對手（或沒標記是電腦代下）');
+        await b.stairs('gresign');
+        await until(() => !room());
         // 斷線太久 → 對手贏
         await newGame();
         const mb = ps.members.get(b.me().id); mb.stream.destroy(); mb.stream = null; mb.lostAt = Date.now();

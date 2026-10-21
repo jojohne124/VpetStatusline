@@ -513,8 +513,10 @@ function renderProbe(js, html, daemonSrc) {
         ok(devOnly && !/jogress/.test(devOnly), '合體被放進 DEV_ONLY —— release 版網頁按了會被伺服器擋掉');
         ok(/jogress:\s*\(a\) => a\.which \? \['jogress', a\.which, 'yes'\] : null/.test(daemonSrc),
            '/cmd 的白名單沒有合體（或沒補 yes —— CLI 會吊在等確認）');
-        const ib = html.indexOf('data-cmd="jogress"'), ic = html.indexOf('data-cmd="card"');
-        ok(ib > 0 && ic > 0 && ib < ic, '合體鈕沒有放在按鈕列最前面');
+        // 合體鈕：排在第二排的開頭（2026-10-21）—— 營地鈕後面、前面有一個只在合體鈕出現時才佔位的換行
+        const ib = html.indexOf('data-cmd="jogress"'), iy = html.indexOf('data-cmd="yard"'), ibr = html.indexOf('class="rowbr" data-scope="home" data-when="jogress"');
+        ok(ib > 0 && iy > 0 && ibr > iy && ibr < ib && /#controls \.rowbr\{flex-basis:100%;height:0;margin-bottom:-6px\}/.test(html), '合體鈕沒有排在第二排的開頭');
+        ok(html.indexOf('id="jgsel"') > ib, '合體的下拉沒有緊跟在合體鈕後面');
         ok(/data-cmd="jogress"[^>]*data-when="jogress"/.test(html), '送出的頁面上合體鈕沒有 data-when（會一直露臉）');
         ok(/id="jgsel"[^>]*data-when="jogressMulti"/.test(html), '頁面上沒有選合體對象的下拉');
     }
@@ -1567,6 +1569,13 @@ setTimeout(async () => {
        '偷看盤的按鈕不是隱形的（或滑鼠移過去不會浮出來、沒有「上班請專心」）');
     ok(/sendCmd\('plazaHide',\{on:'1'\}\)/.test(src) && /sendCmd\('plazaHide',\{on:'0'\}\)/.test(src) && /sendCmd\('stockQuery',\{code\}\)/.test(src) && /peekSync\(p\);/.test(src),
        '偷看盤沒接上（躲起來／回座位／查股票／輪詢同步）');
+    // 2026-10-21 回報六項：下樓梯虛影往上飄、角色跟人數縮；排球殺球殘影；出局可先走；玩到一半不能進別的房；五子棋倒數；點人選單對齊
+    ok(/if\(d\.fell\|\|k>=1\) continue;/.test(src) && /y=d\.y-k\*ST_GHOST_RISE; ghostA=0\.45\*\(1-k\);/.test(src) && /const nowMs=performance\.now\(\), SS=stCur\.s\|\|ST_S/.test(src), '下樓梯出局的虛影沒往上飄（或角色大小沒跟著這一局）');
+    ok(/VB\.step\(g,keys\); vbStepAt=performance\.now\(\); vbTrailPush\(g\);/.test(src) && /vbTrail\.forEach\(\(t,i\)=>/.test(src), '打排球殺球沒有殘影');
+    ok(/function stOutSync\(\)/.test(src) && /setInterval\(stOutSync,300\);/.test(src) && /<button id="stout"/.test(src), '下樓梯／小恐龍出局後沒有「先離開」');
+    ok(/r\.n<\(r\.cap\|\|4\)&&!stMine\(\)&&!comState\);/.test(src), '跟電腦玩到一半還能從聊天室加入別的房');
+    ok(/const left=!comState&&gm\.winner==null&&gm\.turnAt&&gm\.turnMs\?/.test(src), '連線五子棋沒有每手倒數');
+    ok(/#ctx button \.ci\{display:inline-block;width:1\.6em;text-align:center\}/.test(src) && /<span class="ci">⚔️<\/span>/.test(src), '點人選單的圖示沒固定寬度（字對不齊）');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

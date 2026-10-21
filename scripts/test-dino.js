@@ -149,6 +149,18 @@ console.log('— 模擬 —');
         await a.stairs('report', { dist: 40, y: 0, alive: false });   // a 撞到了，b 從頭到尾沒回報
         ok(await until(() => ps.rooms.size === 0, 3000), '有人一直沒回報，整局結束不了');
         void room;
+        // 撞到了先走（不用等別人跑完）：成績照記進排行榜，別人繼續跑
+        await a.stairs('open', { mode: 'endless', kind: 'dino' });
+        const room3 = [...ps.rooms.values()][0]; await b.stairs('join', { room: room3.id });
+        await a.stairs('start'); await sleep(100);
+        await a.stairs('report', { dist: 3000, y: 0, alive: false });
+        await b.stairs('report', { dist: 10, y: 0, alive: true });
+        ok((await a.stairs('leave')).ok, '撞到了不能先離開');
+        const brd = JSON.parse(fs.readFileSync(dinoFile, 'utf8')).board;
+        ok(brd.some(x => x.name === '阿張' && x.score === DN.score(3000)), '撞到先走的人，成績沒有記進排行榜');
+        ok(ps.rooms.size === 1 && [...ps.rooms.values()][0].state === 'play', '有人先走，別人的這一局也被結束了');
+        await b.stairs('report', { dist: 20, y: 0, alive: false });
+        await until(() => ps.rooms.size === 0);
         const s2 = await a.stairs('open', { mode: 'endless' });
         ok(s2.ok && s2.room.kind === 'stairs', '沒帶 kind 開的不是下樓梯（舊版 daemon 會開錯）');
         await a.stairs('leave');

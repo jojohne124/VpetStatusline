@@ -49,9 +49,20 @@ console.log('— 模擬：基本 —');
     ok(run(42) === run(42), '同一個 seed 重播結果不一樣（伺服器算的不是決定性的）');
     ok(run(42) !== run(43), '換 seed 階梯都一樣');
     const g = ST.createGame({ seed: 1, players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] });
-    const p0 = g.platforms[0];
-    ok(g.players.every(p => p.on === p0.id && p.x >= p0.x - ST.HIT_PAD && p.x + ST.S <= p0.x + p0.w + ST.HIT_PAD), '開局四個人沒有都站在第一塊上');
-    ok(g.players.every((p, i) => !i || p.x - g.players[i - 1].x >= ST.S - 0.01), '開局四個人疊在一起');
+    // 開局一人一塊（2026-10-21：擠在同一塊上，夾在中間的人出不去）、人多角色縮小
+    const starts = g.platforms.filter(pl => pl.floor === 1);
+    ok(starts.length === 4 && new Set(g.players.map(p => p.on)).size === 4
+       && g.players.every(p => { const pl = starts.find(q => q.id === p.on); return pl && p.x >= pl.x && p.x + p.s <= pl.x + pl.w; }),
+       '開局不是一人一塊階梯（或沒站在自己那塊上）');
+    ok(starts.every((pl, i) => !i || pl.x >= starts[i - 1].x + starts[i - 1].w + 2), '開局的階梯黏在一起（中間的人還是出不去）');
+    ok(g.S === 9 && g.players.every(p => p.s === 9) && ST.snapshot(g).s === 9 && ST.sizeFor(1) === ST.S && ST.sizeFor(2) === ST.S && ST.sizeFor(3) === 10,
+       '角色大小沒有跟著人數縮（1～2 人 12、3 人 10、4 人 9）');
+    {   // 夾在中間的人：往左走得下去
+        const g2 = ST.createGame({ seed: 3, players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] });
+        const b0 = g2.players[1].on;
+        for (let i = 0; i < 40; i++) { ST.setInput(g2, 'b', -1); ST.step(g2); }
+        ok(g2.players[1].on !== b0 && g2.players[1].alive, '夾在中間的人走不下自己那塊');
+    }
     // 開局倒數：這段時間不捲動（一出發就被推向天花板太趕）
     const yc = g.platforms[1].y; ST.step(g);
     ok(g.platforms[1].y === yc && ST.snapshot(g).cd > 0, '開局倒數的時候階梯就在捲了');

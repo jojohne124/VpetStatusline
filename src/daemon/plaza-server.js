@@ -70,7 +70,10 @@ const DINO_BOARD_FILE = process.env.VPET_DINO_BOARD || path.join(os.homedir(), '
 const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋', duel: '⚔ 手動戰鬥' };   // 聊天室系統訊息用
 // 五子棋（docs/plaza-gomoku-spec.md）：輪流下，伺服器判定（不吃時機，不用輸入同步）
 const GOMOKU_N = 15;
-const GOMOKU_END_MS = 2500;      // 連成五子之後，留幾毫秒讓大家看清楚最後一手，再結算
+const GOMOKU_END_MS = 2500;
+// 每手時限（2026-10-21）：超時由電腦（gomoku-ai，跟電腦玩那支）代下一手，想 0.3 秒就好 —— 伺服器同一條執行緒還在跑別的
+const GOMOKU_TURN_MS = 30000;
+const GMAI = require('../shared/gomoku-ai.js');      // 連成五子之後，留幾毫秒讓大家看清楚最後一手，再結算
 // 打排球（docs/plaza-volley-spec.md）：1 對 1、輸入同步。伺服器只轉送每一格的按鍵、收結果
 const VOLLEY_COUNTDOWN_MS = 2000;
 const capOf = (r) => (r.kind === 'volley' || r.kind === 'gomoku' || r.kind === 'duel' ? 2 : STAIRS_CAP);
@@ -563,7 +566,8 @@ function createPlazaServer(opts = {}) {
                                                picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner } : null,
                               gomoku: r.gomoku ? { board: r.gomoku.board.join(''), turn: r.gomoku.turn, sides: r.gomoku.sides,
                                                    last: r.gomoku.last, expr: r.gomoku.expr, exprAt: r.gomoku.exprAt,
-                                                   winner: r.gomoku.winner, n: GOMOKU_N } : null,
+                                                   winner: r.gomoku.winner, n: GOMOKU_N,
+                                                   turnAt: r.gomoku.turnAt, turnMs: opts.gomokuTurnMs ?? GOMOKU_TURN_MS } : null,
                               ids: r.ids.slice(),
                               names: r.ids.map(i => (members.get(i) || {}).name || '?'),
                               chars: r.ids.map(i => (members.get(i) || {}).char || null) });
@@ -828,13 +832,20 @@ function createPlazaServer(opts = {}) {
     function gomokuStart(r) {
         if (r.ids.length !== 2) return { status: 409, body: { ok: false, error: '五子棋要剛好 2 個人' } };
         r.gomoku = { board: new Array(GOMOKU_N * GOMOKU_N).fill(0), turn: 0, sides: r.ids.slice(), last: null,
-                     expr: ['IDLE', 'IDLE'], exprAt: now(), winner: null, moves: 0 };
+                     expr: ['IDLE', 'IDLE'], exprAt: now(), winner: null, moves: 0, turnAt: now() };
         r.state = 'play'; r.startedAt = now();
         roomSend(r, 'stairs:start', { room: roomPub(r) });
         roomsChanged();
         // 有人斷線太久 → 另一個人贏
         r.timer = setInterval(() => {
             if (!r.gomoku || r.gomoku.winner != null) return;
+            // 這一手超時：電腦代下
+            if (now() - r.gomoku.turnAt >= (opts.gomokuTurnMs ?? GOMOKU_TURN_MS)) {
+                const [x, y] = GMAI.choose(r.gomoku.board, r.gomoku.turn + 1, { timeMs: 300 });
+                log(`五子棋：${(members.get(r.gomoku.sides[r.gomoku.turn]) || {}).name} 超時，電腦代下 (${x},${y})`);
+                gomokuMove({ id: r.gomoku.sides[r.gomoku.turn], x, y, auto: true });
+                return;
+            }
             for (const i of r.gomoku.sides) {
                 const m = members.get(i);
                 if (!m || (!m.stream && m.lostAt != null && now() - m.lostAt > stairsLostMs)) {
@@ -862,7 +873,8 @@ function createPlazaServer(opts = {}) {
         if (len >= 5) gm.winner = me;
         else if (gm.moves >= GOMOKU_N * GOMOKU_N) gm.winner = -1;   // 下滿了：平手
         else gm.turn = 1 - me;
-        roomSend(r, 'gomoku:move', { x, y, c: me, len });
+        gm.turnAt = now();
+        roomSend(r, 'gomoku:move', { x, y, c: me, len, auto: !!(body && body.auto) });
         roomsChanged();
         if (gm.winner != null) {
             // 留一下讓大家看清楚最後一手（連成的五顆），再結算
@@ -977,6 +989,11 @@ function createPlazaServer(opts = {}) {
     function stairsLeave(body, silent) {
         const id = body && body.id, r = stairsRoomOf(id);
         if (!r) return { status: 200, body: { ok: true } };
+        // 小恐龍撞到了先走（2026-10-21：輸了不用等別人跑完）：成績先記進排行榜，人走了結算時就不在名單裡
+        if (r.dino && r.state === 'play') {
+            const p = r.dino.players.get(id), m = members.get(id);
+            if (p && m && p.dist > 0) boardRecord(dinoBoardFile, 'score', [{ id, name: m.name, char: m.char, score: DN.score(p.dist) }]);
+        }
         r.ids = r.ids.filter(i => i !== id);
         if (r.game) { const p = r.game.players.find(q => q.id === id); if (p && p.alive) { p.alive = false; p.diedAt = r.game.tick; p.why = 'left'; } }
         if (r.dino) { const p = r.dino.players.get(id); if (p && p.alive) { p.alive = false; p.at = now(); } }

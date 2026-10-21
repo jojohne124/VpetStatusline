@@ -103,13 +103,15 @@ const UI_BUTTONS = [
     // 合體進化（docs/jogress-spec.md 第 2 期）。玩家功能：不是 dev、不進 DEV_ONLY。
     // 文字由前端依候選換成「🧬 合體進化 → Mastemon」。
     // 只在前線：進化演出在前線，在營地按下去只會看到營地少一隻，牠變身的那一刻看不到。
-    ['jogress', '🧬 合體進化', { scope: 'home', when: 'jogress', accent: true }],
     ['card',   '🪪 卡片'],
     ['tree',   '🌳 進化樹'],
     // 拍照（docs/yard-photo-spec.md）：只在營地。不是送給 daemon 的指令，前端自己處理（photoTake）
     ['photo',  '📷 拍照', { scope: 'yard' }],
     ['album',  '📖 圖鑑', { scope: 'both' }],
     ['yard',   '⛺ 營地', { scope: 'both' }],
+    // 合體進化：排在第二排的開頭（2026-10-21）。前面那個換行只在按鈕出現時才佔位（見 renderUiButton 的 'br'）
+    ['br', '', { scope: 'home', when: 'jogress' }],
+    ['jogress', '🧬 合體進化', { scope: 'home', when: 'jogress', accent: true }],
     // 廣場（docs/plaza-spec.md）：帶前線那隻去。只在前線出現；進去之後只剩「離開」。
     ['plaza',      '🏛 廣場',     { scope: 'home' }],
     ['plazaLeave', '🚪 離開廣場', { scope: 'plaza' }],
@@ -1618,6 +1620,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 按鈕列暫時隱藏（試乾淨版面）。要拿回來：把 display:none 改成 flex。
      隱藏不影響功能——按鈕仍在 DOM、事件照綁，點角色摸摸也照常運作。 */
   #controls{display:flex;margin-top:10px;gap:6px;flex-wrap:wrap;max-width:480px}
+  /* 換行：合體進化鈕出現時把它推到第二排的開頭（2026-10-21） */
+  #controls .rowbr{flex-basis:100%;height:0;margin-bottom:-6px}   /* 自己佔一行，抵掉多出來的那一個行距 */
   #controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
   #controls button:hover{background:#30363d;border-color:#8b949e}
   /* 醒目鈕（合體進化）：少見、而且做了就回不去，要讓人一眼看到「現在可以了」 */
@@ -1710,6 +1714,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 前線玩小遊戲：畫布貼齊舞台左上（前線的 #pet 有留白），舞台撐到畫布那麼大（見 miniFrontFit） */
   body.minifront #stairscv{left:0!important;top:0!important}
   #gmresign{position:absolute;right:8px;bottom:8px;z-index:2;font-size:11px;padding:2px 8px}
+  #stout{position:absolute;right:8px;bottom:8px;z-index:2;font-size:12px;padding:3px 10px}
   /* 小遊戲選單（廣場的「🎮 小遊戲」）：跟等待面板同一個樣式，蓋在舞台中間 */
   /* 遊戲變多之後選單比舞台高：限制高度、裡面捲動（不然上下被裁掉，看不到第一個遊戲） */
   #minipick{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;display:none;width:300px;max-width:92%;max-height:calc(100% - 12px);overflow-y:auto;box-sizing:border-box;
@@ -1767,6 +1772,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #ctx button{display:block;width:100%;text-align:left;margin:0;border:0;background:none;
               color:#c9d1d9;padding:6px 8px;border-radius:4px;font-size:12px;cursor:pointer}
   #ctx button:hover{background:#21262d}
+  /* 圖示固定寬度：⚔ 是窄字、🎮 是寬的 emoji，直接接字的話後面的字對不齊（2026-10-21 回報） */
+  #ctx button .ci{display:inline-block;width:1.6em;text-align:center}
   #ctx button.danger{color:#f85149}
   /* 教學（docs/tutorial-spec.md）：? 鈕 → 問號模式（滑過的地方亮框）→ 點了壓黑＋助手講解 */
   #helpbtn{width:24px;height:24px;padding:0;border-radius:50%;font-weight:700}
@@ -1851,12 +1858,13 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button><button id="stout" style="display:none">🚪 先離開（回廣場）</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
-                  .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  .map(([c, label, o]) => c === 'br' ? `<span class="rowbr" data-scope="home" data-when="${o.when}"></span>` : `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
+                  // 好幾組能合體時的下拉，緊跟在合體鈕後面
+                  .map((h) => (h.includes('data-cmd="jogress"') ? h + '<select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>' : h))
                   .join('\n      ')}
-      <select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
       ${IS_RELEASE ? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly" title="自己玩小遊戲（單機，開發版限定）">🎮 小遊戲 <span class="devtag">dev</span></button>'}
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
@@ -3317,18 +3325,18 @@ function plazaClick(ev){
   el.innerHTML='';
   const hd=document.createElement('div'); hd.className='hd'; hd.textContent=t.text; el.append(hd);
   const b=document.createElement('button');
-  b.textContent=t.battling ? '⚔ 對戰中…' : '⚔ 邀請對戰';
+  b.innerHTML='<span class="ci">⚔️</span>'+(t.battling ? '對戰中…' : '邀請對戰');
   b.disabled=!!t.battling;
   b.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2)}).then(()=>poll()); });
   el.append(b);
   // 手動戰鬥（docs/plaza-duel-spec.md）：九宮格回合制，自己選移動、攻擊位置、力度
   const bd=document.createElement('button');
-  bd.textContent=t.battling ? '🎮 對戰中…' : '🎮 邀請手動戰鬥';
+  bd.innerHTML='<span class="ci">🎮</span>'+(t.battling ? '對戰中…' : '邀請手動戰鬥');
   bd.disabled=!!t.battling;
   bd.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2),kind:'duel'}).then(r=>{ if(r&&!r.ok) flashCmdMsg(r.error||'邀請失敗','#f85149'); poll(); }); });
   el.append(bd);
   if(PLAZA_ADMIN){
-    const k=document.createElement('button'); k.className='danger devonly'; k.textContent='🚫 踢出廣場（dev）';
+    const k=document.createElement('button'); k.className='danger devonly'; k.innerHTML='<span class="ci">🚫</span>踢出廣場（dev）';
     k.addEventListener('click',()=>{ closeCtx(); adminKick(String(t.key).slice(2), t.text); });
     el.append(k);
   }
@@ -3350,7 +3358,8 @@ function renderInvite(inv){
     if(inv.kind==='in'){
       const yes=document.createElement('button'); yes.textContent='⚔ 接受';
       const no=document.createElement('button'); no.textContent='拒絕';
-      yes.addEventListener('click',()=>sendCmd('plazaAnswer',{inviteId:inv.inviteId,accept:'1'}).then(()=>poll()));
+      yes.addEventListener('click',()=>{ if(comState){ flashCmdMsg('小遊戲玩到一半，先玩完再接受','#d29922'); return; }
+        sendCmd('plazaAnswer',{inviteId:inv.inviteId,accept:'1'}).then(()=>poll()); });
       no.addEventListener('click',()=>sendCmd('plazaAnswer',{inviteId:inv.inviteId,accept:'0'}).then(()=>poll()));
       box.append(yes,no);
     }
@@ -4247,6 +4256,8 @@ async function slideToPage(to, dropId){
 // ── 下樓梯（docs/plaza-stairs-spec.md）───────────────────────────────────
 // 廣場伺服器算位置、每 50ms 推一拍；這裡只負責畫（60fps，在兩拍之間補間）和送方向。
 // 房間清單、等待、結果跟著 /plaza 輪詢走；遊戲中的每一拍走 /stairs/stream（SSE）。
+const ST_GHOST_MS=2500, ST_GHOST_RISE=30;   // 出局的虛影：幾毫秒飄完、往上飄幾點
+const stDead=new Map();                     // 出局的人：第一次看到出局的時間與位置（虛影從那裡往上飄）
 const ST_W=69, ST_H=54, ST_S=12, ST_TICK=50, ST_CEIL=4, ST_HP=3;   // ST_HP = 幾顆心（同 stairs-sim 的 HP_MAX）
 const ST_COL={ normal:'#8b7d6b', spike:'#c94f4f', convL:'#5b7fbf', convR:'#5b7fbf', spring:'#4caf6a', flip:'#d6b24a' };
 let stairs=null;            // /plaza 的 stairs：{ rooms, mine, end, meId }
@@ -4399,20 +4410,26 @@ function stDraw(){
   // 玩家
   const prevP=new Map((stPrev?stPrev.p:[]).map(q=>[q[0],q]));
   const me=stMeId(), names=stInfoMap();   // 單機（前線）時是 comState 那組
-  const nowMs=performance.now();
+  const nowMs=performance.now(), SS=stCur.s||ST_S, PK=64*SS/ST_S;   // 這一局的角色大小（人多就小）
   for(const q of stCur.p){
-    const p0=prevP.get(q[0]); const x=p0?lerp(p0[1],q[1]):q[1], y=p0?lerp(p0[2],q[2]):q[2];
+    const p0=prevP.get(q[0]); let x=p0?lerp(p0[1],q[1]):q[1], y=p0?lerp(p0[2],q[2]):q[2];
     const alive=q[4], dir=q[5], hurt=q[7];
-    if(!alive&&y>ST_H) continue;
+    // 出局：被刺死的虛影從出局的地方往上飄、慢慢淡掉；掉出底部的直接消失（2026-10-21）
+    let ghostA=0.45;
+    if(!alive){
+      let d=stDead.get(q[0]); if(!d){ d={ t:nowMs, y, fell:y>ST_H-1 }; stDead.set(q[0],d); }
+      const k=(nowMs-d.t)/ST_GHOST_MS; if(d.fell||k>=1) continue;
+      y=d.y-k*ST_GHOST_RISE; ghostA=0.45*(1-k);
+    } else stDead.delete(q[0]);
     const info=names.get(q[0])||{}, sp=stSprites[info.char];
     const facing=dir<0?'l':dir>0?'r':(q[0]===me?(stLastFace||'r'):'r');
     if(q[0]===me&&dir) stLastFace=facing;
     const fr=!alive?3:hurt?2:(Math.floor(nowMs/400)%2);
-    const X=x*DW, Y=y*DH, box=ST_S*DW;
-    g.globalAlpha=!alive?0.45:(hurt&&Math.floor(nowMs/80)%2?0.4:1);
+    const X=x*DW, Y=y*DH, box=SS*DW;
+    g.globalAlpha=!alive?ghostA:(hurt&&Math.floor(nowMs/80)%2?0.4:1);
     const img=sp&&(sp[facing][fr]||sp[facing][0]);
-    if(img) g.drawImage(img, X+(box-64)/2, Y+(ST_S*DH-64), 64, 64);
-    else { g.fillStyle=q[0]===me?'#58a6ff':'#d29922'; g.fillRect(X+DW*2,Y,box-DW*4,ST_S*DH); }
+    if(img) g.drawImage(img, X+(box-PK)/2, Y+(SS*DH-PK), PK, PK);
+    else { g.fillStyle=q[0]===me?'#58a6ff':'#d29922'; g.fillRect(X+DW*2,Y,box-DW*4,SS*DH); }
     g.globalAlpha=1;
     if(names.size>1){ g.fillStyle=q[0]===me?'#f7c631':'#e6edf3'; g.font='11px sans-serif'; g.textAlign='center';
       g.fillText(info.name||'?', X+box/2, Y-3); }
@@ -4424,7 +4441,7 @@ function stDraw(){
     const k=(nowMs-f.at)/700, txt=f.type==='heal'?'+♥':(f.type==='hurt'||f.type==='ceil')?'-♥':f.type==='spring'?'↑':'';
     if(!txt) continue;
     g.globalAlpha=1-k; g.fillStyle=f.type==='heal'?'#7ee787':'#ff7b72'; g.font='bold 13px sans-serif'; g.textAlign='center';
-    g.fillText(txt, (q[1]+ST_S/2)*DW, q[2]*DH-6-k*14); g.globalAlpha=1;
+    g.fillText(txt, (q[1]+SS/2)*DW, q[2]*DH-6-k*14); g.globalAlpha=1;
   }
   // 我的血量、層數
   const mine=stCur.p.find(z=>z[0]===me);
@@ -4504,9 +4521,26 @@ function miniBoard(kind){
 // 等待畫面／結果：房間成員、出發（只有房主）、離開；結束後顯示層數、紀錄、排行榜前 10
 // 加入別人的房間（聊天室的「加入」、小遊戲選單的「加入」）
 function stJoin(room){ sendCmd('stairsJoin',{room}).then(r=>{ if(r&&!r.ok) flashCmdMsg(r.error||'加入失敗','#f85149'); miniClose(); poll(); }); }
+// 自己出局（下樓梯）／撞到（小恐龍）了：右下角出現「先離開」，按了回廣場（成績照記，不用等別人玩完）
+function stOutSync(){
+  const m=stMine(), el=document.getElementById('stout');
+  let show=false;
+  if(m&&m.state==='play'&&!comState){
+    if(m.kind==='dino') show=!!dnGame&&(!dnGame.alive||dnSpectate);
+    else if((m.kind||'stairs')==='stairs'&&stCur){ const q=stCur.p.find(z=>z[0]===stairs.meId); show=!!q&&!q[4]; }
+  }
+  el.style.display=show?'':'none';
+}
+setInterval(stOutSync,300);
+document.getElementById('stout').addEventListener('click',()=>{
+  const m=stMine(); let txt='';
+  if(m&&m.kind==='dino'&&dnGame) txt='這一局 '+DN.score(dnGame.dist)+' 分';
+  else if(stCur){ const q=stCur.p.find(z=>z[0]===stairs.meId); if(q) txt='這一局 B'+q[6]; }
+  sendCmd('stairsLeave').then(()=>{ document.getElementById('stout').style.display='none'; if(txt) flashCmdMsg(txt+'，已回到廣場','#3fb950'); poll(); });
+});
 function stJoinable(room){
   const r=stairs&&(stairs.rooms||[]).find(x=>x.id===room);
-  return !!(r&&r.state==='lobby'&&r.n<(r.cap||4)&&!stMine());
+  return !!(r&&r.state==='lobby'&&r.n<(r.cap||4)&&!stMine()&&!comState);   // 玩到一半（含跟電腦玩）不能跑去別的房
 }
 function stJoinButtons(){
   document.querySelectorAll('#chatlog button.stjoin').forEach(b=>{
@@ -4991,7 +5025,10 @@ function gmDraw(){
   });
   g.fillStyle='#e6edf3'; g.font='bold 12px sans-serif'; g.textAlign='center';
   const msg=gm.winner!=null?(gm.winner<0?'平手！':(gm.sides[gm.winner]===me?'你贏了！':'你輸了…')):(myTurn?'輪到你（'+(gm.turn===0?'黑':'白')+'）':gm.thinking?'助手思考中…':'等對手下…');
-  g.fillText(msg, Wpx/2, 14);
+  // 連線對局：每手倒數（伺服器時間；超時由電腦代下一手），剩 5 秒變紅
+  const left=!comState&&gm.winner==null&&gm.turnAt&&gm.turnMs?Math.max(0,Math.ceil((gm.turnAt+gm.turnMs-(Date.now()+stSkew))/1000)):null;
+  if(left!=null&&left<=5) g.fillStyle='#ff7b72';
+  g.fillText(msg+(left!=null?'　'+left+' 秒':''), Wpx/2, 14);
   if(gm.winner==null) rsDraw(g,Wpx-46,Hpx-46,36,gmResign);
 }
 function gmFit(g,t,w){ if(g.measureText(t).width<=w) return t; while(t.length>1&&g.measureText(t+'…').width>w) t=t.slice(0,-1); return t+'…'; }
@@ -5578,6 +5615,14 @@ window.addEventListener('keydown',e=>{
 // 我的按鍵延後 VB_DELAY 格才生效：處理第 f 格時，送出第 f+VB_DELAY 格的按鍵；
 // 第 f 格要等「我的、對手的」按鍵都到了才算 —— 網路卡一下畫面會停一下，但兩邊永遠一樣。
 const VB_DELAY=3;
+// 殺球殘影：球橫向夠快（殺球、地上用力打；一般碰到的橫速最多 22）就記下這幾格的位置，慢下來就清掉
+const VB_TRAIL_N=6, VB_TRAIL_FAST=24;
+let vbTrail=[];
+function vbTrailPush(g){
+  const b=g.ball;
+  if(b&&Math.abs(b.vx)>=VB_TRAIL_FAST){ vbTrail.push({ x:b.x, y:b.y }); if(vbTrail.length>VB_TRAIL_N) vbTrail.shift(); }
+  else vbTrail.length=0;
+}
 let vbGame=null, vbPrev=null, vbStartAt=0, vbSides=[], vbMe=0, vbMine=new Map(), vbTheirs=new Map(), vbRaf=0, vbKeys=new Set(), vbStallAt=0, vbEndSent=false, vbStepAt=0;
 function vbBegin(info){
   if(!VB||!info) return;
@@ -5604,7 +5649,7 @@ function vbFrame(){
   if(comState){   // 跟電腦玩：不用等網路，我的按鍵當場生效，電腦的當場算
     while(g.f<due&&!g.over){
       vbPrev={ b:{ x:g.ball.x, y:g.ball.y }, p:g.players.map(p=>({ x:p.x, y:p.y })) };
-      VB.step(g,[vbKeyBits(),comVolleyKeys(g)]); vbStepAt=performance.now();
+      VB.step(g,[vbKeyBits(),comVolleyKeys(g)]); vbStepAt=performance.now(); vbTrailPush(g);
     }
     if(g.over&&!comState.done){ comState.done=true; setTimeout(()=>{ if(comState&&vbGame===g) comEndPanel(g.winner===0, g.score[0]+' : '+g.score[1]); }, 1500); }
     vbDraw(now); return;
@@ -5617,7 +5662,7 @@ function vbFrame(){
     if(mk===undefined||tk===undefined){ stalled=true; break; }   // 對手這一格的按鍵還沒到：等
     vbPrev={ b:{ x:g.ball.x, y:g.ball.y }, p:g.players.map(p=>({ x:p.x, y:p.y })) };
     const keys=vbMe===0?[mk,tk]:[tk,mk];
-    VB.step(g,keys); vbStepAt=performance.now();
+    VB.step(g,keys); vbStepAt=performance.now(); vbTrailPush(g);
     vbMine.delete(g.f-1); vbTheirs.delete(g.f-1);
   }
   vbStallAt=stalled?(vbStallAt||performance.now()):0;
@@ -5690,6 +5735,10 @@ function vbDraw(now){
   // 得分後停的那一秒、比賽結束：球留在落地的位置（不要消失，看得出落在哪一邊）
   {
     const bx=vbPrev?L(vbPrev.b.x,g0.ball.x):g0.ball.x, by=vbPrev?L(vbPrev.b.y,g0.ball.y):g0.ball.y, r=X(VB.BALL_R);
+    // 殺球／用力打的快球：後面拖幾顆越來越淡、越來越小的殘影
+    vbTrail.forEach((t,i)=>{ const k=(i+1)/(vbTrail.length+1);
+      g.globalAlpha=0.08+0.32*k; g.fillStyle='#ffd0c8'; g.beginPath(); g.arc(X(t.x),Y(t.y),r*(0.55+0.4*k),0,6.2832); g.fill(); });
+    g.globalAlpha=1;
     g.fillStyle='rgba(0,0,0,.18)'; g.beginPath(); g.ellipse(X(bx),Y(VB.GROUND)+2,r,r/3,0,0,6.2832); g.fill();
     g.fillStyle='#ffffff'; g.beginPath(); g.arc(X(bx),Y(by),r,0,6.2832); g.fill();
     g.strokeStyle='#e5534b'; g.lineWidth=2; g.beginPath(); g.arc(X(bx),Y(by),r*0.6,0.4,2.6); g.stroke();

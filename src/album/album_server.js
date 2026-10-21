@@ -232,6 +232,27 @@ function buildGraph() {
         row[id] = rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : nextRow++;
     }
 
+    // 3b. 合體進化（2026-10-21）：結果（Mastemon）排在兩個來源（Angewomon、LadyDevimon）中間，
+    //     兩邊各拉一條線過去。不放進上面的排版邊 —— 那套是「子節點平均」，合體結果會被當成兩邊的葉子拉來拉去；
+    //     先照原本排好，再把合體結果直接放到兩個來源的平均，下一步的同欄防重疊照樣處理。
+    const jogEdges = [];
+    let jogPairs = [];
+    try { jogPairs = RULES.expandJogress(JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, 'jogress.json'), 'utf8'))).pairs; }
+    catch (e) {}
+    const jogFrom = {};
+    for (const p of jogPairs) {
+        if (!visible.has(p.to)) continue;
+        for (const src of [p.front, p.camp]) {
+            if (!visible.has(src)) continue;
+            jogFrom[p.to] = jogFrom[p.to] || new Set();
+            if (!jogFrom[p.to].has(src)) { jogFrom[p.to].add(src); jogEdges.push({ from: src, to: p.to, jog: true }); }
+        }
+    }
+    for (const to of Object.keys(jogFrom)) {
+        const rs = [...jogFrom[to]].map(s => row[s]).filter(r => r != null);
+        if (rs.length) row[to] = rs.reduce((a, b) => a + b, 0) / rs.length;
+    }
+
     // 4. 同欄防重疊。取平均會讓同一階的兩隻算出一樣的列（實測 biyomon 與 pteromon
     //    都落在 5.12、metalgreymon 與 g-metalgreymon 都落在 1.00）→ 畫面上直接疊在
     //    一起，比長邊更難讀。舊版是靠「每棵子樹各佔一段連續列」碰巧避開的。
@@ -255,6 +276,7 @@ function buildGraph() {
         }
     }
 
+    edges.push(...jogEdges);   // 畫線用（排版已經處理過了）
     const nodes = ids.map(id => {
         const isRaised = raised.has(id);
         const si = STAGE_ORDER.indexOf(all[id].stage);

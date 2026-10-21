@@ -104,7 +104,8 @@ function layout(){
     const a=pos[e.from], b=pos[e.to]; if(!a||!b) return '';
     const x1=a.x+72, y1=a.y+34, x2=b.x+4, y2=b.y+34;
     const mx=(x1+x2)/2;
-    return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="#30363d" stroke-width="2"/>`;
+    // 合體進化的線：紫色虛線，跟一般進化分得出來
+    return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${e.jog?'#8957e5':'#30363d'}" stroke-width="2"${e.jog?' stroke-dasharray="5 4"':''}/>`;
   }).join('');
 
   // 節點

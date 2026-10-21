@@ -66,26 +66,37 @@ function addPlatform(g, y, type) {
     const w = Math.round(PLAT_W[0] + r() * (PLAT_W[1] - PLAT_W[0]));
     const x = Math.round(r() * (W - w));
     const floor = ++g.floors;
-    g.platforms.push({ id: floor, floor, x, y, w, type: type || pickType(r, floor), gone: false });
+    // id 跟層數分開：開局一人一塊（同一層好幾塊），id 還是要各自不同
+    g.platforms.push({ id: ++g.nextId, floor, x, y, w, type: type || pickType(r, floor), gone: false });
 }
+// 角色大小看人數（2026-10-21 回報：4 個人擠在一起動不了）：1～2 人 12、3 人 10、4 人 9
+const sizeFor = (n) => (n <= 2 ? S : n === 3 ? 10 : 9);
+const padOf = (s) => Math.max(1, Math.round(s * HIT_PAD / S));   // 碰撞身體左右縮的點數跟著比例
 
 /**
  * 開一局。players：[{ id }]。mode：'endless'（各自玩到死）／'survival'（剩一人就結束）。
  * 開局：最上面那塊在畫面中間偏上，大家並排站在上面（同一塊放不下就往旁邊擺）。
  */
 function createGame({ seed = 1, players = [], mode = 'endless' } = {}) {
-    const g = { seed: seed >>> 0, rand: rng(seed), mode, tick: 0, t: 0, scroll: SCROLL0,
-                floors: 0, platforms: [], players: [], over: false, started: players.length };
-    // 第一塊：夠寬讓大家站
-    const startW = Math.min(W, Math.max(PLAT_W[1], players.length * (S + 2)));
-    const sx = Math.round((W - startW) / 2), sy = 34;   // 開局站得低一點：離天花板有幾秒的距離
+    const n = Math.max(1, players.length), s = sizeFor(n);
+    const g = { seed: seed >>> 0, rand: rng(seed), mode, tick: 0, t: 0, scroll: SCROLL0, S: s,
+                floors: 0, nextId: 0, platforms: [], players: [], over: false, started: players.length };
+    // 開局：一人一塊（2026-10-21：大家擠在同一塊上，夾在中間的人左右都被擋住、出不去）。
+    // 場地切成 n 段，每段中間一塊；一個人的時候就是原本那塊在正中間
+    const sy = 34;   // 開局站得低一點：離天花板有幾秒的距離
+    const slot = W / n, sw = n === 1 ? PLAT_W[1] : Math.min(Math.floor(slot) - 4, Math.max(PLAT_W[0], s + 6));
     g.floors = 1;
-    g.platforms.push({ id: 1, floor: 1, x: sx, y: sy, w: startW, type: 'normal', gone: false });
+    const starts = [];
+    for (let i = 0; i < n; i++) {
+        const x = Math.round(slot * i + (slot - sw) / 2);
+        const pl = { id: ++g.nextId, floor: 1, x, y: sy, w: sw, type: 'normal', gone: false };
+        g.platforms.push(pl); starts.push(pl);
+    }
     for (let y = sy + GAP; y < H + GAP; y += GAP) addPlatform(g, y, 'normal');
     players.forEach((p, i) => {
-        const x = sx + Math.round((startW - players.length * S) / 2) + i * S;
-        g.players.push({ id: p.id, x, y: sy - S, vx: 0, vy: 0, dir: 0, hp: HP_MAX, healN: 0, alive: true,
-                         floor: 1, on: 1, onAt: 0, hurtUntil: 0, pass: null, diedAt: null, rank: null });
+        const pl = starts[i];
+        g.players.push({ id: p.id, s, x: Math.round(pl.x + (pl.w - s) / 2), y: sy - s, vx: 0, vy: 0, dir: 0, hp: HP_MAX, healN: 0, alive: true,
+                         floor: 1, on: pl.id, onAt: 0, hurtUntil: 0, pass: null, diedAt: null, rank: null });
     });
     return g;
 }
@@ -95,7 +106,8 @@ function setInput(g, id, dir) {
     if (p) p.dir = dir < 0 ? -1 : dir > 0 ? 1 : 0;
 }
 
-const hitL = (p) => p.x + HIT_PAD, hitR = (p) => p.x + S - HIT_PAD;
+const sOf = (p) => p.s || S;
+const hitL = (p) => p.x + padOf(sOf(p)), hitR = (p) => p.x + sOf(p) - padOf(sOf(p));
 const overX = (p, x0, x1) => hitR(p) > x0 && hitL(p) < x1;
 
 function kill(g, p, why) {
@@ -107,6 +119,7 @@ function kill(g, p, why) {
 function step(g) {
     if (g.over) return [];
     const ev = [];
+    const S = g.S || module.exports.S;   // 這一局的角色大小（人多就小）
     g.tick++; g.t += DT;
     // 1. 捲動：階梯往上，越深越快
     const deepest = Math.max(1, ...g.players.map(p => p.floor));
@@ -140,7 +153,7 @@ function step(g) {
         } else if (typeof p.on === 'string') {
             // 站在別人頭上：跟著那個人
             const q = g.players.find(o => o.id === p.on);
-            if (!q || !q.alive || !overX(p, q.x + HIT_PAD, q.x + S - HIT_PAD)) p.on = null;
+            if (!q || !q.alive || !overX(p, hitL(q), hitR(q))) p.on = null;
             else { p.y = q.y - S; p.vy = 0; }
         }
         if (p.on == null) {
@@ -174,7 +187,7 @@ function step(g) {
         for (const q of live) {
             if (q === p || q.on === p.id) continue;
             const pb = p.y + S, qt = q.y;
-            if (pb >= qt && pb - p.vy * DT - 0.01 <= qt + 1 && overX(p, q.x + HIT_PAD, q.x + S - HIT_PAD)) {
+            if (pb >= qt && pb - p.vy * DT - 0.01 <= qt + 1 && overX(p, hitL(q), hitR(q))) {
                 q.y += 1;   // 被踩的人往下壓一點（下一拍站回階梯上，等於被踩那一下沉一格）
                 p.y = q.y - S; p.vy = 0; p.on = q.id;
                 ev.push({ type: 'stomp', id: p.id, on: q.id });
@@ -231,7 +244,7 @@ function step(g) {
 const r1 = (v) => Math.round(v * 10) / 10;
 function snapshot(g) {
     return {
-        k: g.tick, sc: r1(g.scroll), over: g.over,
+        k: g.tick, sc: r1(g.scroll), over: g.over, s: g.S || S,   // s：這一局的角色大小（人多就小）
         cd: g.t < COUNTDOWN_S ? Math.ceil(COUNTDOWN_S - g.t) : 0,   // 開局倒數（秒），前端顯示 2、1
         // 第 7 欄：翻板「快翻了」的進度 0～1（第一次被踩之後，畫面閃爍＋逐漸透明）
         pl: g.platforms.map(p => [p.id, r1(p.x), r1(p.y), p.w, p.type, p.gone ? 1 : 0,
@@ -244,5 +257,5 @@ function snapshot(g) {
 module.exports = {
     W, H, S, HIT_PAD, DT, TICK_MS, GRAV, FALL_MAX, RUN, CONVEY, SPRING_V, SCROLL0, SCROLL_STEP, SCROLL_MAX,
     COUNTDOWN_S, GAP, PLAT_H, PLAT_W, CEIL, HP_MAX, HEAL, HEAL_EVERY, SPIKE_DMG, HURT_S, FLIP_S, SAFE_FLOORS, TYPES,
-    rng, pickType, createGame, setInput, step, snapshot,
+    rng, pickType, createGame, setInput, step, snapshot, sizeFor,
 };

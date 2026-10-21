@@ -3172,8 +3172,8 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   el.innerHTML='<div class="hd"><b>'+hit.name+'</b>'+
                (hit.wasName?' <span class="k2">（原：'+hit.wasName+'）</span>':'')+
                '<br><span class="k2">'+
-               hit.stage+'　戰力 '+hit.power+'　'+wr+'<br>收於 '+
-               new Date(hit.keptAt).toLocaleString()+'</span></div>';
+               hit.stage+'　戰力 '+hit.power+'　'+wr+'<br>獲得於 '+
+               (hit.gotAt?new Date(hit.gotAt).toLocaleString():'—')+'</span></div>';
   const add=(txt,fn,cls)=>{const b=document.createElement('button');b.textContent=txt;
     if(cls)b.className=cls;b.onclick=e=>{e.stopPropagation();closeCtx();fn();};el.appendChild(b);};
   add('🔄 換出來（與現役交換）',()=>sendCmd('swap',{which:hit.id}));
@@ -5916,7 +5916,10 @@ const server = http.createServer((req, res) => {
                 } catch (e) {}
                 const b = st.battleTotalCount || 0, w = st.battleWinCount || 0;
                 return { stage, power, battles: b, wins: w,
-                         winPct: b ? Math.floor(w / b * 100) : null, keptAt: p.keptAt,
+                         winPct: b ? Math.floor(w / b * 100) : null,
+                         // 獲得於 = 這一隻變成現在這個角色的時間（跟著這一隻走，交換／收進營地都不變）。
+                         // 原本顯示的「收於」是收進營地的時間，每次交換都重設，被當成獲得時間誤會（2026-10-21）
+                         gotAt: st.lastEvolveAt || st.birthAt || null,
                          // 在營地裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
                          wasName: p.evolvedFrom ? core.getDisplayName(p.evolvedFrom) : null };
             };

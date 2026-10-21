@@ -80,7 +80,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev']);
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev']);
 // 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
 const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
@@ -450,6 +450,19 @@ function stairsPush(kind, d) {
     const msg = 'event: ' + kind + '\ndata: ' + JSON.stringify(d || {}) + '\n\n';
     for (const res of stairsStreams) { try { res.write(msg); } catch (e) { stairsStreams.delete(res); } }
 }
+// art.json 第一幀（上下半格一組）→ 一點一格的 [r,g,b]／null。讀不到 = null
+function artDots(file, frame = 0) {
+    try {
+        const art = JSON.parse(fs.readFileSync(file, 'utf8')), rows = [];
+        for (const row of art.frames[frame]) {
+            rows.push(row.map(c => (c && c[0] >= 0 ? [c[0], c[1], c[2]] : null)));
+            rows.push(row.map(c => (c && c[3] >= 0 ? [c[3], c[4], c[5]] : null)));
+        }
+        return rows;
+    } catch (e) { return null; }
+}
+// 手動戰鬥被打中的爆炸：一般戰鬥那顆（shared 的 boom，第 2、3 幀交替）
+function duelBoom() { const f = path.join(core.ASSETS_DIR, 'shared', 'art.json'); return [artDots(f, 2), artDots(f, 3)]; }
 // 房裡每個人的角色點陣（面右／面左 × 待機兩幀、受傷、難過）。開局抓一次，前端自己畫
 function stairsSprites(chars) {
     const out = {};
@@ -460,7 +473,8 @@ function stairsSprites(chars) {
             // 6 生氣（五子棋：被連成三）
             const f = (facing) => ['IDLE_1', 'IDLE_2', 'HURT', 'SAD', 'ATTACK', 'HAPPY', 'ANGRY'].map((fr, i) =>
                 plaza.spriteDots(core, c, i === 1 ? 1 : 0, facing, i < 2 ? null : fr));
-            out[c] = { r: f('right'), l: f('left') };
+            const lc = core.loadCharacter(c);
+            out[c] = { r: f('right'), l: f('left'), b: artDots(lc.bulletArtFile), c: artDots(lc.cutinArtFile) };   // 手動戰鬥：子彈、cutin
         } catch (e) {}
     }
     return out;
@@ -965,6 +979,26 @@ function page2Event(ranch, step) {
 }
 
 // dev：預覽用（release 由 DEV_ONLY 擋掉）。PAGE2_ENABLED 關著也能用 —— 這就是「做一版但不實裝」的入口
+// 手動戰鬥的 dev 測試：我（前線那隻、廣場用的戰力）對上同階隨機一隻、戰力在那一階的範圍內隨機。
+// 對手每回合隨機移動、隨機攻擊、隨機力度（頁面本地跑 duel-sim，不經伺服器）
+function duelDev() {
+    const st = loadState(STATE_FILE);
+    const char = st.characterId || 'agumon';
+    let stage = 'Child';
+    try { stage = getCharacterStage(char) || stage; } catch (e) {}
+    let str = 0;
+    try { str = Math.min(core.getBasePower(st, char) + (st.trainingBonus || 0), core.getTierCap(stage)); } catch (e) {}
+    let roster = [];
+    try { const raw = JSON.parse(fs.readFileSync(path.join(core.ASSETS_DIR, 'roster.json'), 'utf8')); roster = Array.isArray(raw) ? raw : raw.roster; } catch (e) {}
+    const same = roster.filter(c => c !== char && (() => { try { return getCharacterStage(c) === stage; } catch (e) { return false; } })());
+    const opp = same.length ? same[Math.floor(Math.random() * same.length)] : char;
+    const pw = same.map(c => core.getCharacterPower(c) || 0).filter(n => n > 0);
+    const cap = core.getTierCap(stage), lo = pw.length ? Math.min(...pw) : 1, hi = Number.isFinite(cap) ? cap : Math.max(lo, ...pw);
+    const oppStr = lo + Math.floor(Math.random() * (Math.max(lo, hi) - lo + 1));
+    const nm = (c) => { try { return core.getDisplayName ? core.getDisplayName(c) : c; } catch (e) { return c; } };
+    return { ok: true, action: 'duelDev', me: { char, str: Math.max(1, str), name: plazaName() || nm(char) },
+             opp: { char: opp, str: Math.max(1, oppStr), name: nm(opp) + '（dev）' } };
+}
 function page2Dev(act) {
     const ranch = core.loadRanch();
     if (act === 'quest') {
@@ -1151,7 +1185,8 @@ function applyCommand(action, args = {}) {
     }
     if (action === 'plazaInvite') {
         if (!args.to) return { ok: false, error: '要指定邀請誰' };
-        return plazaClient.invite(args.to).then(r => (r.ok ? { ok: true, action, output: '已送出對戰邀請' } : r));
+        const kind = args.kind === 'duel' ? 'duel' : 'auto';
+        return plazaClient.invite(args.to, kind).then(r => (r.ok ? { ok: true, action, output: kind === 'duel' ? '已送出手動戰鬥邀請' : '已送出對戰邀請' } : r));
     }
     if (action === 'plazaAnswer') {
         if (!args.inviteId) return { ok: false, error: '沒有邀請' };
@@ -1195,6 +1230,13 @@ function applyCommand(action, args = {}) {
         return plazaClient.stairs('gmove', { x: Number(args.x), y: Number(args.y) }).then(r => (r.ok ? { ok: true, action } : r));
     }
     if (action === 'gomokuResign') return plazaClient.stairs('gresign').then(r => (r.ok ? { ok: true, action } : r));
+    // 手動戰鬥：這回合的選擇（移動、攻擊位置、力度；沒選的不帶，伺服器用預設）、認輸
+    if (action === 'duelPick') {
+        const num = (v) => (v === undefined || v === '' ? undefined : Number(v));
+        return plazaClient.stairs('dpick', { mv: num(args.mv), aim: num(args.aim), p: num(args.p) }).then(r => (r.ok ? { ok: true, action } : r));
+    }
+    if (action === 'duelResign') return plazaClient.stairs('dresign').then(r => (r.ok ? { ok: true, action } : r));
+    if (action === 'duelDev') return duelDev();
     if (action === 'volleyInput') {
         return plazaClient.stairs('vin', { f: Number(args.f), k: Number(args.k) }).then(r => (r.ok ? { ok: true, action } : r));
     }
@@ -1417,6 +1459,7 @@ function loadSimSrc(file, what) {
 const DINO_SRC = loadSimSrc('dino-sim.js', '小恐龍');
 const VOLLEY_SRC = loadSimSrc('volley-sim.js', '打排球');   // 打排球：兩邊各算同一套（輸入同步）
 const GOMOKU_AI_SRC = loadSimSrc('gomoku-ai.js', '五子棋的電腦');   // 跟電腦下五子棋（盡可能強）
+const DUEL_SRC = loadSimSrc('duel-sim.js', '手動戰鬥的 dev 測試');   // 手動戰鬥：判定在伺服器，頁面只拿來跑 dev 測試對戰
 
 // 教學助手（docs/tutorial-spec.md）：一般角色資料夾（characters/TerriermonAssistant，
 // 沒進 roster，玩家遇不到），拿 IDLE_1／IDLE_2 兩幀交替當講話。
@@ -1860,6 +1903,8 @@ let CW=HOME_CW, CH=HOME_CH;
 // 寒風的點陣（天狐獸的子彈，依顏色分好組）。伺服器端抽好再內嵌，見 loadWindArt。
 const WIND_ART=${JSON.stringify(WIND_ART)};
 const DN=${DINO_SRC ? '(function(){const module={exports:{}};' + DINO_SRC + ';return module.exports;})()' : 'null'};   // 小恐龍的模擬（dino-sim.js）
+const DS=${DUEL_SRC ? '(function(){const module={exports:{}};' + DUEL_SRC + ';return module.exports;})()' : 'null'};   // 手動戰鬥的判定（duel-sim.js）：dev 測試對戰在頁面跑
+const MB_BOOM=${JSON.stringify(duelBoom())};   // 手動戰鬥被打中的爆炸（一般戰鬥那顆）
 const VB=${VOLLEY_SRC ? '(function(){const module={exports:{}};' + VOLLEY_SRC + ';return module.exports;})()' : 'null'};   // 打排球的模擬（volley-sim.js）
 const GMAI=${GOMOKU_AI_SRC ? '(function(){const module={exports:{}};' + GOMOKU_AI_SRC + ';return module.exports;})()' : 'null'};   // 五子棋的電腦（gomoku-ai.js）
 // 風往哪邊吹：+1 = 由左至右，-1 = 由右至左。
@@ -3204,6 +3249,12 @@ function plazaClick(ev){
   b.disabled=!!t.battling;
   b.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2)}).then(()=>poll()); });
   el.append(b);
+  // 手動戰鬥（docs/plaza-duel-spec.md）：九宮格回合制，自己選移動、攻擊位置、力度
+  const bd=document.createElement('button');
+  bd.textContent=t.battling ? '🎮 對戰中…' : '🎮 邀請手動戰鬥';
+  bd.disabled=!!t.battling;
+  bd.addEventListener('click',()=>{ closeCtx(); sendCmd('plazaInvite',{to:String(t.key).slice(2),kind:'duel'}).then(r=>{ if(r&&!r.ok) flashCmdMsg(r.error||'邀請失敗','#f85149'); poll(); }); });
+  el.append(bd);
   if(PLAZA_ADMIN){
     const k=document.createElement('button'); k.className='danger devonly'; k.textContent='🚫 踢出廣場（dev）';
     k.addEventListener('click',()=>{ closeCtx(); adminKick(String(t.key).slice(2), t.text); });
@@ -3218,7 +3269,7 @@ document.getElementById('pet').addEventListener('click',ev=>{ if(view==='plaza')
 let inviteShown='';
 function renderInvite(inv){
   const box=document.getElementById('plazainvite');
-  const key=inv ? inv.kind+'|'+(inv.inviteId||'')+'|'+inv.name : '';
+  const key=inv ? inv.kind+'|'+(inv.inviteId||'')+'|'+inv.name+'|'+(inv.duel?1:0) : '';
   if(!inv){ box.style.display='none'; inviteShown=''; return; }
   box.style.display='block';
   if(key!==inviteShown){
@@ -3232,9 +3283,10 @@ function renderInvite(inv){
       box.append(yes,no);
     }
   }
+  const what=inv.duel?'手動戰鬥':'對戰';
   document.getElementById('invitemsg').textContent = inv.kind==='in'
-    ? inv.name+' 邀請你對戰（'+inv.secs+' 秒）'
-    : '已邀請 '+inv.name+' 對戰，等待回覆…（'+inv.secs+' 秒）';
+    ? inv.name+' 邀請你'+what+'（'+inv.secs+' 秒）'
+    : '已邀請 '+inv.name+' '+what+'，等待回覆…（'+inv.secs+' 秒）';
 }
 // 我的對戰演出：前線的戰鬥畫面，用前線的格子大小（8px）畫在疊層上，廣場在後面照常進行
 function renderBattle(b){
@@ -3553,7 +3605,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4139,7 +4191,7 @@ function stairsSync(s, serverNow){
   document.getElementById('minibtn').style.display=(view==='plaza'&&!m)?'':'none';
   if(m) miniClose();
   if(!m){
-    stStream(false); stStop(); dnStop(); vbStop(); gmStop();
+    stStream(false); stStop(); dnStop(); vbStop(); gmStop(); mbStop();
     // 一局結束房間就解散了（伺服器）：結果面板蓋在廣場上，按「回到廣場」收掉
     const end=stairs&&stairs.end;
     if(end&&end.result&&end.at!==stEndSeen){ box.style.display='block'; stEndPanel(end); }
@@ -4149,6 +4201,13 @@ function stairsSync(s, serverNow){
   box.style.display='block';
   stStream(true);
   stLoadSprites(m);
+  if(m.kind==='duel'){   // 手動戰鬥：邀請接受就直接開打，沒有等待畫面
+    stStop(); dnStop(); vbStop(); gmStop();
+    if(m.state==='play'&&m.duel){ document.getElementById('stairspanel').style.display='none'; mbStart(); }
+    else mbStop();
+    return;
+  }
+  mbStop(); mbUnstyle();
   if(m.kind==='gomoku'){
     stStop(); dnStop(); vbStop();
     if(m.state==='play'&&m.gomoku){ document.getElementById('stairspanel').style.display='none'; gmStart(); }
@@ -4185,6 +4244,7 @@ function stStream(on){
     stES.addEventListener('ghost',e=>{ try{ dnGhost(JSON.parse(e.data)); }catch(x){} });
     stES.addEventListener('vin',e=>{ try{ vbIn(JSON.parse(e.data)); }catch(x){} });
     stES.addEventListener('gmove',()=>{ poll(); });
+    stES.addEventListener('duel',()=>{ poll(); });   // 手動戰鬥：一回合結算了 → 馬上重抓（頁面看到新的 last 就開演）
   } else if(!on&&stES){ stES.close(); stES=null; stPrev=stCur=null; }
 }
 // 角色點陣：開局（或房裡有人換）時抓一次
@@ -4341,6 +4401,7 @@ function miniOpen(){
     +((stairs&&stairs.rooms)||[]).filter(r=>(r.kind||'stairs')===gm.id).map(r=>'<div class="mp-room"><span>'+stEsc(r.hostName)+' 的房間　'+r.n+'/'+(r.cap||4)
       +(r.state!=='lobby'?'　進行中':'')+'</span><button data-j="'+stEsc(r.id)+'"'+(stJoinable(r.id)?'':' disabled')+'>加入</button></div>').join('')
     +'</div>').join('')
+    +(PLAZA_ADMIN&&DS?'<div class="mp-game devonly"><b>⚔ 手動戰鬥（dev 測試）</b><div class="mp-desc">本地跑，不經伺服器：同階隨機對手、隨機戰力，對手每回合隨機移動、攻擊、力度。</div><div class="mp-modes"><button class="pri" id="duelDev">開打</button></div></div>':'')
     +'<div class="mp-soon">更多小遊戲陸續加入…</div><div class="mp-modes" style="justify-content:center;margin-top:8px"><button id="miniclose">關閉</button></div>';
   el.querySelectorAll('button[data-b]').forEach(b=>b.addEventListener('click',()=>miniBoard(b.dataset.b)));
   el.querySelectorAll('button[data-j]').forEach(b=>b.addEventListener('click',()=>stJoin(b.dataset.j)));
@@ -4349,6 +4410,7 @@ function miniOpen(){
     sendCmd('stairsOpen',{mode:'endless',kind:b.dataset.g}).then(()=>{ miniClose(); poll(); });
   }));
   document.getElementById('miniclose').addEventListener('click',miniClose);
+  const dv=document.getElementById('duelDev'); if(dv) dv.addEventListener('click',mbDevStart);
   el.style.display='block';
 }
 function miniClose(){ document.getElementById('minipick').style.display='none'; }
@@ -4396,8 +4458,13 @@ function stBoardHtml(kind, board, meName, n){
 function stEndPanel(end){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   document.getElementById('stairscv').style.display='';
-  const dino=end.kind==='dino', volley=end.kind==='volley', gomoku=end.kind==='gomoku', me=end.result.find(r=>r.id===stairs.meId);
-  let h='<div class="st-h">'+(gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'　結束</div>';
+  const dino=end.kind==='dino', volley=end.kind==='volley', gomoku=end.kind==='gomoku', duel=end.kind==='duel', me=end.result.find(r=>r.id===stairs.meId);
+  let h='<div class="st-h">'+(duel?'⚔ 手動戰鬥':gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'　結束</div>';
+  if(duel&&me){
+    const op=end.result.find(r=>r.id!==me.id);
+    h+='<div class="st-res"><b>'+(me.draw?'平手':me.rank===1?'你贏了！':'你輸了')+'</b>'+(op?'　vs '+stEsc(op.name):'')+'　共 '+me.rounds+' 回合'
+      +(op&&op.why==='resign'?'（對手認輸）':me.why==='resign'?'（認輸）':op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
+  }
   if(gomoku&&me){
     const op=end.result.find(r=>r.id!==me.id);
     h+='<div class="st-res"><b>'+(me.draw?'平手':me.rank===1?'你贏了！':'你輸了')+'</b>　共 '+me.moves+' 手'
@@ -4408,10 +4475,10 @@ function stEndPanel(end){
     h+='<div class="st-res"><b>'+(me.rank===1?'你贏了！':'你輸了')+'</b>'+(me.score!=null&&op&&op.score!=null?'　'+me.score+' : '+op.score:'')
       +(op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
   }
-  else if(me&&!gomoku) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
+  else if(me&&!gomoku&&!duel) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
   const rec=(end.records||[]).find(r=>r.id===stairs.meId);
   if(rec) h+='<div class="st-rec">'+(rec.top1?'🏆 全服第一！':'🎉 刷新個人紀錄！')+'</div>';
-  if(!volley&&!gomoku) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
+  if(!volley&&!gomoku&&!duel) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
   h+='<div class="st-btns"><button id="stback" class="pri">回到廣場</button></div>';
   if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h;
     document.getElementById('stback').addEventListener('click',()=>{ stEndSeen=end.at; stairsSync(stairs); });
@@ -4601,6 +4668,7 @@ function comStart(kind){
   miniClose();
   stEndSeen=(stairs&&stairs.end&&stairs.end.at)||stEndSeen;   // 上一局（連線）的結果不要蓋過來
   comState={ kind, startAt:Date.now()+stSkew+1500, done:false };
+  mbStop(); mbUnstyle();
   stLoadSprites({ chars:[stMyChar, COM_CHAR] });
   const box=document.getElementById('stairsbox'); box.style.display='block';
   document.getElementById('stairspanel').style.display='none';
@@ -4611,14 +4679,14 @@ function comStart(kind){
     gmStart();
   }
 }
-function comStop(){ comState=null; vbStop(); gmStop(); document.getElementById('stairsbox').style.display='none'; poll(); }
+function comStop(){ comState=null; vbStop(); gmStop(); mbStop(); document.getElementById('stairsbox').style.display='none'; poll(); }
 // 結束面板（本地）：勝負、比分／手數，再來一局或回廣場
 function comEndPanel(won, text){
   const el=document.getElementById('stairspanel'); el.style.display='block';
-  const title=comState.kind==='volley'?'🏐 打排球':'⚫ 五子棋';
-  el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+'　vs 🤖 '+COM_NAME+'</div><div class="st-res"><b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　'+text+'</div>'
+  const title=comState.kind==='volley'?'🏐 打排球':comState.kind==='duel'?'⚔ 手動戰鬥（dev 測試）':'⚫ 五子棋';
+  el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(comState.kind==='duel'?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res"><b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　'+text+'</div>'
     +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">回到廣場</button></div>';
-  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; comStart(k); });
+  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(); else comStart(k); });
   document.getElementById('comback').addEventListener('click',comStop);
 }
 // 排球的電腦（普通）：跑到球底下、球低了就跳、空中有時殺球；只在球在自己這邊時動
@@ -4775,10 +4843,365 @@ function gmCell(e){
   });
   document.getElementById('gmresign').addEventListener('click',()=>{
     if(!confirm('確定要認輸嗎？')) return;
+    const dd=mbData();
+    if(dd){   // 手動戰鬥
+      if(comState){ dd.winner=1; dd.endAt=0; return; }
+      sendCmd('duelResign').then(()=>poll()); return;
+    }
     if(comState&&comState.gm){ comState.gm.winner=1; comState.gm.expr=['SAD','HAPPY']; comState.gm.exprAt=Date.now()+stSkew; comEndPanel(false,'（認輸）'); return; }
     sendCmd('gomokuResign').then(()=>poll());
   });
 })();
+// ── 手動戰鬥（docs/plaza-duel-spec.md）────────────────────────────────────
+// 九宮格回合制：A 欄自己（畫面左邊永遠是自己）、B 欄中間、C 欄對手。判定在伺服器（duel-sim.js），
+// 頁面照每回合的結果（last）演出：移動 → 發射 → 對波／打中 → 爆炸。
+// dev 測試對戰（comState.kind==='duel'）：同一套 duel-sim 在頁面本地跑，對手每回合隨機選。
+const MB={ W:552, H:432, GX:30, GW:164, GY:100, GH:90, PS:6, BS:8, CS:6, BOOM:8, PANEL:56, BAR_MS:1400 };   // vpet 6 倍、子彈 8 倍（2026-10-20 再放大）
+let mbRaf=0, mbArt={}, mbArtKey='', mbBoom=null, mbSel=null, mbAnim=null, mbBtns=[], mbBgCache={};
+function mbData(){
+  if(comState) return comState.kind==='duel'?comState.duel:null;
+  const m=stMine(); if(!m||m.kind!=='duel'||!m.duel) return null;
+  const d=m.duel, at=(i)=>m.ids.indexOf(d.sides[i]);
+  return Object.assign({}, d, { names:[0,1].map(i=>m.names[at(i)]||'?'), chars:[0,1].map(i=>m.chars[at(i)]||null) });
+}
+function mbMe(d){ return comState?0:Math.max(0,d.sides.indexOf(stMeId())); }
+function mbNow(){ return Date.now()+stSkew; }
+function mbStart(){ if(!mbRaf) mbRaf=requestAnimationFrame(mbFrame); document.getElementById('gmresign').style.display=''; }
+// 停的時候畫布維持縮放（結束面板後面還看得到最後一幕）；換別的小遊戲時才拿掉（mbUnstyle）
+function mbStop(){ if(mbRaf){ cancelAnimationFrame(mbRaf); mbRaf=0; } mbSel=null; mbAnim=null; }
+function mbUnstyle(){ const cv=document.getElementById('stairscv'); cv.style.width=''; cv.style.height=''; }
+function mbPlaying(){ return !!mbRaf&&!!mbData(); }
+// 點陣 → 小畫布（s 倍、可左右翻）。cx/cy/hw：內容外框的中心與半寬（子彈圖的內容不在正中間）
+function mbBake(dots,s,flip){
+  if(!dots) return null;
+  const w=dots[0].length, c=document.createElement('canvas'); c.width=w*s; c.height=dots.length*s;
+  const g=c.getContext('2d'); let x0=99,x1=-1,y0=99,y1=-1;
+  for(let y=0;y<dots.length;y++) for(let x=0;x<w;x++){ const d=dots[y][flip?w-1-x:x]; if(!d) continue;
+    g.fillStyle='rgb('+d[0]+','+d[1]+','+d[2]+')'; g.fillRect(x*s,y*s,s,s);
+    x0=Math.min(x0,x); x1=Math.max(x1,x); y0=Math.min(y0,y); y1=Math.max(y1,y); }
+  return { img:c, cx:(x0+x1+1)/2*s, cy:(y0+y1+1)/2*s, hw:(x1-x0+1)/2*s };
+}
+function mbLoadArt(chars){
+  const key=chars.join(',');
+  if(key===mbArtKey) return; mbArtKey=key;
+  if(!mbBoom&&MB_BOOM) mbBoom=MB_BOOM.map(f=>mbBake(f,MB.BOOM,false));
+  fetch('/stairs/sprites?c='+encodeURIComponent(key),{cache:'no-store'}).then(r=>r.json()).then(j=>{
+    mbArt={};
+    for(const c in j){ const a=j[c];
+      // 子彈原圖面左：左邊（往右打）的不翻、右邊的翻（2026-10-20 試做圖定）；cutin 是左邊的翻、右邊的不翻（雙方面向中間）
+      mbArt[c]={ r:a.r.map(f=>mbBake(f,MB.PS,false)), l:a.l.map(f=>mbBake(f,MB.PS,false)),
+                 bulL:mbBake(a.b,MB.BS,false), bulR:mbBake(a.b,MB.BS,true),
+                 cutL:mbBake(a.c,MB.CS,true), cutR:mbBake(a.c,MB.CS,false) }; }
+  }).catch(()=>{ mbArtKey=''; });
+}
+const mbCell=(col,row)=>[MB.GX+MB.GW*col+MB.GW/2, MB.GY+MB.GH*row+MB.GH/2];
+const mbEase=(u)=>1-(1-u)*(1-u);
+
+// ── 三張背景（點陣風、程式畫）：畫一次存起來 ──
+function mbBg(name,W,H){
+  const key=name+W+'x'+H; if(mbBgCache[key]) return mbBgCache[key];
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const g=c.getContext('2d');
+  const R=(col,x,y,w,h)=>{ g.fillStyle=col; g.fillRect(x,y,w,h); };
+  const HZ=MB.GY-8;
+  if(name==='ring'){
+    R('#14142a',0,0,W,H);
+    for(let i=0;i<300;i++) R(i%2?'#24244a':'#30305c',(i*61)%W,(i*37)%H,8,8);
+    g.globalAlpha=.10; g.fillStyle='#fff8d0';
+    for(const cx of [W*0.25,W*0.75]){ g.beginPath(); g.moveTo(cx-12,0); g.lineTo(cx+12,0); g.lineTo(cx+120,H); g.lineTo(cx-120,H); g.fill(); }
+    g.globalAlpha=1;
+    const x0=18, y0=HZ, x1=W-18, y1=MB.GY+MB.GH*3+10;
+    R('#222',x0-10,y0-6,x1-x0+20,y1-y0+18); R('#3d5a80',x0,y0,x1-x0,y1-y0);
+    for(let y=y0+24;y<y1;y+=30) R('#43628a',x0,y,x1-x0,2);
+    MB_ROPE.forEach((col,k)=>{ R(col,x0,y0-18+k*6,x1-x0,3); R(col,x0-3+k*3,y0-18+k*6,3,y1-y0+18); R(col,x1-k*3,y0-18+k*6,3,y1-y0+18); });
+    for(const x of [x0-8,x1-5]) R('#bbb',x,y0-26,13,28);
+  } else if(name==='studio'){
+    R('#e8dcc8',0,0,W,HZ);
+    for(let x=16;x<W;x+=106){ R('#9fb7c8',x,10,90,HZ-24); R('#c4d8e6',x+5,15,80,HZ-34); R('#e4f0f7',x+13,15,13,HZ-34); }
+    R('#7a5230',0,HZ-38,W,5); for(let x=40;x<W;x+=132) R('#5e3e22',x,HZ-33,5,33);
+    R('#8a5a30',0,HZ-5,W,5); R('#b07a45',0,HZ,W,H-HZ);
+    for(let y=HZ;y<H;y+=24){ R('#9a6837',0,y,W,2); for(let x=((y-HZ)/24%2)*80;x<W;x+=160) R('#9a6837',x,y,2,24); }
+  } else {
+    R('#8fc9f0',0,0,W,38); R('#a9d6f5',0,0,W,14);
+    R('#c9a66b',0,38,W,HZ-38);
+    for(let x=0;x<W;x+=10) R('#b8955a',x,38,5,5);
+    for(let x=12;x<W;x+=48){ R('#6b4e2e',x,56,26,HZ-56); R('#6b4e2e',x+5,51,16,5); R('#4e3820',x+5,66,16,HZ-66); }
+    R('#8a6a40',0,HZ-5,W,5); R('#d9b779',0,HZ,W,H-HZ);
+    for(let i=0;i<340;i++) R(i%3?'#cfa868':'#e6c993',(i*97)%W,HZ+((i*53)%(H-HZ)),5,5);
+  }
+  return mbBgCache[key]=c;
+}
+const MB_ROPE=['#c0392b','#ecf0f1','#2e5ea8'];
+// 擂台前面那排繩子畫在角色前面（看得到四面圍繩）
+function mbRingFront(g,W){
+  const x0=18, x1=W-18, y1=MB.GY+MB.GH*3+10;
+  MB_ROPE.forEach((col,k)=>{ g.fillStyle=col; g.fillRect(x0,y1-14+k*6,x1-x0,3); });
+  g.fillStyle='#bbb'; for(const x of [x0-8,x1-5]) g.fillRect(x,y1-22,13,30);
+}
+
+// ── 一回合的演出時間軸（毫秒，從收到結果開始）──
+const MBT={ MOVE:400, FLY:900, HOLD:800, FADE:300, WIN:450, BOOM:600 };
+function mbTimeline(L, T, mi){
+  const col=(s)=>s===mi?0:2;
+  const rows=[0,1].map(s=>T<MBT.MOVE?L.from[s]+(L.to[s]-L.from[s])*mbEase(T/MBT.MOVE):L.to[s]);
+  const P=[0,1].map(s=>mbCell(col(s),L.to[s])), Tg=[0,1].map(s=>mbCell(col(1-s),L.aim[s]));
+  const at=(s,u)=>[P[s][0]+(Tg[s][0]-P[s][0])*u, P[s][1]+(Tg[s][1]-P[s][1])*u];
+  const meet=MBT.MOVE+MBT.FLY*0.5, holdEnd=meet+MBT.HOLD, hitT=L.clash?holdEnd+MBT.WIN:MBT.MOVE+MBT.FLY;
+  const bullets=[];
+  for(const s of [0,1]){
+    if(T<MBT.MOVE) continue;
+    if(L.clash){
+      if(T<holdEnd||s!==L.cw){
+        const u=Math.min(0.5,(T-MBT.MOVE)/MBT.FLY);
+        let a=1; if(T>=holdEnd) a=Math.max(0,1-(T-holdEnd)/MBT.FADE);   // 輸的（或一樣強的兩顆）淡出
+        if(a<=0) continue;
+        const p=at(s,u), j=T>=meet&&T<holdEnd?((Math.floor(T/70)+s)%2?-3:3):0;   // 頂住時上下錯開抖動
+        bullets.push({ s, x:p[0], y:p[1]+j, a, lock:true });
+      } else if(T<hitT){
+        const p=at(s,0.5+0.5*(T-holdEnd)/MBT.WIN); bullets.push({ s, x:p[0], y:p[1], a:1 });
+      }
+    } else {
+      const u=(T-MBT.MOVE)/MBT.FLY;
+      if(L.hit[1-s]&&u>=1) continue;                 // 打中：子彈消失、換爆炸
+      if(u>1.35) continue;                            // 沒打中：飛過頭、淡掉
+      const p=at(s,u); bullets.push({ s, x:p[0], y:p[1], a:u>1?Math.max(0,1-(u-1)/0.35):1 });
+    }
+  }
+  const booms=[0,1].filter(s=>L.hit[s]&&T>=hitT&&T<hitT+MBT.BOOM).map(s=>({ s, x:mbCell(col(s),L.to[s])[0], y:mbCell(col(s),L.to[s])[1], f:Math.floor((T-hitT)/120)%2 }));
+  const frame=[0,1].map(s=>(L.hit[s]&&T>=hitT&&T<hitT+800)?2:(T>=MBT.MOVE&&T<MBT.MOVE+600)?4:-1);
+  return { rows, bullets, booms, frame, hp:T<hitT?L.hpBefore:L.hp, done:T>=DS.ANIM_MS };
+}
+
+// ── 選擇（每回合依序：移動 → 攻擊位置 → 力度）──
+function mbPhase(d,now){
+  if(now<d.startAt) return 'open';
+  if(mbAnim&&!mbAnim.done) return 'anim';
+  if(d.winner!=null) return 'over';
+  if(now<d.deadline-DS.PICK_MS||now>=d.deadline) return 'anim';
+  return 'pick';
+}
+function mbSelFor(d){
+  if(!mbSel||mbSel.round!==d.round) mbSel={ round:d.round, step:0, cur:0, mv:null, aim:null, barT0:0, sent:false };
+  return mbSel;
+}
+function mbBarVal(){ const ph=((performance.now()-mbSel.barT0)%MB.BAR_MS)/MB.BAR_MS; return ph<0.5?ph*2:2-ph*2; }
+function mbMoveOk(d,mi,mv){ const r=d.row[mi]+mv; return r>=0&&r<3; }
+function mbChooseMove(d,mi,mv){ if(!mbMoveOk(d,mi,mv)) return; mbSel.mv=mv; mbSel.step=1; mbSel.cur=d.row[mi]+mv; }
+function mbChooseAim(a){ mbSel.aim=a; mbSel.step=2; mbSel.barT0=performance.now(); }
+function mbBack(){ if(mbSel.step===2){ mbSel.step=1; mbSel.cur=mbSel.aim; } else if(mbSel.step===1){ mbSel.step=0; mbSel.cur=mbSel.mv; } }
+function mbSend(p){
+  const d=mbData(); if(!d||mbSel.sent) return;
+  mbSel.sent=true;
+  const pk={}; if(mbSel.mv!=null) pk.mv=mbSel.mv; if(mbSel.step>=2&&mbSel.aim!=null) pk.aim=mbSel.aim; if(p!=null) pk.p=p;
+  if(comState){ d.picks[0]=pk; d.picked[0]=true; return; }
+  const args={}; for(const k in pk) args[k]=String(pk[k]);
+  sendCmd('duelPick',args).then(r=>{ if(r&&!r.ok){ flashCmdMsg(r.error||'送不出去','#f85149'); } poll(); });
+}
+function mbKey(k){
+  const d=mbData(); if(!d) return false;
+  if(mbPhase(d,mbNow())!=='pick') return false;
+  const s=mbSelFor(d), mi=mbMe(d); if(s.sent) return false;
+  const up=k==='arrowup'||k==='w', dn=k==='arrowdown'||k==='s', ok=k==='enter'||k===' ', back=k==='escape'||k==='backspace';
+  if(back){ mbBack(); return true; }
+  if(s.step===0){ if(up&&mbMoveOk(d,mi,s.cur-1)) s.cur--; else if(dn&&mbMoveOk(d,mi,s.cur+1)) s.cur++; else if(ok) mbChooseMove(d,mi,s.cur); return up||dn||ok; }
+  if(s.step===1){ if(up&&s.cur>0) s.cur--; else if(dn&&s.cur<2) s.cur++; else if(ok) mbChooseAim(s.cur); return up||dn||ok; }
+  if(ok){ mbSend(mbBarVal()); return true; }
+  return false;
+}
+function mbCanvasXY(e){ const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect(); return [(e.clientX-rc.left)*cv.width/rc.width,(e.clientY-rc.top)*cv.height/rc.height]; }
+function mbCellAt(x,y){ const c=Math.floor((x-MB.GX)/MB.GW), r=Math.floor((y-MB.GY)/MB.GH); return c>=0&&c<3&&r>=0&&r<3?[c,r]:null; }
+function mbClick(e){
+  const d=mbData(); if(!d||mbPhase(d,mbNow())!=='pick') return;
+  const s=mbSelFor(d), mi=mbMe(d); if(s.sent) return;
+  const [x,y]=mbCanvasXY(e);
+  const b=mbBtns.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);
+  if(b){ if(!b.off) b.act(); return; }
+  if(s.step===2){ mbSend(mbBarVal()); return; }
+  const c=mbCellAt(x,y); if(!c) return;
+  if(s.step===0&&c[0]===0) mbChooseMove(d,mi,c[1]-d.row[mi]);
+  else if(s.step===1&&c[0]===2) mbChooseAim(c[1]);
+}
+function mbHoverAt(e){
+  const d=mbData(); if(!d||!mbSel||mbSel.sent||mbPhase(d,mbNow())!=='pick') return;
+  const [x,y]=mbCanvasXY(e), c=mbCellAt(x,y), mi=mbMe(d); if(!c) return;
+  if(mbSel.step===0&&c[0]===0&&mbMoveOk(d,mi,c[1]-d.row[mi])) mbSel.cur=c[1]-d.row[mi];
+  else if(mbSel.step===1&&c[0]===2) mbSel.cur=c[1];
+}
+
+// ── dev 測試對戰：本地跑 duel-sim，對手每回合隨機 ──
+function mbDevStart(){
+  if(!DS){ flashCmdMsg('手動戰鬥的判定沒載入','#f85149'); return; }
+  sendCmd('duelDev').then(r=>{
+    if(!r||!r.ok){ flashCmdMsg((r&&r.error)||'開不了','#f85149'); return; }
+    miniClose();
+    stEndSeen=(stairs&&stairs.end&&stairs.end.at)||stEndSeen;
+    const now=mbNow(), startAt=now+DS.OPEN_MS;
+    const d=Object.assign(DS.createDuel([r.me.str,r.opp.str], DS.BGS[Math.floor(Math.random()*DS.BGS.length)]),
+      { sides:['me','dev'], names:[r.me.name,r.opp.name], chars:[r.me.char,r.opp.char], startAt, deadline:startAt+DS.PICK_MS,
+        picks:[null,null], picked:[false,false], endAt:0 });
+    comState={ kind:'duel', duel:d, startAt, done:false };
+    const box=document.getElementById('stairsbox'); box.style.display='block';
+    document.getElementById('stairspanel').style.display='none';
+    stStream(false); stStop(); dnStop(); vbStop(); gmStop();
+    mbSel=null; mbAnim=null; mbStart();
+  });
+}
+function mbLocalTick(d,now){
+  if(d.winner!=null){
+    if(!comState.done&&now>=d.endAt){ comState.done=true;
+      comEndPanel(d.winner<0?null:d.winner===0, '共 '+(d.round-1)+' 回合　'+d.names[1]+'（戰力 '+d.str[1]+'）'); }
+    return;
+  }
+  if(now<d.startAt) return;
+  if(!d.picks[1]&&now>=d.deadline-DS.PICK_MS){ d.picks[1]=DS.randomPick(d,1); d.picked[1]=true; }
+  if((d.picks[0]&&d.picks[1])||now>=d.deadline){
+    DS.resolve(d,[0,1].map(i=>DS.normPick(d,i,d.picks[i])));
+    d.picks=[null,null]; d.picked=[false,false];
+    if(d.winner!=null) d.endAt=now+DS.ANIM_MS+DS.END_MS; else d.deadline=now+DS.ANIM_MS+DS.PICK_MS;
+  }
+}
+
+function mbFrame(){
+  mbRaf=requestAnimationFrame(mbFrame);
+  const d=mbData(); if(!d) return;
+  const now=mbNow();
+  if(comState) mbLocalTick(d,now);
+  mbLoadArt(d.chars.map(c=>c||'agumon'));
+  if(d.last&&(!mbAnim||d.last.round>mbAnim.round)) mbAnim={ round:d.last.round, last:d.last, t0:performance.now(), done:false };
+  // 時限快到還沒送出：有選多少送多少（沒選的伺服器用預設）
+  if(mbPhase(d,now)==='pick'){ const s=mbSelFor(d); if(!s.sent&&d.deadline-now<400) mbSend(null); }
+  mbDraw(d,now);
+}
+function mbDraw(d,now){
+  const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
+  // 畫在固定的 552×432（版面照這個排），顯示大小跟其他小遊戲一樣（69×54 格，格子大小會變）
+  const W=MB.W, H=MB.H;
+  if(cv.width!==W||cv.height!==H){ cv.width=W; cv.height=H; }
+  cv.style.width=(69*CW)+'px'; cv.style.height=(54*(CH/2))+'px';
+  cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
+  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const mi=mbMe(d), oi=1-mi, side=[0,1].map(s=>s===mi?0:2);
+  g.drawImage(mbBg(d.bg,W,H),0,0);
+  // 演出中用這回合的時間軸；其他時候站在現在的位置
+  let tl=null;
+  if(mbAnim){ const T=performance.now()-mbAnim.t0; tl=mbTimeline(mbAnim.last,T,mi); if(tl.done){ mbAnim.done=true; tl=null; } }
+  const rows=tl?tl.rows:d.row, hp=tl?tl.hp:d.hp, phase=mbPhase(d,now), t=performance.now();
+  const sel=phase==='pick'?mbSelFor(d):null;
+  // 選擇中：可以去的格子、要打的格子
+  const box=(col,row,color,dash)=>{ g.save(); g.strokeStyle=color; g.lineWidth=3; if(dash) g.setLineDash([6,5]);
+    g.strokeRect(MB.GX+MB.GW*col+5,MB.GY+MB.GH*row+5,MB.GW-10,MB.GH-10); g.restore(); };
+  if(sel&&!sel.sent){
+    if(sel.step===0){ box(0,d.row[mi],'#ffd84a'); box(0,d.row[mi]+sel.cur,'rgba(255,255,255,.85)',true); }
+    else { box(0,d.row[mi]+sel.mv,'#8f8',true); for(let r=0;r<3;r++) box(2,r,'rgba(255,90,90,.6)',true); }
+  }
+  // 兩隻 vpet（左邊是自己，面右；右邊是對手，面左）
+  const over=d.winner!=null&&!tl;
+  for(const s of [0,1]){
+    const a=mbArt[d.chars[s]||'agumon']; if(!a) continue;
+    const [x,y]=mbCell(side[s],rows[s]);
+    let fr=tl&&tl.frame[s]>=0?tl.frame[s]:Math.floor(t/600)%2;
+    if(over) fr=d.winner<0?0:(d.winner===s?5:3);
+    const sp=(s===mi?a.r:a.l)[fr]||(s===mi?a.r:a.l)[0]; if(!sp) continue;
+    g.fillStyle='rgba(0,0,0,.25)'; g.beginPath(); g.ellipse(x,y+40,36,8,0,0,6.2832); g.fill();
+    g.drawImage(sp.img,Math.round(x-sp.img.width/2),Math.round(y-sp.img.height/2-6));
+    // 選好的移動：半透明的預覽
+    if(s===mi&&sel&&!sel.sent){ const mv=sel.step===0?sel.cur:sel.mv; if(mv){ const [gx,gy]=mbCell(0,d.row[mi]+mv);
+      g.globalAlpha=.4; g.drawImage(sp.img,Math.round(gx-sp.img.width/2),Math.round(gy-sp.img.height/2-6)); g.globalAlpha=1; } }
+  }
+  if(d.bg==='ring') mbRingFront(g,W);
+  // 準星
+  if(sel&&!sel.sent&&sel.step>=1){ const [x,y]=mbCell(2,sel.step===1?sel.cur:sel.aim); g.save(); g.strokeStyle='#ff4040'; g.lineWidth=3;
+    g.beginPath(); g.arc(x,y,30,0,6.2832); g.stroke();
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ g.beginPath(); g.moveTo(x+dx*20,y+dy*20); g.lineTo(x+dx*40,y+dy*40); g.stroke(); } g.restore(); }
+  // 子彈、爆炸
+  if(tl){
+    for(const b of tl.bullets){ const a=mbArt[d.chars[b.s]||'agumon']; const im=a&&(b.s===mi?a.bulL:a.bulR); if(!im) continue;
+      let x=b.x; if(b.lock) x=b.s===mi?Math.min(x,W/2-im.hw):Math.max(x,W/2+im.hw);   // 對波：兩顆在正中間邊緣相連，不交疊
+      g.globalAlpha=b.a; g.drawImage(im.img,Math.round(x-im.cx),Math.round(b.y-im.cy)); g.globalAlpha=1; }
+    for(const b of tl.booms){ const im=mbBoom&&mbBoom[b.f]; if(im) g.drawImage(im.img,Math.round(b.x-im.img.width/2),Math.round(b.y-im.img.height/2-6)); }
+  }
+  // 上方：名字＋血條（不顯示數字）、第幾回合、倒數
+  g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(0,0,W,48);
+  const bar=(x,s,right)=>{ const ratio=Math.max(0,hp[s]/d.max[s]), w=Math.round(200*ratio);
+    g.font='bold 15px sans-serif'; g.textBaseline='middle'; g.textAlign=right?'right':'left'; g.fillStyle=s===mi?'#f7c631':'#fff';
+    g.fillText(gmFit(g,d.names[s]||'?',190),right?x+200:x,12);
+    g.fillStyle='#000'; g.fillRect(x-2,24,204,16); g.fillStyle='#444'; g.fillRect(x,26,200,12);
+    g.fillStyle=ratio>.5?'#3ad15a':ratio>.25?'#f1c40f':'#e74c3c'; g.fillRect(right?x+200-w:x,26,w,12);
+    g.fillStyle='rgba(255,255,255,.35)'; g.fillRect(right?x+200-w:x,26,w,4); };
+  bar(12,mi,false); bar(W-212,oi,true);
+  if(phase==='pick'&&d.picked&&d.picked[oi]){ g.font='bold 12px sans-serif'; g.textAlign='right'; g.lineWidth=3; g.strokeStyle='#000'; g.strokeText('對手已選好 ✓',W-12,56); g.fillStyle='#7ee787'; g.fillText('對手已選好 ✓',W-12,56); }
+  g.textAlign='center'; g.font='bold 12px sans-serif'; g.fillStyle='#ddd';
+  g.font='bold 14px sans-serif'; g.fillText('第 '+Math.min(tl?mbAnim.last.round:d.round,DS.MAX_ROUNDS)+' 回合',W/2,12);   // 演出中還是這一回合
+  if(phase==='pick'){ const sec=Math.max(0,Math.ceil((d.deadline-now)/1000)); g.font='bold 22px sans-serif';
+    g.lineWidth=3; g.strokeStyle='#000'; g.strokeText(String(sec),W/2,32); g.fillStyle=sec<=3?'#ff6b6b':'#fff'; g.fillText(String(sec),W/2,32); }
+  g.textBaseline='alphabetic';
+  mbBtns=[];
+  if(phase==='pick') mbPanel(g,d,mi,W,H,sel);
+  if(over){ g.fillStyle='rgba(0,0,0,.4)'; g.fillRect(0,H/2-26,W,52); g.fillStyle='#fff'; g.font='bold 22px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillText(d.winner<0?'平手！':d.winner===mi?'你贏了！':'你輸了…',W/2,H/2); g.textBaseline='alphabetic'; }
+  if(phase==='open') mbCutin(g,d,mi,W,H,now);
+}
+// 下方的選擇面板：步驟、按鈕、力度條（按鈕位置記在 mbBtns 給點擊用）
+function mbPanel(g,d,mi,W,H,sel){
+  const y0=H-MB.PANEL;
+  g.fillStyle='rgba(10,10,20,.8)'; g.fillRect(0,y0,W,MB.PANEL); g.fillStyle='#555'; g.fillRect(0,y0,W,2);
+  g.textBaseline='middle'; g.textAlign='left'; g.font='bold 14px sans-serif';
+  ['① 移動','② 攻擊','③ 力度'].forEach((t,i)=>{ g.fillStyle=sel.sent?'#8f8':i===sel.step?'#ffd84a':i<sel.step?'#8f8':'#777'; g.fillText(t,12+i*62,y0+16); });
+  const btn=(x,w,label,state,act)=>{ const y=y0+22, h=26;   // state: 0 一般 1 選中 2 停用
+    g.fillStyle=state===2?'#333':state===1?'#ffd84a':'#3b4a6b'; g.fillRect(x,y,w,h);
+    g.fillStyle=state===2?'#222':state===1?'#b8901a':'#25304a'; g.fillRect(x,y+h-3,w,3);
+    g.fillStyle=state===2?'#666':state===1?'#222':'#fff'; g.font='bold 15px sans-serif'; g.textAlign='center'; g.fillText(label,x+w/2,y+h/2);
+    g.textAlign='left'; mbBtns.push({ x, y, w, h, act, off:state===2 }); };
+  g.font='13px sans-serif'; g.fillStyle='#aaa';
+  if(sel.sent){ g.fillText(d.picked&&d.picked[1-mi]?'雙方都選好了…':'已選好，等對手…',12,y0+40); g.textBaseline='alphabetic'; return; }
+  g.fillText(sel.step===2?'點擊或空白鍵停住':'點格子或 ↑↓ / Enter',12,y0+42);
+  const bx=204, BACK=404;   // 右下角留給「認輸」鈕
+  if(sel.step===0){
+    btn(bx,74,'▲ 上',mbMoveOk(d,mi,-1)?(sel.cur===-1?1:0):2,()=>mbChooseMove(d,mi,-1));
+    btn(bx+80,90,'● 不動',sel.cur===0?1:0,()=>mbChooseMove(d,mi,0));
+    btn(bx+176,74,'▼ 下',mbMoveOk(d,mi,1)?(sel.cur===1?1:0):2,()=>mbChooseMove(d,mi,1));
+  } else if(sel.step===1){
+    ['上','中','下'].forEach((t,i)=>btn(bx+i*64,58,t,sel.cur===i?1:0,()=>mbChooseAim(i)));
+    btn(BACK,62,'↩ 返回',0,mbBack);
+  } else {
+    const x=bx, y=y0+22, w=186, h=26, v=mbBarVal();
+    g.fillStyle='#000'; g.fillRect(x-2,y-2,w+4,h+4);
+    g.fillStyle='#4a6a4a'; g.fillRect(x,y,w*DS.ZONE_15,h); g.fillStyle='#e67e22'; g.fillRect(x+w*DS.ZONE_15,y,w*(DS.ZONE_2-DS.ZONE_15),h);
+    g.fillStyle='#e74c3c'; g.fillRect(x+w*DS.ZONE_2,y,w*(1-DS.ZONE_2),h);
+    g.font='bold 12px sans-serif'; g.textAlign='center'; g.fillStyle='#cfe8cf'; g.fillText('×1',x+w*0.4,y+h/2);
+    g.fillStyle='#ffb366'; g.fillText('×1.5',x+w*(DS.ZONE_15+DS.ZONE_2)/2,y0+10); g.fillStyle='#ff8080'; g.fillText('×2',x+w*(1+DS.ZONE_2)/2+2,y0+10);
+    g.fillStyle='#fff'; g.fillRect(x+w*v-2,y-5,4,h+10); g.fillStyle='#000'; g.fillRect(x+w*v-1,y-5,2,h+10);
+    g.textAlign='left';
+    btn(BACK,62,'↩ 返回',0,mbBack);
+  }
+  g.textBaseline='alphabetic';
+}
+// 開場：雙方 cutin 從畫面外滑入（自己左下、對手右上，都面向中間），中間 VS
+function mbCutin(g,d,mi,W,H,now){
+  const e=now-(d.startAt-DS.OPEN_MS), out=DS.OPEN_MS-350;
+  const k=e<450?mbEase(Math.max(0,e)/450):e>out?1-Math.min(1,(e-out)/350):1;
+  g.fillStyle='rgba(0,0,0,'+(0.55*k)+')'; g.fillRect(0,0,W,H);
+  const cut=(s,left)=>{ const a=mbArt[d.chars[s]||'agumon'], im=a&&(left?a.cutL:a.cutR); if(!im) return;
+    const w=im.img.width, h=im.img.height, tx=left?24:W-24-w, ty=left?H-h-44:60, sx=left?-w-40:W+40;
+    const x=Math.round(sx+(tx-sx)*k);
+    g.fillStyle='#000'; g.fillRect(x-7,ty-7,w+14,h+14); g.fillStyle=left?'#3b82f6':'#e74c3c'; g.fillRect(x-5,ty-5,w+10,h+10);
+    g.fillStyle='#111'; g.fillRect(x,ty,w,h); g.drawImage(im.img,x,ty); };
+  cut(1-mi,false); cut(mi,true);
+  if(e>250&&e<out+200){ const p=Math.min(1,(e-250)/250), sc=p<1?0.4+p*0.8:1.2-Math.min(0.2,(e-500)/1000);
+    g.save(); g.globalAlpha=Math.min(1,k*1.5); g.translate(W/2,H/2); g.rotate(-0.12); g.scale(sc,sc);
+    g.font='bold italic 72px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.lineWidth=12; g.strokeStyle='#000'; g.lineJoin='round'; g.strokeText('VS',0,0); g.fillStyle='#ff2a2a'; g.fillText('VS',0,0); g.restore(); }
+}
+(function(){
+  const cv=document.getElementById('stairscv');
+  cv.addEventListener('click',e=>{ if(mbPlaying()) mbClick(e); });
+  cv.addEventListener('mousemove',e=>{ if(mbPlaying()) mbHoverAt(e); });
+})();
+window.addEventListener('keydown',e=>{
+  if(!mbPlaying()||typing()) return;
+  const k=e.key.toLowerCase();
+  // 對戰中方向鍵、WASD 一律攔下（不然廣場那邊會拿去走路）
+  if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d','enter',' ','escape','backspace'].includes(k)){ mbKey(k); e.preventDefault(); e.stopImmediatePropagation(); }
+},true);
 // ── 打排球（docs/plaza-volley-spec.md）────────────────────────────────────
 // 1 對 1、輸入同步（鎖步）：兩邊各算同一套模擬（volley-sim.js 原樣內嵌在 VB），只交換每一格的按鍵。
 // 我的按鍵延後 VB_DELAY 格才生效：處理第 f 格時，送出第 f+VB_DELAY 格的按鍵；
@@ -5413,8 +5836,8 @@ const server = http.createServer((req, res) => {
                          invite: (() => {
                              const inc = plazaClient.incoming(), out = plazaClient.outgoing();
                              const left = (e) => Math.max(0, Math.round((e - (Date.now() + plazaClient.skew())) / 1000));
-                             if (inc) return { kind: 'in', inviteId: inc.inviteId, name: inc.fromName, secs: left(inc.expiresAt) };
-                             if (out) return { kind: 'out', name: out.toName, secs: left(out.expiresAt) };
+                             if (inc) return { kind: 'in', inviteId: inc.inviteId, name: inc.fromName, secs: left(inc.expiresAt), duel: inc.kind === 'duel' };
+                             if (out) return { kind: 'out', name: out.toName, secs: left(out.expiresAt), duel: out.kind === 'duel' };
                              return null;
                          })(),
                          // 我的對戰演出（前線的戰鬥畫面，頁面疊在廣場上）

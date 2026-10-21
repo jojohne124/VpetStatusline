@@ -130,7 +130,7 @@ function create(opts = {}) {
             const { serverNow, ...m } = d; void serverNow;
             members.set(d.id, m);
         } else if (event === 'invite' && d.inviteId) {
-            incoming = { inviteId: d.inviteId, from: d.from, fromName: d.fromName, expiresAt: d.expiresAt };
+            incoming = { inviteId: d.inviteId, from: d.from, fromName: d.fromName, expiresAt: d.expiresAt, kind: d.kind === 'duel' ? 'duel' : 'auto' };
         } else if (event === 'invite-closed' && d.inviteId) {
             const mine = outgoing && outgoing.inviteId === d.inviteId;
             if (incoming && incoming.inviteId === d.inviteId) incoming = null;
@@ -154,6 +154,8 @@ function create(opts = {}) {
             onStairs('tick', d);
         } else if (event === 'gomoku:move') {
             onStairs('gmove', d);   // 五子棋：有人下了一手（daemon 推給頁面 → 頁面馬上重抓）
+        } else if (event === 'duel:round') {
+            onStairs('duel', d);    // 手動戰鬥：一回合結算了（頁面照結果演出）
         } else if (event === 'volley:in') {
             onStairs('vin', d);     // 打排球：對手這一格的按鍵（一秒 25 次）
         } else if (event === 'dino:ghost') {
@@ -269,13 +271,13 @@ function create(opts = {}) {
     }
 
     // 邀請對戰／回覆邀請
-    async function invite(to) {
+    async function invite(to, kind) {
         if (!me) return { ok: false, error: '不在廣場' };
-        const r = await request('POST', '/invite', { id: me.id, to });
+        const r = await request('POST', '/invite', { id: me.id, to, kind: kind === 'duel' ? 'duel' : undefined });
         if (r.status === 0) return { ok: false, error: UNREACHABLE };
         if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
         const t = members.get(to);
-        outgoing = { inviteId: r.body.inviteId, to, toName: t ? t.name : '?', expiresAt: r.body.expiresAt };
+        outgoing = { inviteId: r.body.inviteId, to, toName: t ? t.name : '?', expiresAt: r.body.expiresAt, kind: kind === 'duel' ? 'duel' : 'auto' };
         return { ok: true, inviteId: r.body.inviteId };
     }
     async function answer(inviteId, accept) {

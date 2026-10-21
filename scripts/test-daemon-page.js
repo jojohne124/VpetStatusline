@@ -1557,6 +1557,9 @@ setTimeout(async () => {
     // 打排球：下樓梯的方向鍵只在下樓梯的房裡攔（原本連線打排球的 ← → 被吃掉）
     ok(/const sm=stMine\(\), stOn=\(stPlaying\(\)&&\(sm\.kind\|\|'stairs'\)==='stairs'\)\|\|\(comState&&comState\.kind==='stairs'\);/.test(src), '下樓梯的方向鍵在別的小遊戲（打排球）裡也被攔下');
     ok(/g\.fillText\('×1',x\+w\*DS\.ZONE_15\/2,y0\+10\)/.test(src), '力度條的 ×1 沒寫在上方'); 
+    // 營地右鍵：顯示「獲得於」（這一隻變成現在這個角色的時間），不是「收於」（每次交換都重設，被誤會成獲得時間）
+    ok(/gotAt: st\.lastEvolveAt \|\| st\.birthAt \|\| null,/.test(src) && /'<br>獲得於 '\+\s*\(hit\.gotAt\?new Date\(hit\.gotAt\)\.toLocaleString\(\):'—'\)/.test(src) && !/'<br>收於 '/.test(src),
+       '營地右鍵選單顯示的不是這一隻的獲得時間');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

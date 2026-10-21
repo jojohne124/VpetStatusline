@@ -80,7 +80,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev']);
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev', 'frontMini', 'miniBest']);   // frontMini／miniBest：前線小遊戲（先開發版限定，2026-10-21）
 // 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
 const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
@@ -241,6 +241,15 @@ function renderTick(i, st, now) {
         st._noAutoBattle = true;
     } else {
         delete st.plaza;
+    }
+    // 前線在玩小遊戲（頁面每幾秒報一次）：vpet 正在玩，沒空打仗 → 自動戰鬥不觸發，也不排隊補打。
+    // 這段期間武裝的那一回合直接當作「已經打過」，關掉小遊戲後不會一口氣冒出來
+    if (!inPlaza && Date.now() < frontMiniUntil) {
+        st._noAutoBattle = true;
+        if (!(st.battleStartStep >= 0)) {
+            st.battlePending = false;
+            if (st.battleArmHookTs) st.battleFiredHookTs = st.battleArmHookTs;
+        }
     }
 
     // 2. 自然進化觸發（freeze 凍結時跳過，與 statusLine 一致）
@@ -449,6 +458,20 @@ const stairsStreams = new Set();
 function stairsPush(kind, d) {
     const msg = 'event: ' + kind + '\ndata: ' + JSON.stringify(d || {}) + '\n\n';
     for (const res of stairsStreams) { try { res.write(msg); } catch (e) { stairsStreams.delete(res); } }
+}
+// ── 前線小遊戲（單機）：頁面開著小遊戲時每幾秒報一次 frontMini；超過 FRONT_MINI_TTL 沒報就當作關了（分頁關掉、當掉）
+const FRONT_MINI_TTL = 12000;
+let frontMiniUntil = 0;
+// 單機的個人最佳（只記本機，不進廣場排行榜）：下樓梯記層數、小恐龍記分數
+const MINI_BEST_FILE = path.join(STATE_DIR, 'minigame-best.json');
+function miniBest(kind, val) {
+    let j = {}; try { j = JSON.parse(fs.readFileSync(MINI_BEST_FILE, 'utf8')) || {}; } catch (e) {}
+    let record = false;
+    if ((kind === 'stairs' || kind === 'dino') && Number.isFinite(val) && val > 0 && val > (j[kind] || 0)) {
+        j[kind] = Math.floor(val); record = true;
+        try { fs.writeFileSync(MINI_BEST_FILE, JSON.stringify(j)); } catch (e) { console.log('   ⚠️ 小遊戲最佳紀錄存不了：' + e.message); }
+    }
+    return { stairs: j.stairs || 0, dino: j.dino || 0, record };
 }
 // art.json 第一幀（上下半格一組）→ 一點一格的 [r,g,b]／null。讀不到 = null
 function artDots(file, frame = 0) {
@@ -1237,6 +1260,13 @@ function applyCommand(action, args = {}) {
     }
     if (action === 'duelResign') return plazaClient.stairs('dresign').then(r => (r.ok ? { ok: true, action } : r));
     if (action === 'duelDev') return duelDev();
+    // 前線小遊戲：開著（每幾秒報一次）／關了；個人最佳（kind + val = 記一筆，沒給 val = 只讀）
+    if (action === 'frontMini') { frontMiniUntil = args.on === '1' ? Date.now() + FRONT_MINI_TTL : 0; return { ok: true, action }; }
+    if (action === 'miniBest') {
+        const st = loadState(STATE_FILE);
+        return { ok: true, action, char: st.characterId || 'agumon', ...miniBest(args.kind, Number(args.val)) };
+    }
+      if (action === 'volleyResign') return plazaClient.stairs('vresign').then(r => (r.ok ? { ok: true, action } : r));
     if (action === 'volleyInput') {
         return plazaClient.stairs('vin', { f: Number(args.f), k: Number(args.k) }).then(r => (r.ok ? { ok: true, action } : r));
     }
@@ -1459,6 +1489,7 @@ function loadSimSrc(file, what) {
 const DINO_SRC = loadSimSrc('dino-sim.js', '小恐龍');
 const VOLLEY_SRC = loadSimSrc('volley-sim.js', '打排球');   // 打排球：兩邊各算同一套（輸入同步）
 const GOMOKU_AI_SRC = loadSimSrc('gomoku-ai.js', '五子棋的電腦');   // 跟電腦下五子棋（盡可能強）
+const STAIRS_SRC = loadSimSrc('stairs-sim.js', '前線的下樓梯（單機）');   // 下樓梯：廣場是伺服器算，前線單機在頁面算
 const DUEL_SRC = loadSimSrc('duel-sim.js', '手動戰鬥的 dev 測試');   // 手動戰鬥：判定在伺服器，頁面只拿來跑 dev 測試對戰
 
 // 教學助手（docs/tutorial-spec.md）：一般角色資料夾（characters/TerriermonAssistant，
@@ -1644,6 +1675,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   /* 下樓梯：蓋在廣場畫面上（同一個舞台、一樣大） */
   #stairsbox{position:absolute;inset:0;z-index:5;display:none}
   #stairscv{position:absolute;image-rendering:pixelated;max-width:none}
+  /* 前線玩小遊戲：畫布貼齊舞台左上（前線的 #pet 有留白），舞台撐到畫布那麼大（見 miniFrontFit） */
+  body.minifront #stairscv{left:0!important;top:0!important}
   #gmresign{position:absolute;right:8px;bottom:8px;z-index:2;font-size:11px;padding:2px 8px}
   /* 小遊戲選單（廣場的「🎮 小遊戲」）：跟等待面板同一個樣式，蓋在舞台中間 */
   /* 遊戲變多之後選單比舞台高：限制高度、裡面捲動（不然上下被裁掉，看不到第一個遊戲） */
@@ -1655,6 +1688,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #minipick .mp-game b{color:#e6edf3;font-size:13px}
   #minipick .mp-desc{color:#8b949e;font-size:11px}
   #minipick .mp-modes{margin-top:4px;display:flex;gap:6px}
+  #minipick .mp-best{align-self:center;font-size:11px;color:#d29922}
   #minipick .mp-soon{color:#7f868e;font-size:11px;margin-top:6px}
   #minipick button.pri{background:#238636;border-color:#238636;color:#fff}
   #minipick .st-board{margin:6px auto 0;max-width:220px;text-align:left;font-size:11px}
@@ -1791,6 +1825,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                   .map(([c, label, o]) => `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
                   .join('\n      ')}
       <select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>
+      ${IS_RELEASE ? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly" title="自己玩小遊戲（單機，開發版限定）">🎮 小遊戲 <span class="devtag">dev</span></button>'}
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
       <label class="k" id="festplaza" data-help="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
@@ -1903,6 +1938,7 @@ let CW=HOME_CW, CH=HOME_CH;
 // 寒風的點陣（天狐獸的子彈，依顏色分好組）。伺服器端抽好再內嵌，見 loadWindArt。
 const WIND_ART=${JSON.stringify(WIND_ART)};
 const DN=${DINO_SRC ? '(function(){const module={exports:{}};' + DINO_SRC + ';return module.exports;})()' : 'null'};   // 小恐龍的模擬（dino-sim.js）
+const STS=${STAIRS_SRC ? '(function(){const module={exports:{}};' + STAIRS_SRC + ';return module.exports;})()' : 'null'};   // 下樓梯的模擬（stairs-sim.js）：前線單機用
 const DS=${DUEL_SRC ? '(function(){const module={exports:{}};' + DUEL_SRC + ';return module.exports;})()' : 'null'};   // 手動戰鬥的判定（duel-sim.js）：dev 測試對戰在頁面跑
 const MB_BOOM=${JSON.stringify(duelBoom())};   // 手動戰鬥被打中的爆炸（一般戰鬥那顆）
 const VB=${VOLLEY_SRC ? '(function(){const module={exports:{}};' + VOLLEY_SRC + ';return module.exports;})()' : 'null'};   // 打排球的模擬（volley-sim.js）
@@ -2052,6 +2088,7 @@ function inScope(sc){
 // 每次切進營地換一個亂數，跟著 /yard 送出去：愚人節的變色版「進出一次抽一次」（見 festival.js swapChar）
 let yardSalt=Math.random().toString(36).slice(2,8);
 function setView(v){
+  if(comState&&v!==view) comStop();   // 單機小遊戲玩到一半切畫面 → 收掉（不然畫布會留在新畫面上）
   if(v==='yard' && view!=='yard') yardSalt=Math.random().toString(36).slice(2,8);
   if(v!=='yard' && view==='yard'){ p2Reset(); if(v!=='plaza') renderBattle(null); }
   if(v!=='yard'){ for(const id of ['pgprev','pgnext','pgdots']) document.getElementById(id).style.display='none'; }
@@ -3545,6 +3582,7 @@ async function poll(){
     lastFetch=Date.now();
     document.getElementById('tick').textContent='#'+s.tick;
     document.getElementById('kind').textContent=s.kind;
+    frontKind=s.kind;
     // cut-in 想吃滿整個畫面，上下那 1 dot 留白會透出底圖，看起來像沒對齊 → 塗黑當黑邊。
     // 戰鬥只在真正演 cut-in 的那幾拍套（打鬥過程不套，那時留白透出底圖是正常的）；
     // 卡片右半整片都是 CutIn 圖，所以整段顯示期間都套。
@@ -3605,7 +3643,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4325,8 +4363,7 @@ function stDraw(){
   for(let x=0;x<ST_W;x+=2){ g.beginPath(); g.moveTo(x*DW,DH*1.2); g.lineTo((x+1)*DW,ST_CEIL*DH); g.lineTo((x+2)*DW,DH*1.2); g.fill(); }
   // 玩家
   const prevP=new Map((stPrev?stPrev.p:[]).map(q=>[q[0],q]));
-  const m=stMine(), me=stairs&&stairs.meId;
-  const names=new Map(((m&&m.ids)||[]).map((id,i)=>[id,{ name:m.names[i], char:m.chars[i] }]));
+  const me=stMeId(), names=stInfoMap();   // 單機（前線）時是 comState 那組
   const nowMs=performance.now();
   for(const q of stCur.p){
     const p0=prevP.get(q[0]); const x=p0?lerp(p0[1],q[1]):q[1], y=p0?lerp(p0[2],q[2]):q[2];
@@ -4413,7 +4450,9 @@ function miniOpen(){
   const dv=document.getElementById('duelDev'); if(dv) dv.addEventListener('click',mbDevStart);
   el.style.display='block';
 }
-function miniClose(){ document.getElementById('minipick').style.display='none'; }
+function miniClose(){ document.getElementById('minipick').style.display='none';
+  if(view!=='plaza'&&!comState){ const st=document.getElementById('stage'); st.style.minWidth=''; st.style.minHeight=''; }   // 前線：選單撐開的舞台收回去
+}
 // 小遊戲選單裡看排行榜（前 20 名）：跟廣場主機要，「返回」回到遊戲列表
 function miniBoard(kind){
   const el=document.getElementById('minipick'), gm=MINI_GAMES.find(x=>x.id===kind)||{};
@@ -4473,7 +4512,7 @@ function stEndPanel(end){
   if(volley&&me){
     const op=end.result.find(r=>r.id!==me.id);
     h+='<div class="st-res"><b>'+(me.rank===1?'你贏了！':'你輸了')+'</b>'+(me.score!=null&&op&&op.score!=null?'　'+me.score+' : '+op.score:'')
-      +(op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
+      +(op&&op.why==='resign'?'（對手認輸）':me.why==='resign'?'（認輸）':op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
   }
   else if(me&&!gomoku&&!duel) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
   const rec=(end.records||[]).find(r=>r.id===stairs.meId);
@@ -4486,6 +4525,8 @@ function stEndPanel(end){
 }
 function stPanel(m){
   const el=document.getElementById('stairspanel'); el.style.display='block';
+  // 等待畫面：畫布上不該留著上一局（任何小遊戲）的最後一幕
+  { const cv=document.getElementById('stairscv'); if(cv.width) cv.getContext('2d').clearRect(0,0,cv.width,cv.height); }
   const host=stairs.meId===m.host, end=stairs.end;
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku';
@@ -4514,11 +4555,15 @@ const ST_KEYS={ arrowleft:-1, a:-1, arrowright:1, d:1 };
 function stSteer(){
   let d=0; for(const k of stKeys) d+=ST_KEYS[k]; d=Math.sign(d);
   if(d===stDir) return;
-  stDir=d; sendCmd('stairsInput',{dir:String(d)});
+  stDir=d;
+  if(comState) return;   // 單機：本地的迴圈每拍自己讀 stDir
+  sendCmd('stairsInput',{dir:String(d)});
 }
 window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
-  if(!stPlaying()||!(k in ST_KEYS)||typing()) return;
+  // 只在下樓梯攔：原本「任何小遊戲進行中」都攔，連線打排球的 ← → 被這裡吃掉（2026-10-21 回報）
+  const sm=stMine(), stOn=(stPlaying()&&(sm.kind||'stairs')==='stairs')||(comState&&comState.kind==='stairs');
+  if(!stOn||!(k in ST_KEYS)||typing()) return;
   e.preventDefault(); e.stopImmediatePropagation();
   if(!stKeys.has(k)){ stKeys.add(k); stSteer(); }
 },true);
@@ -4544,7 +4589,7 @@ function dnBegin(info){
   if(!dnRaf) dnRaf=requestAnimationFrame(dnFrame);
 }
 function dnStop(){ if(dnRaf){ cancelAnimationFrame(dnRaf); dnRaf=0; } dnGame=null; dnHeld=false; }
-function dnPlaying(){ const m=stMine(); return !!(m&&m.kind==='dino'&&m.state==='play'&&dnGame&&dnGame.alive&&!dnSpectate); }
+function dnPlaying(){ if(comState) return comState.kind==='dino'&&!!dnGame&&dnGame.alive; const m=stMine(); return !!(m&&m.kind==='dino'&&m.state==='play'&&dnGame&&dnGame.alive&&!dnSpectate); }
 function dnGhost(d){ if(d&&d.id&&d.id!==(stairs&&stairs.meId)) dnGhosts[d.id]={ dist:d.dist, y:d.y, alive:d.alive, at:performance.now() }; }
 function dnReport(force){
   const g=dnGame; if(!g||dnSpectate) return;
@@ -4559,8 +4604,8 @@ function dnFrame(ts){
   if(now>=dnStartAt&&g.alive&&!dnSpectate){
     if(!dnLastTs) dnLastTs=ts;
     dnAcc+=Math.min(0.1,(ts-dnLastTs)/1000); dnLastTs=ts;
-    while(dnAcc>=DN.DT&&g.alive){ dnAcc-=DN.DT; if(DN.step(g)==='dead'){ dnReport(true); dnSaveBest(); } }
-    if(g.alive) dnReport(false);
+    while(dnAcc>=DN.DT&&g.alive){ dnAcc-=DN.DT; if(DN.step(g)==='dead'){ if(comState) miniSoloOver('dino',DN.score(g.dist)); else { dnReport(true); dnSaveBest(); } } }
+    if(g.alive&&!comState) dnReport(false);
   } else dnLastTs=ts;
   dnDraw(now);
 }
@@ -4598,8 +4643,7 @@ function dnDraw(now){
     else { const [cw,ch]=o.kind==='cactusBig'?DN.CACTUS.big:DN.CACTUS.small; for(let k=0;k<o.n;k++) dnCactus(g,X+k*(cw+1)*DW,Y,cw,ch,DW,DH); }
   }
   // 角色：自己的 vpet；別人是半透明影子（x 跟我的距離差，活著的往前推估一點，畫面比較順）
-  const m=stMine(), me=stairs&&stairs.meId;
-  const info=new Map(((m&&m.ids)||[]).map((id,i)=>[id,{ name:m.names[i], char:m.chars[i] }]));
+  const me=stMeId(), info=stInfoMap();   // 單機（前線）時是 comState 那組
   const drawPet=(id,dist,y,alive,alpha)=>{
     const X=(DN.RX+dist-g0.dist)*DW; if(X>Wpx||X+DN.S*DW<0) return;
     const sp=stSprites[(info.get(id)||{}).char];
@@ -4621,7 +4665,8 @@ function dnDraw(now){
   // 分數（像原版：HI 最高分＋這一局，5 位數）
   const pad=(n)=>('00000'+n).slice(-5);
   g.fillStyle='#535353'; g.font='bold 13px ui-monospace,Consolas,monospace'; g.textAlign='right';
-  g.fillText((dnBest?'HI '+pad(dnBest)+'  ':'')+pad(DN.score(g0.dist)), Wpx-8, 18);
+  const hi=comState?miniBestCache.dino:dnBest;
+  g.fillText((hi?'HI '+pad(hi)+'  ':'')+pad(DN.score(g0.dist)), Wpx-8, 18);
   g.textAlign='center';
   if(now<dnStartAt){ g.fillStyle='#d29922'; g.font='bold 44px ui-monospace,Consolas,monospace'; g.fillText(String(Math.ceil((dnStartAt-now)/1000)), Wpx/2, Hpx/2); g.font='12px sans-serif'; g.fillStyle='#57606a'; g.fillText('空白鍵、↑ 或點畫面跳（按住跳高一點）', Wpx/2, Hpx/2+22); }
   else if(dnSpectate){ g.fillStyle='#57606a'; g.font='bold 14px sans-serif'; g.fillText('這一局開始了，觀戰中…', Wpx/2, 40); }
@@ -4664,28 +4709,116 @@ function stInfoMap(){
   return new Map(((m&&m.ids)||[]).map((id,i)=>[id,{ name:m.names[i], char:m.chars[i] }]));
 }
 let stMyChar=null;
+// ── 前線小遊戲（單機）─────────────────────────────────────────────────
+// 只有單機：下樓梯、小恐龍自己玩，五子棋、打排球跟電腦玩（手動戰鬥還在調，先不放）。
+// 前線的格子比較大，玩的時候換成廣場那組小格（畫面大小跟廣場一樣），玩完換回來。
+// 開著的時候每幾秒跟 daemon 報一次 frontMini：vpet 在玩，沒空打仗 → 自動戰鬥不觸發。
+let frontKind='', miniBestCache={ stairs:0, dino:0 }, miniFrontTimer=0;
+function miniFrontOn(){
+  if(view==='plaza') return;
+  document.body.classList.add('minifront');
+  CW=YARD_CW; CH=YARD_CH;
+  sendCmd('frontMini',{on:'1'});
+  clearInterval(miniFrontTimer);
+  miniFrontTimer=setInterval(()=>{ if(comState&&view!=='plaza') sendCmd('frontMini',{on:'1'}); miniFrontFit(); }, 200);
+}
+function miniFrontOff(){
+  if(!document.body.classList.contains('minifront')) return;
+  document.body.classList.remove('minifront');
+  clearInterval(miniFrontTimer); miniFrontTimer=0;
+  if(view!=='yard'&&view!=='plaza'){ CW=HOME_CW; CH=HOME_CH; }
+  const st=document.getElementById('stage'); st.style.minWidth=''; st.style.minHeight='';
+  sendCmd('frontMini',{on:'0'});
+}
+// 舞台撐到小遊戲畫布那麼大（前線的舞台本來只有走路那條的高度）
+function miniFrontFit(){
+  if(!document.body.classList.contains('minifront')) return;
+  const st=document.getElementById('stage'), cv=document.getElementById('stairscv');
+  st.style.minWidth=cv.width+'px'; st.style.minHeight=cv.height+'px';
+}
+// 一局結束（單機）：記個人最佳 → 結果面板
+function miniSoloOver(kind, val){
+  if(!comState||comState.done) return;
+  comState.done=true;
+  sendCmd('miniBest',{kind, val:String(val)}).then(r=>{
+    if(r&&r.ok) miniBestCache={ stairs:r.stairs, dino:r.dino };
+    const show=kind==='stairs'?'B'+val:String(val), best=r&&r.ok?(kind==='stairs'?'B'+r.stairs:String(r.dino)):'';
+    setTimeout(()=>{ if(comState&&comState.kind===kind)
+      comEndPanel(null,'這一局：<b>'+show+'</b>'+(r&&r.record?'　🎉 刷新個人最佳！':best?'　個人最佳 '+best:'')); }, 1200);
+  });
+}
+// 前線的小遊戲選單：每個遊戲一顆「開始」（自己玩／跟電腦玩），旁邊是個人最佳
+const FRONT_GAMES=[
+  { id:'stairs', name:'🪜 下樓梯', desc:'← → 或 A D 左右移動，踩階梯往下走，越深越快。三顆心，尖刺和天花板會扣血。' },
+  { id:'dino', name:'🦖 小恐龍', desc:'空白鍵、↑ 或點畫面跳，跳過仙人掌、閃過飛鳥，越跑越快。' },
+  { id:'gomoku', name:'⚫ 五子棋', desc:'跟 Terriermon 助手下，先連成五顆就贏（你執黑先下）。' },
+  { id:'volley', name:'🏐 打排球', desc:'跟 Terriermon 助手打。← → 移動、↑ 跳，碰到球時按空白鍵或點畫面用力打。先拿 7 分贏。' },
+];
+function miniFrontOpen(){
+  const el=document.getElementById('minipick');
+  if(frontKind==='battle'||frontKind==='evolve'){ flashCmdMsg('正在戰鬥／進化，等演完再玩','#d29922'); return; }
+  const draw=()=>{
+    el.innerHTML='<div class="mp-h">🎮 小遊戲（單機）</div>'+FRONT_GAMES.map(gm=>{
+      const b=gm.id==='stairs'?miniBestCache.stairs:gm.id==='dino'?miniBestCache.dino:0;
+      return '<div class="mp-game"><b>'+gm.name+'</b><div class="mp-desc">'+gm.desc+'</div><div class="mp-modes">'
+        +'<button class="pri" data-s="'+gm.id+'">開始</button>'+(b?'<span class="mp-best">個人最佳 '+(gm.id==='stairs'?'B'+b:b)+'</span>':'')+'</div></div>';
+    }).join('')+'<div class="mp-soon">玩的時候前線不會自動戰鬥。</div><div class="mp-modes" style="justify-content:center;margin-top:8px"><button id="miniclose">關閉</button></div>';
+    el.querySelectorAll('button[data-s]').forEach(b=>b.addEventListener('click',()=>{
+      if(b.dataset.s==='stairs'&&!STS){ flashCmdMsg('下樓梯的模擬沒載入','#f85149'); return; }
+      if(b.dataset.s==='dino'&&!DN){ flashCmdMsg('小恐龍的模擬沒載入','#f85149'); return; }
+      comStart(b.dataset.s);
+    }));
+    document.getElementById('miniclose').addEventListener('click',miniClose);
+  };
+  // 前線的舞台只有走路那條高：選單開著時先撐到小遊戲那麼大（跟廣場一樣）
+  const st=document.getElementById('stage'); st.style.minWidth=(69*YARD_CW)+'px'; st.style.minHeight=(54*(YARD_CH/2))+'px';
+  draw(); el.style.display='block';
+  sendCmd('miniBest',{}).then(r=>{ if(!r||!r.ok) return; miniBestCache={ stairs:r.stairs, dino:r.dino }; stMyChar=r.char||stMyChar; if(el.style.display==='block') draw(); });
+}
+// 前線小遊戲先開發版限定：release 沒有這顆鈕
+if(document.getElementById('minifront')) document.getElementById('minifront').addEventListener('click',()=>{
+  const el=document.getElementById('minipick'); if(el.style.display==='block') miniClose(); else miniFrontOpen();
+});
 function comStart(kind){
   miniClose();
   stEndSeen=(stairs&&stairs.end&&stairs.end.at)||stEndSeen;   // 上一局（連線）的結果不要蓋過來
   comState={ kind, startAt:Date.now()+stSkew+1500, done:false };
   mbStop(); mbUnstyle();
+  miniFrontOn();
   stLoadSprites({ chars:[stMyChar, COM_CHAR] });
   const box=document.getElementById('stairsbox'); box.style.display='block';
   document.getElementById('stairspanel').style.display='none';
   stStream(false); stStop(); dnStop(); vbStop(); gmStop();
   if(kind==='volley'){ vbBegin({ startAt:comState.startAt, sides:['me',COM_ID] }); }
+  else if(kind==='dino'){ dnStop(); dnBegin({ seed:(Math.random()*4294967296)>>>0, startAt:Date.now()+stSkew+2000 }); }
+  else if(kind==='stairs'){
+    // 下樓梯（單機）：伺服器那套模擬（stairs-sim）搬到頁面跑，同一個 50ms 一拍；畫面照舊吃 stCur／stPrev
+    const sg=STS.createGame({ seed:(Math.random()*4294967296)>>>0, mode:'endless', players:[{ id:'me' }] });
+    comState.st=sg; stPrev=null; stCur=STS.snapshot(sg); stCurAt=performance.now(); stDir=0; stKeys.clear(); stFx=[];
+    comState.timer=setInterval(()=>{
+      if(!comState||comState.st!==sg) return;
+      STS.setInput(sg,'me',stDir);
+      const ev=STS.step(sg);
+      stPrev=stCur; stCur=STS.snapshot(sg); stCurAt=performance.now();
+      for(const v of ev) stEvent(v);
+      if(sg.over){ clearInterval(comState.timer); miniSoloOver('stairs',sg.players[0].floor); }
+    }, STS.TICK_MS);
+    stStart();
+  }
   else {
     comState.gm={ board:'0'.repeat(225).split(''), turn:0, sides:['me',COM_ID], last:null, expr:['IDLE','IDLE'], exprAt:0, winner:null, n:15, moves:0 };
     gmStart();
   }
 }
-function comStop(){ comState=null; vbStop(); gmStop(); mbStop(); document.getElementById('stairsbox').style.display='none'; poll(); }
+function comStop(){ if(comState&&comState.timer) clearInterval(comState.timer); comState=null; vbStop(); gmStop(); mbStop(); dnStop(); stStop(); stPrev=stCur=null; miniFrontOff(); document.getElementById('stairsbox').style.display='none'; poll(); }
 // 結束面板（本地）：勝負、比分／手數，再來一局或回廣場
 function comEndPanel(won, text){
   const el=document.getElementById('stairspanel'); el.style.display='block';
-  const title=comState.kind==='volley'?'🏐 打排球':comState.kind==='duel'?'⚔ 手動戰鬥（dev 測試）':'⚫ 五子棋';
-  el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(comState.kind==='duel'?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res"><b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　'+text+'</div>'
-    +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">回到廣場</button></div>';
+  const k0=comState.kind, solo=k0==='stairs'||k0==='dino';
+  const title={ volley:'🏐 打排球', duel:'⚔ 手動戰鬥（dev 測試）', stairs:'🪜 下樓梯', dino:'🦖 小恐龍' }[k0]||'⚫ 五子棋';
+  // 單機（下樓梯、小恐龍）沒有勝負：won 不用，text 是成績那一行
+  el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(k0==='duel'||solo?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res">'+(solo?'':'<b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　')+text+'</div>'
+    +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div>';
   document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(); else comStart(k); });
   document.getElementById('comback').addEventListener('click',comStop);
 }
@@ -4758,7 +4891,11 @@ const GM_EXPR={ IDLE:-1, HURT:2, SAD:3, ATTACK:4, HAPPY:5, ANGRY:6 };   // 表�
 const GM_EXPR_MS=2200;   // 表情維持多久（結束後的勝負表情一直維持）
 let gmRaf=0, gmHover=null;
 function gmData(){ if(comState) return comState.kind==='gomoku'?comState.gm:null; const m=stMine(); return m&&m.kind==='gomoku'&&m.gomoku?m.gomoku:null; }
-function gmStart(){ if(!gmRaf) gmRaf=requestAnimationFrame(gmFrame); document.getElementById('gmresign').style.display=''; }
+function gmStart(){ if(!gmRaf) gmRaf=requestAnimationFrame(gmFrame); document.getElementById('gmresign').style.display='none'; }   // 認輸改成畫面裡的長按白旗（rsDraw）
+function gmResign(){
+  if(comState&&comState.gm){ comState.gm.winner=1; comState.gm.expr=['SAD','HAPPY']; comState.gm.exprAt=Date.now()+stSkew; comEndPanel(false,'（認輸）'); return; }
+  sendCmd('gomokuResign').then(()=>poll());
+}
 function gmStop(){ if(gmRaf){ cancelAnimationFrame(gmRaf); gmRaf=0; } document.getElementById('gmresign').style.display='none'; }
 function gmFrame(){ gmRaf=requestAnimationFrame(gmFrame); gmDraw(); }
 // 棋盤在畫布上的位置：正中間的正方形（留邊給兩邊的 vpet）
@@ -4820,6 +4957,7 @@ function gmDraw(){
   g.fillStyle='#e6edf3'; g.font='bold 12px sans-serif'; g.textAlign='center';
   const msg=gm.winner!=null?(gm.winner<0?'平手！':(gm.sides[gm.winner]===me?'你贏了！':'你輸了…')):(myTurn?'輪到你（'+(gm.turn===0?'黑':'白')+'）':gm.thinking?'助手思考中…':'等對手下…');
   g.fillText(msg, Wpx/2, 14);
+  if(gm.winner==null) rsDraw(g,Wpx-46,Hpx-46,36,gmResign);
 }
 function gmFit(g,t,w){ if(g.measureText(t).width<=w) return t; while(t.length>1&&g.measureText(t+'…').width>w) t=t.slice(0,-1); return t+'…'; }
 // 點棋盤：換算成最近的交叉點，輪到我、那裡沒子就下
@@ -4836,7 +4974,7 @@ function gmCell(e){
   cv.addEventListener('mousemove',e=>{ gmHover=gmData()?gmCell(e):null; });
   cv.addEventListener('mouseleave',()=>{ gmHover=null; });
   cv.addEventListener('click',e=>{
-    const gm=gmData(); if(!gm||gm.winner!=null||gm.sides[gm.turn]!==stMeId()) return;
+    const gm=gmData(); if(!gm||gm.winner!=null||gm.sides[gm.turn]!==stMeId()||rsAt(e)) return;
     const c=gmCell(e); if(!c||gm.board[c.y*(gm.n||15)+c.x]!=='0') return;
     if(comState){ comPlace(c.x,c.y); return; }   // 跟電腦玩：本地下
     sendCmd('gomokuMove',{ x:String(c.x), y:String(c.y) }).then(r=>{ if(r&&!r.ok) flashCmdMsg(r.error||'下不了','#f85149'); poll(); });
@@ -4866,10 +5004,13 @@ function mbData(){
 }
 function mbMe(d){ return comState?0:Math.max(0,d.sides.indexOf(stMeId())); }
 function mbNow(){ return Date.now()+stSkew; }
-function mbStart(){ if(!mbRaf) mbRaf=requestAnimationFrame(mbFrame); document.getElementById('gmresign').style.display=''; }
+// 認輸改成畫在畫面裡的白旗（長按，見 mbResignBtn）：網頁原生那顆不用
+function mbStart(){ if(!mbRaf) mbRaf=requestAnimationFrame(mbFrame); document.getElementById('gmresign').style.display='none'; }
 // 停的時候畫布維持縮放（結束面板後面還看得到最後一幕）；換別的小遊戲時才拿掉（mbUnstyle）
 function mbStop(){ if(mbRaf){ cancelAnimationFrame(mbRaf); mbRaf=0; } mbSel=null; mbAnim=null; }
-function mbUnstyle(){ const cv=document.getElementById('stairscv'); cv.style.width=''; cv.style.height=''; }
+// 換別的小遊戲（或進別的房的等待畫面）：拿掉縮放、清掉最後一幕 —— 不清的話等待畫面後面會留著擂台（2026-10-21 回報）
+function mbUnstyle(){ const cv=document.getElementById('stairscv'); if(!cv.style.width) return;
+  cv.style.width=''; cv.style.height=''; cv.getContext('2d').clearRect(0,0,cv.width,cv.height); }
 function mbPlaying(){ return !!mbRaf&&!!mbData(); }
 // 點陣 → 小畫布（s 倍、可左右翻）。cx/cy/hw：內容外框的中心與半寬（子彈圖的內容不在正中間）
 function mbBake(dots,s,flip){
@@ -4984,7 +5125,8 @@ function mbSelFor(d){
   return mbSel;
 }
 function mbBarVal(){ const ph=((performance.now()-mbSel.barT0)%MB.BAR_MS)/MB.BAR_MS; return ph<0.5?ph*2:2-ph*2; }
-function mbMoveOk(d,mi,mv){ const r=d.row[mi]+mv; return r>=0&&r<3; }
+// 一次只能走一格（上／不動／下）而且不能出界。原本只檢查出界 → 隔兩格的位置也會出現虛影、點了被伺服器退回（2026-10-21）
+function mbMoveOk(d,mi,mv){ const r=d.row[mi]+mv; return (mv===-1||mv===0||mv===1)&&r>=0&&r<3; }
 function mbChooseMove(d,mi,mv){ if(!mbMoveOk(d,mi,mv)) return; mbSel.mv=mv; mbSel.step=1; mbSel.cur=d.row[mi]+mv; }
 function mbChooseAim(a){ mbSel.aim=a; mbSel.step=2; mbSel.barT0=performance.now(); }
 function mbBack(){ if(mbSel.step===2){ mbSel.step=1; mbSel.cur=mbSel.aim; } else if(mbSel.step===1){ mbSel.step=0; mbSel.cur=mbSel.mv; } }
@@ -5009,10 +5151,51 @@ function mbKey(k){
 }
 function mbCanvasXY(e){ const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect(); return [(e.clientX-rc.left)*cv.width/rc.width,(e.clientY-rc.top)*cv.height/rc.height]; }
 function mbCellAt(x,y){ const c=Math.floor((x-MB.GX)/MB.GW), r=Math.floor((y-MB.GY)/MB.GH); return c>=0&&c<3&&r>=0&&r<3?[c,r]:null; }
+// ── 認輸：右下角的白旗小方塊（長按，共用的 rsDraw）──
+const MB_RF={ w:40 };
+const mbResignRect=()=>({ x:MB.W-MB.GX-MB_RF.w+6, y:MB.H-MB.PANEL+8, w:MB_RF.w, h:MB_RF.w });
+function mbResignActive(d,now){ return d.winner==null&&now>=d.startAt; }
+function mbResignBtn(g,d,now){ if(!mbResignActive(d,now)) return; const r=mbResignRect(); rsDraw(g,r.x,r.y,r.w,()=>mbResign(d)); }
+// ── 長按認輸（白旗小方塊）：手動戰鬥、五子棋、打排球共用（2026-10-21 定 A3 版）──
+// 按住 RS_MS 才算：外框從左上角順時針慢慢變紅、白旗擺動，放開或滑出去就取消；點一下沒作用。
+// 位置由各遊戲每一幀畫的時候給（rsDraw）；按的判定看最近一幀畫在哪（停畫超過 300ms 就不算）
+const RS_MS=1000;
+const RS_FLAG=[['P.......','PWWWWW..','PWWWWWW.','PWWWWWW.','PWWWWW..','P.......','P.......','P.......'],
+               ['P.......','PWWWW...','PWWWWWW.','PWWWWWWW','PWWWW...','P.......','P.......','P.......']];
+let rsHold=0, rsBox=null;
+function rsDraw(g,x,y,w,onResign){
+  const t=performance.now(), p=rsHold?Math.min(1,(t-rsHold)/RS_MS):0;
+  rsBox={ x, y, w, at:t };
+  g.fillStyle='#000'; g.fillRect(x-2,y-2,w+4,w+4);
+  g.fillStyle='#5a2a2a'; g.fillRect(x,y,w,w); g.fillStyle='#3a1a1a'; g.fillRect(x,y+w-3,w,3);
+  const f=RS_FLAG[rsHold?Math.floor(t/120)%2:0], s=Math.max(2,Math.floor(w*0.6/8)), fx=x+(w-8*s)/2+2, fy=y+(w-8*s)/2;
+  for(let j=0;j<8;j++) for(let i=0;i<8;i++){ const c=f[j][i]; if(c==='.') continue;
+    g.fillStyle=c==='P'?'#8a6a40':(i>4?'#d8d8d8':'#fafafa'); g.fillRect(fx+i*s,fy+j*s,s,s); }
+  if(p>0){
+    const e=[[x,y,1,0],[x+w,y,0,1],[x+w,y+w,-1,0],[x,y+w,0,-1]];
+    g.save(); g.strokeStyle='#ff6b6b'; g.lineWidth=4; g.beginPath(); g.moveTo(x,y);
+    let left=4*w*p; for(const [ex,ey,dx,dy] of e){ const seg=Math.min(w,left); g.lineTo(ex+dx*seg,ey+dy*seg); left-=seg; if(left<=0) break; }
+    g.stroke(); g.restore();
+  }
+  // 提示字：放在方塊上面；方塊貼著上緣（打排球放右上角）就放下面
+  const ly=y<30?y+w+12:y-10, label=rsHold?'放開取消':'按住認輸';
+  g.save(); g.font='bold 12px sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.lineWidth=3; g.strokeStyle='#000';
+  g.strokeText(label,x+w/2,ly); g.fillStyle='#ffb3b3'; g.fillText(label,x+w/2,ly); g.restore();
+  if(p>=1){ rsHold=0; rsBox=null; onResign(); }
+}
+function rsAt(e){
+  if(!rsBox||performance.now()-rsBox.at>300) return false;
+  const [x,y]=mbCanvasXY(e); return x>=rsBox.x&&x<rsBox.x+rsBox.w&&y>=rsBox.y&&y<rsBox.y+rsBox.w;
+}
+function mbResign(d){
+  if(comState){ d.winner=1; d.endAt=0; return; }   // dev 測試：本地直接判輸
+  sendCmd('duelResign').then(()=>poll());
+}
 function mbClick(e){
   const d=mbData(); if(!d||mbPhase(d,mbNow())!=='pick') return;
   const s=mbSelFor(d), mi=mbMe(d); if(s.sent) return;
   const [x,y]=mbCanvasXY(e);
+  if(rsAt(e)) return;   // 認輸那塊是長按，點一下不算任何選擇
   const b=mbBtns.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);
   if(b){ if(!b.off) b.act(); return; }
   if(s.step===2){ mbSend(mbBarVal()); return; }
@@ -5138,6 +5321,7 @@ function mbDraw(d,now){
   if(phase==='pick') mbPanel(g,d,mi,W,H,sel);
   if(over){ g.fillStyle='rgba(0,0,0,.4)'; g.fillRect(0,H/2-26,W,52); g.fillStyle='#fff'; g.font='bold 22px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
     g.fillText(d.winner<0?'平手！':d.winner===mi?'你贏了！':'你輸了…',W/2,H/2); g.textBaseline='alphabetic'; }
+  mbResignBtn(g,d,now);
   if(phase==='open') mbCutin(g,d,mi,W,H,now);
 }
 // 下方的選擇面板：步驟、按鈕、力度條（按鈕位置記在 mbBtns 給點擊用）
@@ -5167,7 +5351,7 @@ function mbPanel(g,d,mi,W,H,sel){
     g.fillStyle='#000'; g.fillRect(x-2,y-2,w+4,h+4);
     g.fillStyle='#4a6a4a'; g.fillRect(x,y,w*DS.ZONE_15,h); g.fillStyle='#e67e22'; g.fillRect(x+w*DS.ZONE_15,y,w*(DS.ZONE_2-DS.ZONE_15),h);
     g.fillStyle='#e74c3c'; g.fillRect(x+w*DS.ZONE_2,y,w*(1-DS.ZONE_2),h);
-    g.font='bold 12px sans-serif'; g.textAlign='center'; g.fillStyle='#cfe8cf'; g.fillText('×1',x+w*0.4,y+h/2);
+    g.font='bold 12px sans-serif'; g.textAlign='center'; g.fillStyle='#cfe8cf'; g.fillText('×1',x+w*DS.ZONE_15/2,y0+10);   // 三個倍率都寫在條的上方
     g.fillStyle='#ffb366'; g.fillText('×1.5',x+w*(DS.ZONE_15+DS.ZONE_2)/2,y0+10); g.fillStyle='#ff8080'; g.fillText('×2',x+w*(1+DS.ZONE_2)/2+2,y0+10);
     g.fillStyle='#fff'; g.fillRect(x+w*v-2,y-5,4,h+10); g.fillStyle='#000'; g.fillRect(x+w*v-1,y-5,2,h+10);
     g.textAlign='left';
@@ -5194,6 +5378,10 @@ function mbCutin(g,d,mi,W,H,now){
 (function(){
   const cv=document.getElementById('stairscv');
   cv.addEventListener('click',e=>{ if(mbPlaying()) mbClick(e); });
+  // 長按認輸：比打排球的「點畫面殺球」先註冊，按在白旗上就攔下來（不會順便殺球）
+  cv.addEventListener('pointerdown',e=>{ if(!rsAt(e)) return; e.preventDefault(); e.stopImmediatePropagation(); rsHold=performance.now(); });
+  for(const t of ['pointerup','pointercancel','pointerleave']) cv.addEventListener(t,()=>{ rsHold=0; });
+  cv.addEventListener('pointermove',e=>{ if(rsHold&&!rsAt(e)) rsHold=0; });
   cv.addEventListener('mousemove',e=>{ if(mbPlaying()) mbHoverAt(e); });
 })();
 window.addEventListener('keydown',e=>{
@@ -5335,6 +5523,11 @@ function vbDraw(now){
     g.fillStyle='#fff'; g.font='bold 13px sans-serif'; g.fillText('等待對手連線…', Wpx/2, Hpx/2+5); }
   if(g0.over){ g.fillStyle='rgba(0,0,0,.4)'; g.fillRect(0,Hpx/2-20,Wpx,40);
     g.fillStyle='#fff'; g.font='bold 18px sans-serif'; g.fillText(g0.winner===vbMe?'你贏了！':'你輸了…', Wpx/2, Hpx/2+6); }
+  if(!g0.over&&now>=vbStartAt) rsDraw(g,Wpx-44,8,34,vbResign);   // 右上角（下面是場地）
+}
+function vbResign(){
+  if(comState){ if(vbGame){ vbGame.over=true; vbGame.winner=1-vbMe; } comState.done=true; comEndPanel(false,'（認輸）'); return; }
+  sendCmd('volleyResign').then(()=>poll());
 }
 // 按鍵：← → / A D 移動、↑ / W 跳、空白鍵 / Enter 殺球（捕獲階段攔下，廣場不會一起動）
 const VB_KEYS=['arrowleft','arrowright','arrowup','a','d','w',' ','enter'];

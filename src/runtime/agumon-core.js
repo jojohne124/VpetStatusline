@@ -378,6 +378,7 @@ function applyRanchAging(st, ranchFile, opts = {}) {
             pet.evolvedAt   = now;
             changed.push({ id: pet.id, from, to: rule.to, rule: rule.id || null });
             recordAlbumChar(rule.to, opts.albumFile);
+            pet.state.albumKey = albumKeyOf(pet.state);   // 營地裡變的已經算過一次，換出來時不要再算
             break;                                   // 一隻一次只套一條規則
         }
     }
@@ -929,24 +930,42 @@ function loadAlbum(file) {
 
 // 只在 characterId 真的變動時才碰磁碟（用 st._albumLast 短路），避免每秒 tick 都讀寫。
 // 值存「首次取得時間」，日後要排序 / 顯示「最近取得」都用得上。
+// 獲得次數（2026-10-21）：同一隻（同一次取得）只算一次 —— 用「角色 @ 上次進化／出生時間」當這次取得的記號，
+// 存在 st.albumKey（跟著這一隻走：收進營地再換出來、daemon 重開都不會重算）。
+// 舊存檔第一次跑到這裡（還沒有 albumKey）：已收錄的角色不加次數，免得一更新現役那隻就多一次。
+function albumKeyOf(st) { return st.characterId + '@' + (st.lastEvolveAt || st.birthAt || 0); }
 function recordAlbumIfChanged(st, file) {
     const id = st && st.characterId;
-    if (!id || st._albumLast === id) return false;
-    st._albumLast = id;
-    return recordAlbumChar(id, file);
+    if (!id) return false;
+    // 全新的存檔第一拍還沒有出生／進化時間（下一拍 decide 才補上）：等補上再記，不然記號一變就多算一次
+    if (!st.lastEvolveAt && !st.birthAt) return false;
+    const key = albumKeyOf(st);
+    if (st._albumLast === key) return false;
+    st._albumLast = key;
+    if (st.albumKey === key) return false;
+    const first = st.albumKey === undefined;
+    st.albumKey = key;
+    const count = !(first && loadAlbum(file || ALBUM_FILE).chars[id]);
+    return recordAlbumChar(id, file, { count });
 }
 
 // 直接登錄某個角色（不經過 st）。營地裡發生的進化需要這個 ——
 // recordAlbumIfChanged 看的是**現役**的 characterId，而大便獸是在冰箱裡變的，
 // 從頭到尾都沒當過現役，走那條路永遠不會被收錄。
-function recordAlbumChar(id, file) {
+// opts.count === false：只收錄、不加獲得次數。回傳 = 第一次收錄
+function recordAlbumChar(id, file, opts = {}) {
     if (!id) return false;
     const f = file || ALBUM_FILE;
     const a = loadAlbum(f);
-    if (a.chars[id]) return false;          // 已收錄，不覆蓋首次取得時間
-    a.chars[id] = Date.now();
+    const isNew = !a.chars[id];
+    if (isNew) a.chars[id] = Date.now();     // 已收錄的不覆蓋首次取得時間
+    if (opts.count !== false) {
+        if (!a.counts || typeof a.counts !== 'object') a.counts = {};
+        // 舊資料沒有次數：收錄過就當作已經 1 次
+        a.counts[id] = (a.counts[id] || (isNew ? 0 : 1)) + 1;
+    } else if (!isNew) return false;
     atomicWrite(f, JSON.stringify(a));
-    return true;
+    return isNew;
 }
 
 // ── 隱藏統計 ─────────────────────────────────────────────────────

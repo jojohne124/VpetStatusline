@@ -264,6 +264,8 @@ function buildGraph() {
             stage: all[id].stage,
             raised: isRaised,
             at: isRaised ? (album.chars[id] || 0) : 0,
+            // 獲得次數：舊資料沒有 counts → 收錄過就算 1 次
+            count: isRaised ? ((album.counts && album.counts[id]) || 1) : 0,
             col: si < 0 ? STAGE_ORDER.length : si,
             row: row[id],
             art: idleFrames(id, isRaised),

@@ -138,7 +138,7 @@ async function openCutin(x){
     atk=r.attack||null;
   }catch(e){}
   $('mname').textContent=x.name;
-  $('mat').textContent=x.at?('取得於 '+new Date(x.at).toLocaleString()):'';
+  $('mat').textContent=x.at?('取得於 '+new Date(x.at).toLocaleString()+'　共獲得 '+(x.count||1)+' 次'):'';
   $('modal').classList.add('show');
   atkPlay(atk);
 }

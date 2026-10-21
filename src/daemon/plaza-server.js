@@ -699,6 +699,13 @@ function createPlazaServer(opts = {}) {
         volleyEnd(r, body.winner, 'done', sc && sc.length === 2 && sc.every(Number.isInteger) ? sc : null);
         return { status: 200, body: { ok: true } };
     }
+    // 認輸：對手贏（2026-10-21：五子棋、打排球、手動戰鬥都有長按白旗）
+    function volleyResign(body) {
+        const id = body && body.id, r = stairsRoomOf(id);
+        if (!r || !r.volley) return { status: 409, body: { ok: false, error: '不在比賽中' } };
+        volleyEnd(r, r.volley.sides.find(x => x !== id), 'resign');
+        return { status: 200, body: { ok: true } };
+    }
     function volleyEnd(r, winner, why, score) {
         if (!r.volley) return;
         const sides = r.volley.sides;
@@ -961,7 +968,7 @@ function createPlazaServer(opts = {}) {
         }
         const SR = { '/stairs/open': stairsOpen, '/stairs/start': stairsStart, '/stairs/input': stairsInput,
                      '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j),
-                     '/stairs/vin': volleyInput, '/stairs/vend': volleyReport,
+                     '/stairs/vin': volleyInput, '/stairs/vend': volleyReport, '/stairs/vresign': volleyResign,
                      '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign,
                      '/stairs/dpick': duelPick, '/stairs/dresign': duelResign };
         if (req.method === 'POST' && SR[u.pathname]) {

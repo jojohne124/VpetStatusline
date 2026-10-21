@@ -149,6 +149,8 @@ function create(opts = {}) {
             onStairs('rooms', { rooms: stairsRooms });
         } else if (event === 'stairs:lobby' || event === 'stairs:start') {
             if (event === 'stairs:start') stairsEnd = null;
+            // 手動戰鬥是邀請接受後直接開房開打：邀請列（「等待回覆…」／「接受／拒絕」）要跟著收掉
+            if (event === 'stairs:start' && d.room && d.room.kind === 'duel') { outgoing = null; incoming = null; }
             onStairs(event.slice(7), d);
         } else if (event === 'stairs:tick') {
             onStairs('tick', d);

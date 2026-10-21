@@ -467,6 +467,32 @@ console.log('— 重播上限 —');
 // ── 營地裡的時間類進化（大便獸彩蛋）──────────────────────────────
 // 「任一幼年期在營地放置 48 小時 → 大便獸」。這裡最該釘住的是**不該觸發時不觸發**：
 // 誤觸的代價是玩家的收藏被無聲換成別的角色，而且不可逆。
+console.log('— 圖鑑：獲得次數 —');
+{
+    const ALB = path.join(TMP, 'album-count.json');
+    try { fs.unlinkSync(ALB); } catch (e) {}
+    const cnt = (id) => { try { return (JSON.parse(fs.readFileSync(ALB, 'utf8')).counts || {})[id]; } catch (e) { return undefined; } };
+    const st = { characterId: 'agumon' };
+    ok(core.recordAlbumIfChanged(st, ALB) === false && cnt('agumon') === undefined, '全新存檔還沒有出生時間就先記了（下一拍會多算一次）');
+    st.birthAt = 1000; st.lastEvolveAt = 1000;
+    core.recordAlbumIfChanged(st, ALB);
+    ok(cnt('agumon') === 1, '第一次取得沒有記 1 次');
+    core.recordAlbumIfChanged(st, ALB);
+    const again = { ...st }; delete again._albumLast;     // daemon 重開：快取沒了，記號（albumKey）還在
+    core.recordAlbumIfChanged(again, ALB);
+    ok(cnt('agumon') === 1, '同一隻重複算（每拍或 daemon 重開都會加）');
+    Object.assign(again, { characterId: 'greymon', lastEvolveAt: 2000 });   // 進化
+    core.recordAlbumIfChanged(again, ALB);
+    ok(cnt('greymon') === 1 && cnt('agumon') === 1, '進化成新角色沒有記 1 次');
+    Object.assign(again, { characterId: 'agumon', birthAt: 3000, lastEvolveAt: 3000 });   // 新的一隻亞古獸
+    core.recordAlbumIfChanged(again, ALB);
+    ok(cnt('agumon') === 2, '第二次取得同一種角色沒有變 2 次');
+    // 舊資料：收錄過、沒有次數、存檔也沒有記號 → 不加（畫面顯示 1）
+    fs.writeFileSync(ALB, JSON.stringify({ v: 1, chars: { gabumon: 5 } }));
+    core.recordAlbumIfChanged({ characterId: 'gabumon', birthAt: 9, lastEvolveAt: 9 }, ALB);
+    ok(cnt('gabumon') === undefined, '舊存檔一更新，現役那隻就多算一次');
+}
+
 console.log('— 特殊進化（營地時效）—');
 {
     const H = 3600e3;
@@ -493,7 +519,7 @@ console.log('— 特殊進化（營地時效）—');
                                                  { rulesFile: RULES, albumFile: ALBUM, ...o });
 
     rule();
-    put(49, child());
+    put(49, child({ albumKey: 'agumon@1' }));   // 收進營地前當過現役：圖鑑記號是亞古獸那次
     const ch = age();
     ok(ch && ch.length === 1 && ch[0].to === TO, '放了 49 小時應該要變');
     {
@@ -509,6 +535,10 @@ console.log('— 特殊進化（營地時效）—');
            `evoHistory 沒接上（得到 ${JSON.stringify(p1.state.evoHistory)}）`);
         const alb = JSON.parse(fs.readFileSync(ALBUM, 'utf8'));
         ok(!!alb.chars[TO], '圖鑑沒登錄 —— 牠從沒當過現役，recordAlbumIfChanged 收不到');
+        // 獲得次數：營地裡變的算一次；之後換出來當現役不要再算一次
+        ok(alb.counts && alb.counts[TO] === 1, '營地裡進化沒算進獲得次數');
+        core.recordAlbumIfChanged({ ...p1.state }, ALBUM);
+        ok(JSON.parse(fs.readFileSync(ALBUM, 'utf8')).counts[TO] === 1, '營地裡變的那隻換出來又多算一次');
     }
     ok(age() === null, '已經變過的不該再變一次');
 

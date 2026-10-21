@@ -1530,6 +1530,33 @@ setTimeout(async () => {
     ok(/sendCmd\('duelPick',args\)/.test(src) && /if\(comState\)\{ d\.picks\[0\]=pk;/.test(src), '手動戰鬥的選擇沒送伺服器（或 dev 測試沒在本地收）');
     ok(/\+\(PLAZA_ADMIN&&DS\?'<div class="mp-game devonly"><b>⚔ 手動戰鬥（dev 測試）/.test(src) && /const DEV_ONLY\s*= new Set\(\[[^\]]*'duelDev'/.test(src), 'dev 測試對戰沒有擋在開發版');
     ok(/cv\.style\.width=\(69\*CW\)\+'px'; cv\.style\.height=\(54\*\(CH\/2\)\)\+'px';/.test(src) && /mbStop\(\); mbUnstyle\(\);/.test(src), '手動戰鬥的畫布沒縮到跟其他小遊戲一樣大（或換遊戲時沒還原）');
+    // 前線小遊戲（單機）：按鈕只在前線、下樓梯模擬內嵌、玩的時候報 frontMini、daemon 收到就不觸發自動戰鬥也不排隊、個人最佳只記本機
+    ok(/\$\{IS_RELEASE \? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly"/.test(src)
+       && /'duelDev', 'frontMini', 'miniBest'\]\);/.test(src), '前線的「🎮 小遊戲」沒有擋在開發版（或 release 也有這顆鈕）');
+    ok(/const STS=\$\{STAIRS_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ STAIRS_SRC/.test(src) && /STS\.setInput\(sg,'me',stDir\);\s*const ev=STS\.step\(sg\);/.test(src), '前線的下樓梯沒有在頁面本地跑模擬');
+    ok(/sendCmd\('frontMini',\{on:'1'\}\)/.test(src) && /if \(!inPlaza && Date\.now\(\) < frontMiniUntil\) \{\s*st\._noAutoBattle = true;\s*if \(!\(st\.battleStartStep >= 0\)\) \{\s*st\.battlePending = false;\s*if \(st\.battleArmHookTs\) st\.battleFiredHookTs = st\.battleArmHookTs;/.test(src),
+       '前線玩小遊戲時自動戰鬥還會觸發（或排隊等關掉後補打）');
+    ok(/const MINI_BEST_FILE = path\.join\(STATE_DIR, 'minigame-best\.json'\);/.test(src) && /sendCmd\('miniBest',\{kind, val:String\(val\)\}\)/.test(src), '單機的個人最佳沒有記在本機');
+    ok(/if\(comState&&v!==view\) comStop\(\);/.test(src) && /if\(view!=='yard'&&view!=='plaza'\)\{ CW=HOME_CW; CH=HOME_CH; \}/.test(src), '前線小遊戲切畫面沒收掉（或玩完格子大小沒換回來）');
+    ok(/function stPanel\(m\)\{[^]{0,200}?clearRect\(0,0,cv\.width,cv\.height\)/.test(src), '等待畫面後面留著上一局的最後一幕（例如手動戰鬥的擂台）');
+    ok(/🎮 小遊戲 <span class="devtag">dev<\/span><\/button>/.test(src), '前線的小遊戲鈕沒有 dev 標記');
+    {   // 手動戰鬥：能選的移動只有上／不動／下一格（從頁面抽出 mbMoveOk 實際跑）
+        const m = src.match(/function mbMoveOk\(d,mi,mv\)\{[^\n]*\}/);
+        let fn = null; try { fn = m && new Function('return ' + m[0])(); } catch (e) {}
+        const d = { row: [0, 1] };
+        ok(fn && fn(d, 0, 1) && fn(d, 0, 0) && !fn(d, 0, -1) && !fn(d, 0, 2) && !fn({ row: [2, 1] }, 0, -2), '手動戰鬥隔兩格（走不到）的位置也能選、也會出現虛影');
+    }
+    // 長按認輸（白旗）：手動戰鬥、五子棋、打排球共用 rsDraw；按滿才算、點一下不算、網頁原生鈕不顯示
+    ok(/const RS_MS=1000;/.test(src) && /if\(p>=1\)\{ rsHold=0; rsBox=null; onResign\(\); \}/.test(src) && /if\(rsAt\(e\)\) return;/.test(src)
+       && /rsDraw\(g,r\.x,r\.y,r\.w,\(\)=>mbResign\(d\)\)/.test(src) && /if\(gm\.winner==null\) rsDraw\(g,Wpx-46,Hpx-46,36,gmResign\);/.test(src)
+       && /if\(!g0\.over&&now>=vbStartAt\) rsDraw\(g,Wpx-44,8,34,vbResign\);/.test(src)
+       && /function gmStart\(\)\{[^\n]*getElementById\('gmresign'\)\.style\.display='none'; \}/.test(src) && /function mbStart\(\)\{[^\n]*getElementById\('gmresign'\)\.style\.display='none'; \}/.test(src),
+       '認輸不是畫面裡的長按白旗（手動戰鬥／五子棋／打排球），或點一下就認輸、或還顯示網頁原生鈕');
+    ok(/cv\.addEventListener\('pointerdown',e=>\{ if\(!rsAt\(e\)\) return; e\.preventDefault\(\); e\.stopImmediatePropagation\(\);/.test(src)
+       && src.indexOf("cv.addEventListener('pointerdown',e=>{ if(!rsAt(e)) return;") < src.indexOf("cv.addEventListener('pointerdown',e=>{ if(!vbPlaying()) return;"), '按住白旗時打排球會順便殺球（認輸的按下要比殺球先攔）');
+    // 打排球：下樓梯的方向鍵只在下樓梯的房裡攔（原本連線打排球的 ← → 被吃掉）
+    ok(/const sm=stMine\(\), stOn=\(stPlaying\(\)&&\(sm\.kind\|\|'stairs'\)==='stairs'\)\|\|\(comState&&comState\.kind==='stairs'\);/.test(src), '下樓梯的方向鍵在別的小遊戲（打排球）裡也被攔下');
+    ok(/g\.fillText\('×1',x\+w\*DS\.ZONE_15\/2,y0\+10\)/.test(src), '力度條的 ×1 沒寫在上方'); 
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵
@@ -1563,7 +1590,7 @@ setTimeout(async () => {
        '小恐龍的跳鍵沒有攔在最前面（空白鍵會捲動頁面、廣場也會跟著動）');
     ok(/cv\.addEventListener\('pointerdown',e=>\{\s*if\(!dnPlaying\(\)\) return;[\s\S]{0,120}DN\.press\(dnGame,true\)/.test(src) && /for\(const t of \['pointerup','pointercancel','pointerleave'\]\)/.test(src), '小恐龍點畫面不會跳（或放開不會下墜）');
     ok(/const DN_REPORT_MS=100;/.test(src) && /if\(!force&&t-dnSent<DN_REPORT_MS\) return;/.test(src), '位置回報沒有節流（每一幀都送）');
-    ok(/if\(DN\.step\(g\)==='dead'\)\{ dnReport\(true\);/.test(src), '撞到的當下沒有馬上回報（要等下一次節流）');
+    ok(/if\(DN\.step\(g\)==='dead'\)\{ if\(comState\) miniSoloOver\('dino',DN\.score\(g\.dist\)\); else \{ dnReport\(true\);/.test(src), '撞到的當下沒有馬上回報（要等下一次節流）');
     ok(/stES\.addEventListener\('ghost'/.test(src) && /onStairs\('ghost', d\)/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'plaza-client.js'), 'utf8')), '別人的位置（影子）沒有接到頁面');
     ok(/dnSpectate=\(Date\.now\(\)\+stSkew\)-info\.startAt>1500;/.test(src), '中途重新整理沒有改成觀戰（會從頭重跑、回報錯的距離）');
     // 伺服器實際吐出來的頁面裡要真的有那段模擬（不是空的）

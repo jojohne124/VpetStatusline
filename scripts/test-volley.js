@@ -179,6 +179,16 @@ console.log('— 輸入同步（鎖步）—');
         ok(await until(() => seen.a.some(([k]) => k === 'end')), '對手中途離開，比賽沒結束');
         const e2 = seen.a.find(([k]) => k === 'end')[1];
         ok(e2.result.find(r => r.id === a.me().id).rank === 1 && e2.result.find(r => r.id === b.me().id).why === 'left', '對手離開，留下來的沒贏');
+        // 認輸 → 對手贏（長按白旗）
+        await a.stairs('open', { mode: 'endless', kind: 'volley' });
+        const rr = [...ps.rooms.values()][0];
+        await b.stairs('join', { room: rr.id }); await a.stairs('start');
+        seen.a.length = 0;
+        ok((await b.stairs('vresign')).ok, '打排球認輸失敗');
+        ok(await until(() => seen.a.some(([k]) => k === 'end')), '認輸後比賽沒結束');
+        const er = seen.a.find(([k]) => k === 'end')[1];
+        ok(er.result.find(r => r.id === a.me().id).rank === 1 && er.result.find(r => r.id === b.me().id).why === 'resign', '認輸的人沒判輸');
+        ok(!(await b.stairs('vresign')).ok, '不在比賽中也能認輸');
         // 斷線太久 → 對手贏
         await a.stairs('open', { mode: 'endless', kind: 'volley' });
         const r3 = [...ps.rooms.values()][0];

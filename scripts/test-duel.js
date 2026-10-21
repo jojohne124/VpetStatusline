@@ -103,6 +103,7 @@ console.log('— 判定 —');
         await sleep(50);
 
         await start();
+        ok(!a.outgoing() && !b.incoming(), '手動戰鬥開打了，邀請列（等待回覆／接受）還在');
         const r = room();
         ok(r && r.kind === 'duel' && r.state === 'play' && r.ids.length === 2, '接受後沒有開手動戰鬥的房（或沒直接開打）');
         const d0 = duelOf(b);

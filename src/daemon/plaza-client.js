@@ -125,6 +125,9 @@ function create(opts = {}) {
         } else if (event === 'emote' && d.id) {
             // 開心鈕：記在成員身上，合成時依 serverNow - emoteAt 演 HAPPY + 跳
             if (members.has(d.id)) members.get(d.id).emoteAt = d.at;
+        } else if (event === 'car' && d.id) {
+            // 彩蛋：跑車。記在成員身上，合成時依 serverNow - carAt 算繞到哪
+            if (members.has(d.id)) members.get(d.id).carAt = d.at;
         } else if (event === 'member' && d.id) {
             // 成員狀態整份換掉（走法、自動／手動、是否對戰中）
             const { serverNow, ...m } = d; void serverNow;

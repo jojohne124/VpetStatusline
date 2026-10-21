@@ -38,6 +38,11 @@ const CHAT_MAX     = 100;       // 一則幾個字
 const CHAT_GAP_MS  = 1000;      // 每人每秒最多 1 則
 // 開心鈕：一次演 1.8 秒（同營地摸摸的 REACT_MS），演完才能再按 —— 連按只會讓畫面一直抖
 const EMOTE_MS     = 1800;
+// 彩蛋（世紀帝國 2 的作弊碼）：聊天打「how do you turn this on」→ 自己的 vpet 坐上點陣跑車在廣場飆一圈。
+// 比對時只看英文字母（大小寫、空白、標點都不管）。一人冷卻 60 秒；冷卻中照常當一般聊天送出
+const CAR_PHRASE   = 'howdoyouturnthison';
+const CAR_COOLDOWN_MS = 60000;
+const isCarPhrase  = (text) => String(text).toLowerCase().replace(/[^a-z]/g, '') === CAR_PHRASE;
 // 對戰（規格 §八）
 const INVITE_MS    = 30000;     // 邀請多久沒回就當作拒絕
 // 對戰演出多長：前線的戰鬥最長 21 拍（cut-in 版）x 750ms ≈ 15.8 秒，再加上「下一拍才開演」
@@ -385,7 +390,16 @@ function createPlazaServer(opts = {}) {
         if (m.chatAt && t - m.chatAt < CHAT_GAP_MS) return { status: 429, body: { ok: false, error: '說太快了，等一下再說' } };
         m.chatAt = t;
         const e = pushChat({ from: id, name: m.name, color: m.color, text });
-        return { status: 200, body: { ok: true, seq: e.seq } };
+        // 彩蛋：跑車（對戰中不演；冷卻中只當一般聊天）
+        let car = null;
+        if (isCarPhrase(text) && !m.battle) {
+            if (!m.carAt || t - m.carAt >= (opts.carCooldownMs ?? CAR_COOLDOWN_MS)) {
+                m.carAt = t; car = 'go';
+                broadcast('car', { id, at: t });
+                log(`彩蛋：${m.name} 開跑車`);
+            } else car = 'cooldown';
+        }
+        return { status: 200, body: { ok: true, seq: e.seq, car } };
     }
 
     // 開心：大家在同一刻看到這隻跳一下（HAPPY 幀 + 原地跳）。伺服器只蓋時間戳、廣播，
@@ -1007,7 +1021,7 @@ function createPlazaServer(opts = {}) {
 module.exports = { createPlazaServer, DEFAULT_PORT, CAP, GRACE_MS, PING_MS, validName, validColor,
                    STAIRS_VER, STAIRS_CAP, STAIRS_LOST_MS, STAIRS_BOARD_N, STAIRS_BOARD_FILE,
                    DINO_BOARD_FILE, DINO_COUNTDOWN_MS, DINO_STALE_MS, GOMOKU_N, gomokuLine, gomokuExpr,
-                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
+                   CHAT_KEEP, CHAT_MAX, CHAT_GAP_MS, EMOTE_MS, CAR_COOLDOWN_MS, isCarPhrase, ADMIN_KEY_FILE, KICK_BAN_MS, loadAdminToken };
 
 if (require.main === module) {
     const port = parseInt(process.env.VPET_PLAZA_PORT || String(DEFAULT_PORT), 10);

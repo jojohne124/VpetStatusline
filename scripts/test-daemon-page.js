@@ -1560,6 +1560,7 @@ setTimeout(async () => {
     // 營地右鍵：顯示「獲得於」（這一隻變成現在這個角色的時間），不是「收於」（每次交換都重設，被誤會成獲得時間）
     ok(/gotAt: st\.lastEvolveAt \|\| st\.birthAt \|\| null,/.test(src) && /'<br>獲得於 '\+\s*\(hit\.gotAt\?new Date\(hit\.gotAt\)\.toLocaleString\(\):'—'\)/.test(src) && !/'<br>收於 '/.test(src),
        '營地右鍵選單顯示的不是這一隻的獲得時間');
+    ok(/carT: m\.carAt && nowS - m\.carAt >= 0 && nowS - m\.carAt < plaza\.CAR_MS \? nowS - m\.carAt : undefined,/.test(src), '廣場合成沒有把跑車彩蛋（carT）帶進去');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

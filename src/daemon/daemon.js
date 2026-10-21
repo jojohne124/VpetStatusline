@@ -6017,6 +6017,8 @@ const server = http.createServer((req, res) => {
                     acc: fest && m.costume !== false ? fest.acc : null,   // 本人決定給不給看
                     swap: fest && m.costume !== false ? fest.swap || null : null,
                     ...(happy(m) || {}),
+                    // 彩蛋：跑車（聊天打 how do you turn this on）—— 開了幾毫秒，合成時照跑道畫
+                    carT: m.carAt && nowS - m.carAt >= 0 && nowS - m.carAt < plaza.CAR_MS ? nowS - m.carAt : undefined,
                 }));
                 const step = plazaClient.step();
                 // 場地與畫法比照營地（69x54 細格、角色 16 細格），原住民先不放。

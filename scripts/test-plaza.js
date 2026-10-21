@@ -1106,5 +1106,25 @@ console.log('— 兩頁交界不准停 —');
     }
 }
 
+console.log('— 彩蛋：跑車 —');
+{
+    const f = W.PLAZA_LIVE_FIELD;
+    const a = P.carPos(0, 10, 20, f), z = P.carPos(P.CAR_MS - 1, 10, 20, f);
+    ok(Math.abs(a.x - 10) <= 1 && Math.abs(a.y - 20) <= 1 && Math.abs(z.x - 10) <= 1 && Math.abs(z.y - 20) <= 1, '跑車不是從原地出發、開回原地');
+    let inField = true, xs = [], ys = [];
+    for (let t = 0; t < P.CAR_MS; t += 50) { const q = P.carPos(t, 10, 20, f); xs.push(q.x); ys.push(q.y);
+        if (q.x < f.minX - 1 || q.x > f.maxX + 1 || q.y < f.minY - 1 || q.y > f.maxY + 1) inField = false; }
+    ok(inField, '跑車開出廣場了');
+    ok(Math.max(...xs) - Math.min(...xs) > (f.maxX - f.minX) * 0.7 && Math.max(...ys) - Math.min(...ys) > (f.maxY - f.minY) * 0.7, '跑車沒有繞廣場一大圈');
+    const pet = Array.from({ length: 16 }, () => new Array(16).fill([1, 2, 3]));
+    const cs = P.carSprite(pet, 'right');
+    ok(cs.length === 19 && cs[0].length === 28 && cs.some(r => r.some(c => c && c[0] === 36 && c[2] === 204)), '跑車的圖不對（尺寸或沒有藍色車身）');
+    const occ = [{ key: 'p:1', code: 'A', char: 'agumon', walk: { seed: 1, joinStep: 0, origin: { x: 10, y: 20, facing: 'right' }, anchor: null }, carT: 1500 }];
+    const out = P.composePlaza(core, occ, 0, { npc: false, field: f, nowMs: 0, textLabels: false });
+    ok(out.placed[0].car === true, '開跑車中，合成時沒有坐上跑車');
+    const fe = P.composePlaza(core, occ, 0, { npc: false, field: f, nowMs: 0, textLabels: false, feast: true });
+    ok(!fe.placed[0].car, '春節圍爐（大家坐在座位上）還會開跑車');
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed` + (skip ? `, ${skip} skipped` : ''));
 process.exit(fail ? 1 : 0);

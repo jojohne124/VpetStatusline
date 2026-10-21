@@ -294,6 +294,17 @@ async function main() {
     ok(await until(() => typeof (a2.roster().find(m => m.id === b.me().id) || {}).emoteAt === 'number'), '按了開心，別人沒收到');
     const em2 = await b.emote();
     ok(!em2.ok, '開心還沒演完又按，應該被擋（連按畫面會一直抖）');
+    // 彩蛋：聊天打 how do you turn this on → 大家收到 car（同一個時間戳）；冷卻中再打只當一般聊天
+    ok(S.isCarPhrase('How do you turn this on?') && S.isCarPhrase('howdoyouturnthison') && !S.isCarPhrase('how do you turn this off'),
+       '跑車暗號比對不對（大小寫、空白、標點要不管；別的句子不能觸發）');
+    const carOf = () => (a2.roster().find(m => m.id === b.me().id) || {}).carAt;
+    ok((await b.say('How do you turn this on')).ok, '打暗號的聊天送不出去');
+    ok(await until(() => typeof carOf() === 'number'), '打了暗號，別人沒收到跑車');
+    const car1 = carOf();
+    await sleep(1100);   // 聊天一秒一則
+    await b.say('how do you turn this on');
+    await sleep(300);
+    ok(carOf() === car1, '冷卻中又開了一次跑車');
     ok((await b.update({ costume: true })).ok, '開節日造型失敗');
     ok(await until(() => costumeOf() === true), '開回節日造型，別人那邊沒更新');
     await b.rename('阿明');

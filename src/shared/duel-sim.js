@@ -61,11 +61,13 @@ function resolve(d, picks) {
     d.round++;
     return d.last;
 }
-// dev 測試對戰的對手：隨機移動＋隨機攻擊＋隨機力度
+// 電腦對手（跟電腦打、dev 測試）：隨機移動＋隨機力度；攻擊只挑**對手下回合到得了**的列
+//（對手一次最多走一格：站在 2 列的人下回合不可能在 0 列，打那裡等於白打，2026-10-22）
 function randomPick(d, i, rand) {
     rand = rand || Math.random;
     const mvs = [-1, 0, 1].filter(mv => okMove(d, i, mv));
-    return { mv: mvs[Math.floor(rand() * mvs.length)], aim: Math.floor(rand() * ROWS), p: rand() };
+    const o = d.row[1 - i], aims = [o - 1, o, o + 1].filter(r => r >= 0 && r < ROWS);
+    return { mv: mvs[Math.floor(rand() * mvs.length)], aim: aims[Math.floor(rand() * aims.length)], p: rand() };
 }
 
 module.exports = { ROWS, MAX_ROUNDS, PICK_MS, OPEN_MS, ANIM_MS, END_MS, ZONE_15, ZONE_2, BGS,

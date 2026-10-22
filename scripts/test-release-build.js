@@ -193,6 +193,10 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /TryOpenExisting\('Local\\vpet-tray'/.test(mini),
        'tray 跟小視窗沒有用同一個 Mutex（自動更新空檔的判斷會錯）');
     ok(/\$menu\.Items\.Add\('開啟 vpet mini 視窗'\)/.test(tray) && /Close-Mini/.test(tray), 'tray 選單沒有「開啟 vpet mini 視窗」（或結束時沒關小視窗）');
+    // 提醒（v13）：進化／戰鬥開始跳通知，選單可開關；靠 /state 的 kind（evo、battle）與 jogress.frontName
+    ok(/New-Object System\.Windows\.Forms\.ToolStripMenuItem\('提醒'\)/.test(tray) && /if \(\$kind -eq 'evo'\)/.test(tray) && /elseif \(\$kind -eq 'battle'\)/.test(tray)
+       && /if \(\$null -eq \$prev -or \$prev -eq \$kind\) \{ return \}/.test(tray), 'tray 沒有進化／戰鬥提醒（或啟動那一拍也會跳）');
+    ok(/kind: 'evo',/.test(read('src/runtime/agumon-core.js')) && /frontName: name\(real\.characterId\)/.test(read('src/daemon/daemon.js')), '頁面／core 改到提醒依賴的 kind（evo）或 jogress.frontName 了 —— tray 要一起改');
     ok(!has('tools/vpet-mini/vpet-tray.ps1') && !has('tools/vpet-mini/vpet.vbs'), '同事版的另一個系統匣也出貨了（會變成兩個 tray）');
     // 跟頁面的約定：/state 的 kind、整列 .form 的 data-cmd、#chatlog（改到要一起改小視窗）
     const page = read('src/daemon/daemon.js');

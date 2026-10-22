@@ -1008,7 +1008,7 @@ function page2Event(ranch, step) {
 // dev：預覽用（release 由 DEV_ONLY 擋掉）。PAGE2_ENABLED 關著也能用 —— 這就是「做一版但不實裝」的入口
 // 手動戰鬥的 dev 測試：我（前線那隻、廣場用的戰力）對上同階隨機一隻、戰力在那一階的範圍內隨機。
 // 對手每回合隨機移動、隨機攻擊、隨機力度（頁面本地跑 duel-sim，不經伺服器）
-function duelDev() {
+function duelDev(opts = {}) {
     const st = loadState(STATE_FILE);
     const char = st.characterId || 'agumon';
     let stage = 'Child';
@@ -1024,7 +1024,7 @@ function duelDev() {
     const oppStr = lo + Math.floor(Math.random() * (Math.max(lo, hi) - lo + 1));
     const nm = (c) => { try { return core.getDisplayName ? core.getDisplayName(c) : c; } catch (e) { return c; } };
     return { ok: true, action: 'duelDev', me: { char, str: Math.max(1, str), name: plazaName() || nm(char) },
-             opp: { char: opp, str: Math.max(1, oppStr), name: nm(opp) + '（dev）' } };
+             opp: { char: opp, str: Math.max(1, oppStr), name: nm(opp) + (opts.com ? '（電腦）' : '（dev）') } };
 }
 function page2Dev(act) {
     const ranch = core.loadRanch();
@@ -1232,7 +1232,7 @@ function applyCommand(action, args = {}) {
     }
     // 下樓梯：開房（第一期只有無限制）／出發／方向（-1/0/1，只在改變時送）／離開房間
     if (action === 'stairsOpen')  return plazaClient.stairs('open', { mode: args.mode === 'survival' ? 'survival' : 'endless',
-                                                                    kind: ['dino', 'volley', 'gomoku'].includes(args.kind) ? args.kind : 'stairs' })
+                                                                    kind: ['dino', 'volley', 'gomoku', 'duel'].includes(args.kind) ? args.kind : 'stairs' })
                                          .then(r => (r.ok ? { ok: true, action } : r));
     // 小恐龍：回報自己跑到哪（約 10 次／秒）。/cmd 只收字串，這裡轉回數字
     if (action === 'dinoReport') {
@@ -1264,6 +1264,7 @@ function applyCommand(action, args = {}) {
     }
     if (action === 'duelResign') return plazaClient.stairs('dresign').then(r => (r.ok ? { ok: true, action } : r));
     if (action === 'duelDev') return duelDev();
+    if (action === 'duelCom') return duelDev({ com: true });   // 跟電腦打：同一套對手挑法，名字標「電腦」
     // 前線小遊戲：開著（每幾秒報一次）／關了；個人最佳（kind + val = 記一筆，沒給 val = 只讀）
     if (action === 'frontMini') { frontMiniUntil = args.on === '1' ? Date.now() + FRONT_MINI_TTL : 0; return { ok: true, action }; }
     if (action === 'miniBest') {
@@ -3587,7 +3588,7 @@ function drawNameTags(tags, owner){
     const rk=stRoomKindOf(String(t.key||'').slice(2));
     if(rk&&!t.battling){
       const bx=t.x*DW, by=Math.max(2,t.top*DH-16);
-      g.fillText(rk==='dino'?'🦖':rk==='volley'?'🏐':rk==='gomoku'?'⚫':'🪜',bx,by);
+      g.fillText(rk==='dino'?'🦖':rk==='volley'?'🏐':rk==='gomoku'?'⚫':rk==='duel'?'⚔':'🪜',bx,by);
     }
     // 手動模式放太久睡著了：頭上冒 z（跟家裡睡覺的 Zzz 同一個意思）
     if(t.sleeping){
@@ -3703,7 +3704,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='plazaHide'||action==='stockQuery');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='plazaHide'||action==='stockQuery'||action==='duelCom');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4304,7 +4305,7 @@ function stairsSync(s, serverNow){
   if(m.kind==='duel'){   // 手動戰鬥：邀請接受就直接開打，沒有等待畫面
     stStop(); dnStop(); vbStop(); gmStop();
     if(m.state==='play'&&m.duel){ document.getElementById('stairspanel').style.display='none'; mbStart(); }
-    else mbStop();
+    else { mbStop(); stPanel(m); }   // 從小遊戲選單開的房：等人的畫面（2026-10-22）
     return;
   }
   mbStop(); mbUnstyle();
@@ -4492,11 +4493,15 @@ function stPanelPets(){
 setInterval(()=>{ if(stMine()&&!stPlaying()) stPanelPets(); }, 300);
 // 小遊戲選單：挑一個遊戲就開房。之後有新遊戲就往 MINI_GAMES 加一筆
 // 下樓梯先不分模式（2026-10-20 定）：一律無限制，生存制之後再說
+// 手動戰鬥的說明（選單、等待畫面共用）：強度跟戰力有關要講清楚
+const DUEL_DESC='1 對 1 回合制：每回合選移動、攻擊位置、力度，猜中對手移動後的位置就打中。角色強度跟戰力（power＋訓練值）有關，越級很難打贏。一個人出發就是跟電腦打。';
 const MINI_GAMES=[
   { id:'stairs', name:'🪜 下樓梯', desc:'左右移動踩階梯往下走，越深越快。三顆心，尖刺和天花板會扣血。層數記排行榜。' },
   { id:'dino', name:'🦖 小恐龍', desc:'空白鍵或 ↑ 跳過仙人掌、閃過飛鳥，越跑越快。大家跑同一條賽道，別人是影子。分數記排行榜。' },
   { id:'gomoku', name:'⚫ 五子棋', desc:'1 對 1，輪流在棋盤上下子，先連成五顆就贏（黑子先下）。兩邊的 vpet 會隨著棋局做表情。也可以跟電腦玩。', noBoard:true, com:true },
   { id:'volley', name:'🏐 打排球', desc:'1 對 1。← → 移動、↑ 跳，碰到球時按空白鍵或點畫面用力打（空中是殺球）。先拿 7 分贏。也可以跟電腦玩。', noBoard:true, com:true },
+  // 手動戰鬥固定排最下面（2026-10-22）：開房等人；房主一個人出發 = 跟電腦打
+  { id:'duel', name:'⚔ 手動戰鬥', desc:DUEL_DESC, noBoard:true },
 ];
 function miniOpen(){
   const el=document.getElementById('minipick');
@@ -4515,7 +4520,7 @@ function miniOpen(){
     sendCmd('stairsOpen',{mode:'endless',kind:b.dataset.g}).then(()=>{ miniClose(); poll(); });
   }));
   document.getElementById('miniclose').addEventListener('click',miniClose);
-  const dv=document.getElementById('duelDev'); if(dv) dv.addEventListener('click',mbDevStart);
+  const dv=document.getElementById('duelDev'); if(dv) dv.addEventListener('click',()=>mbDevStart('dev'));
   el.style.display='block';
 }
 function miniClose(){ document.getElementById('minipick').style.display='none';
@@ -4614,21 +4619,25 @@ function stPanel(m){
   { const cv=document.getElementById('stairscv'); if(cv.width) cv.getContext('2d').clearRect(0,0,cv.width,cv.height); }
   const host=stairs.meId===m.host, end=stairs.end;
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku';
+  const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku', duel=m.kind==='duel';
   void end;
-  let h='<div class="st-h">'+(gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'</div>';
+  let h='<div class="st-h">'+(duel?'⚔ 手動戰鬥':gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'</div>';
   // 房裡每個人的 vpet（待機動畫，stPanelPets 畫）＋名牌；沒人的位置畫虛線框，看得出還能來幾個
   h+='<div class="st-mem">'+m.names.map((n,i)=>'<div class="st-pl'+(m.ids[i]===m.host?' host':'')+'"><canvas width="64" height="64" data-c="'+esc(m.chars[i]||'')+'"></canvas><span>'+esc(n)+'</span></div>').join('')
     +Array.from({length:Math.max(0,(m.cap||4)-m.names.length)},()=>'<div class="st-pl empty"><canvas width="64" height="64"></canvas><span>空位</span></div>').join('')+'</div>';
-  h+='<div class="st-hint">'+(gomoku?'1 對 1。房主執黑先下，輪流點棋盤下子，橫、直、斜任一方向先連成五顆就贏。下完一手兩邊的 vpet 會做表情。':volley?'1 對 1。← → 或 A D 移動、↑ 或 W 跳。碰到球就會彈回去；碰到的那一刻按空白鍵或點畫面＝用力打（球快很多，在空中是往下殺球）。球落在誰那邊，另一邊得分；先拿 7 分贏。'
+  h+='<div class="st-hint">'+(duel?DUEL_DESC:gomoku?'1 對 1。房主執黑先下，輪流點棋盤下子，橫、直、斜任一方向先連成五顆就贏。下完一手兩邊的 vpet 會做表情。':volley?'1 對 1。← → 或 A D 移動、↑ 或 W 跳。碰到球就會彈回去；碰到的那一刻按空白鍵或點畫面＝用力打（球快很多，在空中是往下殺球）。球落在誰那邊，另一邊得分；先拿 7 分贏。'
      :dino?'空白鍵、↑ 或點畫面跳（按住跳高一點），跳過仙人掌、閃過飛鳥；高的鳥站著就會從頭上飛過。撞到就結束，跑越遠分數越高。'
      :'← → 或 A D 移動。三顆心：尖刺、天花板各扣一顆，踩三次普通階梯回一顆；心沒了或掉出畫面就出局。')+'</div>';
   const need2=(volley||gomoku)&&m.names.length<2;   // 打排球、五子棋要剛好 2 個人
-  h+='<div class="st-btns">'+(host?'<button id="stgo" class="pri"'+(need2?' disabled title="等對手加入"':'')+'>'+(need2?'等對手加入…':'出發')+'</button>':'<span class="st-wait">等房主出發…</span>')
+  const vsCom=duel&&m.names.length<2;   // 手動戰鬥一個人出發 = 跟電腦打
+  h+='<div class="st-btns">'+(host?'<button id="stgo" class="pri"'+(need2?' disabled title="等對手加入"':'')+'>'+(need2?'等對手加入…':vsCom?'出發（跟電腦打）':'出發')+'</button>':'<span class="st-wait">等房主出發…</span>')
     +'<button id="stleave">離開</button></div>';
   if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h; stPanelPets();
     const go=document.getElementById('stgo');
-    if(go) go.addEventListener('click',()=>{ go.disabled=true; sendCmd('stairsStart').then(()=>poll()); });
+    if(go) go.addEventListener('click',()=>{ go.disabled=true;
+      // 手動戰鬥一個人：收掉房間，在頁面跟電腦打（同一套判定 duel-sim）
+      if(vsCom){ sendCmd('stairsLeave').then(()=>{ poll(); mbDevStart('com'); }); return; }
+      sendCmd('stairsStart').then(()=>poll()); });
     document.getElementById('stleave').addEventListener('click',()=>sendCmd('stairsLeave').then(()=>poll()));
   }
 }
@@ -4900,11 +4909,11 @@ function comStop(){ if(comState&&comState.timer) clearInterval(comState.timer); 
 function comEndPanel(won, text){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   const k0=comState.kind, solo=k0==='stairs'||k0==='dino';
-  const title={ volley:'🏐 打排球', duel:'⚔ 手動戰鬥（dev 測試）', stairs:'🪜 下樓梯', dino:'🦖 小恐龍' }[k0]||'⚫ 五子棋';
+  const title={ volley:'🏐 打排球', duel:comState.devTest?'⚔ 手動戰鬥（dev 測試）':'⚔ 手動戰鬥　vs 電腦', stairs:'🪜 下樓梯', dino:'🦖 小恐龍' }[k0]||'⚫ 五子棋';
   // 單機（下樓梯、小恐龍）沒有勝負：won 不用，text 是成績那一行
   el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(k0==='duel'||solo?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res">'+(solo?'':'<b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　')+text+'</div>'
     +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div>';
-  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(); else comStart(k); });
+  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(comState.devTest?'dev':'com'); else comStart(k); });
   document.getElementById('comback').addEventListener('click',comStop);
 }
 // 排球的電腦（普通）：跑到球底下、球低了就跳、空中有時殺球；只在球在自己這邊時動
@@ -5450,9 +5459,11 @@ function mbHoverAt(e){
 }
 
 // ── dev 測試對戰：本地跑 duel-sim，對手每回合隨機 ──
-function mbDevStart(){
+// mode：'com' = 跟電腦打（小遊戲房一個人出發）；其他 = dev 測試對戰。對手都是同階隨機一隻、戰力在那一階隨機
+function mbDevStart(mode){
   if(!DS){ flashCmdMsg('手動戰鬥的判定沒載入','#f85149'); return; }
-  sendCmd('duelDev').then(r=>{
+  const vsCom=mode==='com';
+  sendCmd(vsCom?'duelCom':'duelDev').then(r=>{
     if(!r||!r.ok){ flashCmdMsg((r&&r.error)||'開不了','#f85149'); return; }
     miniClose();
     stEndSeen=(stairs&&stairs.end&&stairs.end.at)||stEndSeen;
@@ -5460,7 +5471,7 @@ function mbDevStart(){
     const d=Object.assign(DS.createDuel([r.me.str,r.opp.str], DS.BGS[Math.floor(Math.random()*DS.BGS.length)]),
       { sides:['me','dev'], names:[r.me.name,r.opp.name], chars:[r.me.char,r.opp.char], startAt, deadline:startAt+DS.PICK_MS,
         picks:[null,null], picked:[false,false], endAt:0 });
-    comState={ kind:'duel', duel:d, startAt, done:false };
+    comState={ kind:'duel', duel:d, startAt, done:false, devTest:!vsCom };
     const box=document.getElementById('stairsbox'); box.style.display='block';
     document.getElementById('stairspanel').style.display='none';
     stStream(false); stStop(); dnStop(); vbStop(); gmStop();

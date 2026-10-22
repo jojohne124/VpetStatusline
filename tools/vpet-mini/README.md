@@ -11,6 +11,11 @@
 照常雙擊 repo（或 release）根目錄的 **`vpet-standalone.vbs`** → 右下角 vpet 圖示右鍵 →「**開啟 vpet mini 視窗**」。
 沒有另外的啟動器；系統匣是 `tools\vpet-tray.ps1` 那一個（daemon 也是它開的）。「結束 vpet」會連小視窗一起關。
 
+**提醒**（同事 v13 的功能，2026-10-22 併進系統匣；選單「提醒」可逐項開關，存 `tools\vpet-tray.json`）：系統匣每秒看 `/state` 的 `kind`，
+- 進化開始（`evo`）：Windows 通知氣泡「Vpet進化中！／咦！？ ○○的樣子……！」（○○＝`/state` 的 `jogress.frontName`）＋提示音＋自動開小視窗（已開就叫到前面）。
+- 戰鬥開始（`battle`）：通知氣泡「Vpet開打了！／( ◞•̀д•́)═○💥○═(•̀д•́◟ )」＋提示音。
+- 啟動那一拍不提醒；Windows「專注輔助」開著時氣泡會被壓掉，只剩提示音。
+
 ## 小視窗怎麼操作
 
 | 動作 | 效果 |
@@ -46,7 +51,7 @@
 三個 WinForms 視窗：**主視窗**只放 WebView2，形狀（`Form.Region`）＝頁面回報的實體矩形；**小標籤**、**小方塊**是主視窗的 owned window（WebView2 是獨立子視窗，會蓋住同區域的控制項，把手只能用另外的視窗疊上去）。系統匣與 daemon 歸 `tools\vpet-tray.ps1`。
 
 ### 跟頁面（`src/daemon/daemon.js`）的約定 —— 改到這些要一起改小視窗（`test-release-build` 有檢查）
-- `/state` 的 `kind`：`card`、`tree` 是「有字的場景」（閱讀縮放用）。
+- `/state` 的 `kind`：`card`、`tree` 是「有字的場景」（閱讀縮放用）；系統匣的提醒看 `evo`（進化）、`battle`（戰鬥），名字看 `jogress.frontName`。
 - 整列 `.form` 帶 `data-cmd`（給列內按鈕讀的），列本身不可點 → 小視窗只把**按鈕上**的 `data-cmd` 當互動。
 - 頁面的 `confirm`／`alert`、圖鑑的 `window.open`。
 - 聊天紀錄 `#chatlog`：不拖（要能反白複製）。

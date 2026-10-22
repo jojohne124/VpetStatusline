@@ -1516,7 +1516,19 @@ setTimeout(async () => {
     // 加入別人的房間：聊天室的系統訊息後面有「加入」、選單列出正在等人的房間、頭上有 🦖／🪜
     ok(/if\(m\.stairsRoom\)\{ const jb=document\.createElement\('button'\); jb\.className='stjoin'/.test(src) && /function stJoinButtons\(\)/.test(src), '聊天室開房的訊息後面沒有「加入」鈕');
     ok(/<button data-j="'\+stEsc\(r\.id\)\+'"/.test(src), '小遊戲選單沒有列出正在等人的房間');
-    ok(/g\.fillText\(rk==='dino'\?'🦖':rk==='volley'\?'🏐':rk==='gomoku'\?'⚫':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🏐／⚫／🪜');
+    ok(/g\.fillText\(rk==='dino'\?'🦖':rk==='volley'\?'🏐':rk==='gomoku'\?'⚫':rk==='duel'\?'⚔':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🏐／⚫／⚔／🪜');
+    // 手動戰鬥進小遊戲選單（2026-10-22）：排最下面、可開房、一個人出發 = 跟電腦打；說明講強度跟戰力有關
+    {
+        const mg = (src.match(/const MINI_GAMES=\[([^]*?)\n\];/) || [])[1] || '';
+        const ids = [...mg.matchAll(/\{ id:'(\w+)'/g)].map(m => m[1]);
+        ok(ids[ids.length - 1] === 'duel', '手動戰鬥沒有排在小遊戲選單最下面：' + ids.join(','));
+        ok(/const DUEL_DESC='[^']*角色強度跟戰力（power＋訓練值）有關[^']*'/.test(src) && !/const DUEL_DESC='[^']*攻擊＝戰力／4/.test(src), '手動戰鬥的說明沒講角色強度跟戰力（power）有關（或又把公式寫出來了）');
+        ok(/const vsCom=duel&&m\.names\.length<2;/.test(src) && /if\(vsCom\)\{ sendCmd\('stairsLeave'\)\.then\(\(\)=>\{ poll\(\); mbDevStart\('com'\); \}\); return; \}/.test(src)
+           && /if \(action === 'duelCom'\) return duelDev\(\{ com: true \}\);/.test(src) && !/'duelCom'\]\);/.test(src),
+           '手動戰鬥的房一個人出發沒有變成跟電腦打（或跟電腦打被擋在開發版）');
+        ok(/else \{ mbStop\(\); stPanel\(m\); \}/.test(src), '手動戰鬥的房沒有等人的畫面');
+        ok(/kind: \['dino', 'volley', 'gomoku', 'duel'\]\.includes\(args\.kind\)/.test(src), 'daemon 開房時把手動戰鬥改成了下樓梯');
+    }
     // 打排球（docs/plaza-volley-spec.md）：模擬內嵌、輸入同步（送 f+延遲、兩邊都到才算）、擊球用攻擊幀
     ok(/const VB=\$\{VOLLEY_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ VOLLEY_SRC/.test(src), '頁面沒有內嵌打排球的模擬（volley-sim.js）');
     ok(/const fs=g\.f\+VB_DELAY;\s*if\(!vbMine\.has\(fs\)\)\{ const k=vbKeyBits\(\); vbMine\.set\(fs,k\); sendCmd\('volleyInput'/.test(src), '打排球沒有把按鍵延後 VB_DELAY 格送出');

@@ -70,6 +70,12 @@ console.log('— 判定 —');
     let bad = 0;
     for (let i = 0; i < 300; i++) { const p = DS.randomPick(d, 1); if (!DS.okMove(d, 1, p.mv) || ![0, 1, 2].includes(p.aim) || !(p.p >= 0 && p.p <= 1)) bad++; }
     ok(bad === 0, '隨機對手選了不合法的（' + bad + ' 次）');
+    // 電腦只打對手下回合到得了的列（站在 2 列的人不可能跑到 0 列，2026-10-22）
+    for (const [me, opp, can] of [[1, 2, [1, 2]], [1, 0, [0, 1]], [0, 1, [0, 1, 2]]]) {
+        const dd = DS.createDuel([50, 50]); dd.row = [opp, me];   // 電腦是 1 號，對手（玩家）是 0 號
+        const seen = new Set(); for (let i = 0; i < 300; i++) seen.add(DS.randomPick(dd, 1).aim);
+        ok([...seen].sort().join() === can.join(), `對手在 ${opp} 列時，電腦打的列應該只有 ${can}，實際 ${[...seen].sort()}`);
+    }
 }
 
 (async () => {
@@ -96,6 +102,21 @@ console.log('— 判定 —');
         await a.join(prof('阿張', 100)); await b.join(prof('阿明', 60, 'gabumon')); await c.join(prof('阿丙', 30, 'palmon'));
         await until(() => a.me() && b.me() && c.me());
 
+        // 從小遊戲選單開手動戰鬥的房（2026-10-22）：一個人不能從伺服器出發（頁面自己跟電腦打）、兩個人就開打
+        {
+            const op = await a.stairs('open', { mode: 'endless', kind: 'duel' });
+            ok(op.ok && op.room.kind === 'duel' && op.room.cap === 2 && op.room.state === 'lobby', '小遊戲選單開不了手動戰鬥的房');
+            ok(!(await a.stairs('start')).ok, '手動戰鬥的房一個人也能從伺服器出發（應該在頁面跟電腦打）');
+            ok((await b.stairs('join', { room: op.room.id })).ok, '加入不了手動戰鬥的房');
+            ok(!(await c.stairs('join', { room: op.room.id })).ok, '手動戰鬥的房滿 2 人還能加入');
+            ok((await a.stairs('start')).ok, '手動戰鬥的房兩個人出發失敗');
+            const rr = room();
+            ok(rr && rr.id === op.room.id && rr.state === 'play' && rr.duel && rr.duel.sides.join() === [a.me().id, b.me().id].join(), '手動戰鬥的房出發後沒有開打（或沒沿用同一間房）');
+            ok(ps.members.get(a.me().id).battle && ps.members.get(b.me().id).battle, '手動戰鬥的房開打後兩隻沒有停在原地');
+            await b.stairs('dresign');
+            await until(() => !room());
+            await sleep(50);
+        }
         // 原本的對戰邀請照舊（不帶種類 = 自動）
         await a.invite(b.me().id); await until(() => b.incoming());
         ok(b.incoming().kind === 'auto', '原本的對戰邀請被當成手動戰鬥');

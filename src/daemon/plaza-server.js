@@ -601,7 +601,7 @@ function createPlazaServer(opts = {}) {
         if (stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '你已經在一個房間裡了' } };
         const mode = body.mode === 'survival' ? 'survival' : 'endless';
         if (mode === 'survival') return { status: 400, body: { ok: false, error: '生存制還沒開放（第二期）' } };
-        const kind = ['dino', 'volley', 'gomoku'].includes(body.kind) ? body.kind : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
+        const kind = ['dino', 'volley', 'gomoku', 'duel'].includes(body.kind) ? body.kind : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
         const r = { id: crypto.randomBytes(5).toString('hex'), host: m.id, kind, mode, ids: [m.id], state: 'lobby',
                     game: null, timer: null, ver: STAIRS_VER };
         rooms.set(r.id, r);
@@ -638,6 +638,14 @@ function createPlazaServer(opts = {}) {
         if (r.kind === 'dino') return dinoStart(r, seed);
         if (r.kind === 'volley') return volleyStart(r);
         if (r.kind === 'gomoku') return gomokuStart(r);
+        // 手動戰鬥的房：要剛好 2 人（一個人出發是跟電腦打，頁面自己跑，不經伺服器）
+        if (r.kind === 'duel') {
+            if (r.ids.length !== 2) return { status: 409, body: { ok: false, error: '手動戰鬥要 2 個人（一個人請跟電腦打）' } };
+            const A = members.get(r.ids[0]), B = members.get(r.ids[1]);
+            if (!A || !B) return { status: 409, body: { ok: false, error: '有人不在廣場了' } };
+            duelStart(A, B, r);
+            return { status: 200, body: { ok: true } };
+        }
         r.game = ST.createGame({ seed, mode: r.mode, players: r.ids.map(i => ({ id: i })) });
         r.state = 'play'; r.startedAt = now();
         roomSend(r, 'stairs:start', { room: roomPub(r), seed });
@@ -921,10 +929,12 @@ function createPlazaServer(opts = {}) {
 
     // ── 手動戰鬥（docs/plaza-duel-spec.md）：對戰邀請選「手動戰鬥」→ 開一間 2 人房直接開打。
     // 回合制、伺服器判定（duel-sim.js）：兩邊都選好或時限到 → 結算一回合、推 duel:round，頁面照結果演出
-    function duelStart(A, B) {
+    // room：從小遊戲選單開的房（房主＝A）；沒給 = 對戰邀請接受後直接開一間
+    function duelStart(A, B, room) {
         const t = now(), bg = DS.BGS[Math.floor(rand() * DS.BGS.length)];
-        const r = { id: crypto.randomBytes(5).toString('hex'), host: A.id, kind: 'duel', mode: 'endless', ids: [A.id, B.id],
-                    state: 'play', game: null, timer: null, ver: STAIRS_VER, startedAt: t };
+        const r = room || { id: crypto.randomBytes(5).toString('hex'), host: A.id, kind: 'duel', mode: 'endless', ids: [A.id, B.id],
+                            game: null, timer: null, ver: STAIRS_VER };
+        r.state = 'play'; r.startedAt = t;
         const startAt = t + (opts.duelOpenMs ?? DS.OPEN_MS);
         r.duel = { ...DS.createDuel([A.card.str, B.card.str], bg), sides: [A.id, B.id], startAt,
                    deadline: startAt + (opts.duelPickMs ?? DS.PICK_MS), picks: [null, null], endAt: null };

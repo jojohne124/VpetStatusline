@@ -96,6 +96,9 @@ console.log('— 指定日期的節日（選舉、尾牙）—');
     const t = P.feastLayout(6).table, red = ([r, g, b]) => r > 120 && r > g * 2 && r > b * 2;
     const reds = (style) => P.feastTable(t, 0, style).dots.flat().filter(c => c && red(c)).length;
     ok(reds('weiya') < reds(undefined) / 5 && reds(undefined) > 50, `尾牙桌子還是紅的（紅點 ${reds('weiya')}，春節 ${reds(undefined)}）`);
+    // 尾牙不是吃鍋，是桌菜（2026-10-22 回報）：沒有火鍋的湯色，有一尾魚
+    const has = (style, rgb) => P.feastTable(t, 0, style).dots.flat().some(c => c && c.join() === rgb);
+    ok(has(undefined, '222,96,40') && !has('weiya', '222,96,40') && has('weiya', '214,150,70'), '尾牙桌上還是火鍋（或沒有魚）');
     const dsrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
     ok((dsrc.match(/feast, feastStyle: fest && fest\.id/g) || []).length === 2, '廣場／營地沒把節日（feastStyle）帶給圓桌');
 }

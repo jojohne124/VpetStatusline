@@ -308,7 +308,10 @@ const TB_BASE = {
 // 尾牙（2026-10-22 回報：桌子不要紅色）：白桌巾、香檳金邊、淺灰桌裙，盤子改淡藍才看得出來
 const TB_STYLE = {
     weiya: { ...TB_BASE, cloth: [236, 236, 232], clothHi: [250, 250, 247], trim: [206, 178, 104],
-             skirt: [200, 200, 196], skirtLo: [162, 162, 160], plate: [186, 200, 220] },
+             skirt: [200, 200, 196], skirtLo: [162, 162, 160], plate: [186, 200, 220],
+             // 桌菜（2026-10-22 回報：尾牙不是吃鍋）：轉盤、整尾魚、蝦、焢肉、青菜、湯
+             lazy: [128, 136, 148], lazyRim: [96, 102, 112], dish: [246, 246, 250],
+             fish: [214, 150, 70], fishHi: [240, 196, 110], shrimp: [240, 110, 70], pork: [140, 70, 40], broth: [235, 200, 110] },
 };
 function feastTable(t, step, style) {
     const TB = TB_STYLE[style] || TB_BASE;
@@ -328,17 +331,20 @@ function feastTable(t, step, style) {
         const edge = !inE(x, y, rx - 0.6, ry - 0.6);
         put(x + rx, y + ry + UP, edge ? TB.trim : (y < -ry / 3 && x < 0 ? TB.clothHi : TB.cloth));
     }
-    // 火鍋：中間一圈鍋，裡面是湯和料
+    // 火鍋：中間一圈鍋，裡面是湯和料（尾牙改擺桌菜，見 feastDishes）
     const pa = Math.max(3, Math.round(rx * 0.3)), pb = Math.max(2, Math.round(pa * 0.55));
     const pcy = ry + UP - 1;
-    for (let y = -pb - 1; y <= pb + 1; y++) for (let x = -pa - 1; x <= pa + 1; x++) {
+    const soup = TB.lazy ? feastDishes(put, inE, TB, rx, ry, pcy) : null;   // 尾牙：湯在哪（熱氣從那裡冒）
+    if (!TB.lazy) for (let y = -pb - 1; y <= pb + 1; y++) for (let x = -pa - 1; x <= pa + 1; x++) {
         if (!inE(x, y, pa + 1.5, pb + 1.5)) continue;
         const inner = inE(x, y, pa - 0.3, pb - 0.3);
         put(x + rx, y + pcy, inner ? ((x + y + step) % 5 === 0 ? TB.soupHi : TB.soup) : TB.potRim);
     }
-    for (let x = -pa; x <= pa; x++) put(x + rx, pcy + pb + 2, TB.potIn);   // 鍋身
-    const food = [[-2, 0, TB.tofu], [1, -1, TB.veg], [2, 1, TB.meat], [-1, 1, TB.veg], [0, 0, TB.tofu]];
-    for (const [fx, fy, c] of food) if (inE(fx, fy, pa - 1, pb - 0.5)) put(fx + rx, fy + pcy, c);
+    if (!TB.lazy) {
+        for (let x = -pa; x <= pa; x++) put(x + rx, pcy + pb + 2, TB.potIn);   // 鍋身
+        const food = [[-2, 0, TB.tofu], [1, -1, TB.veg], [2, 1, TB.meat], [-1, 1, TB.veg], [0, 0, TB.tofu]];
+        for (const [fx, fy, c] of food) if (inE(fx, fy, pa - 1, pb - 0.5)) put(fx + rx, fy + pcy, c);
+    }
     // 盤子：沿著桌面一圈擺幾盤菜（桌子大才擺得多）
     const nPlate = rx >= 20 ? 8 : rx >= 14 ? 6 : 4;
     const dishes = [TB.veg, TB.meat, TB.tofu, TB.soupHi];
@@ -348,15 +354,48 @@ function feastTable(t, step, style) {
         for (let dx = -1; dx <= 1; dx++) put(px + dx + rx, py + ry + UP, TB.plate);
         put(px + rx, py + ry + UP, dishes[i % dishes.length]);
     }
-    // 熱氣：三縷，兩拍一換
+    // 熱氣：三縷，兩拍一換（尾牙只有那碗湯冒一縷）
     const ph = step % 2;
-    for (const [sx, s0] of [[-2, 0], [0, 1], [2, 0]]) {
+    for (const [sx, s0] of soup ? [[soup.x, 1]] : [[-2, 0], [0, 1], [2, 0]]) {
         for (let k = 0; k < 3; k++) {
-            const yy = pcy - pb - 3 - k * 2 - ((s0 + ph) % 2);
+            const yy = (soup ? pcy + soup.y - 2 : pcy - pb - 3) - k * 2 - ((s0 + ph) % 2);
             put(sx + ((k + ph + s0) % 2) + rx, yy, TB.steam);
         }
     }
     return { dots, x: Math.round(t.cx - rx - 0.5), y: Math.round(t.cy - ry) - UP, base: t.cy };
+}
+
+// 尾牙的桌菜：中間一個轉盤，正中間一尾魚（長盤），外圈六道（右後方那碗是湯）
+function feastDishes(put, inE, TB, rx, ry, cy) {
+    const A = Math.round(rx * 0.5), B = Math.max(3, Math.round(ry * 0.55));   // 轉盤佔桌面一半，菜才擺得開
+    for (let y = -B - 1; y <= B + 1; y++) for (let x = -A - 1; x <= A + 1; x++) {
+        if (!inE(x, y, A + 0.5, B + 0.5)) continue;
+        put(x + rx, y + cy, inE(x, y, A - 0.5, B - 0.5) ? TB.lazy : TB.lazyRim);
+    }
+    // 一盤：白盤子（橢圓）裡面盛菜，菜一格深一格淺
+    const plate = (px, py, ra, rb, c, c2) => {
+        for (let y = -rb; y <= rb; y++) for (let x = -ra; x <= ra; x++) {
+            if (!inE(x, y, ra + 0.5, rb + 0.5)) continue;
+            put(px + x + rx, py + y + cy, inE(x, y, ra - 0.7, rb - 0.7) ? ((x + y) % 2 ? c2 : c) : TB.dish);
+        }
+    };
+    // 六道菜沿著轉盤外圈繞一圈、彼此隔開（2026-10-22 回報：盤子黏在一起），中間只放魚
+    const dishes = [[TB.broth, TB.fishHi], [TB.shrimp, TB.fishHi], [TB.veg, TB.veg],
+                    [TB.pork, TB.fish], [TB.fishHi, TB.broth], [TB.meat, TB.shrimp]];
+    let soup = null;
+    dishes.forEach(([c, c2], i) => {
+        const a = -Math.PI / 3 + i * Math.PI / 3;          // 從右後方開始（湯），順時針
+        const px = Math.round(Math.cos(a) * A * 0.72), py = Math.round(Math.sin(a) * B * 0.68);
+        plate(px, py, 2, 1, c, c2);
+        if (i === 0) soup = { x: px, y: py };
+    });
+    // 整尾魚：長盤子、魚身、尾巴（右）、眼睛（左）
+    const fl = Math.max(3, Math.round(A * 0.3));
+    for (let x = -fl - 1; x <= fl + 1; x++) for (let y = -1; y <= 1; y++) put(x + rx, y + cy, TB.dish);
+    for (let x = -fl + 1; x < fl; x++) put(x + rx, cy, (x % 3 === 0) ? TB.fishHi : TB.fish);
+    put(fl + rx, cy - 1, TB.fish); put(fl + rx, cy + 1, TB.fish);
+    put(-fl + 2 + rx, cy, TB.pork);
+    return soup;
 }
 
 /** 真的廣場：在場名單（伺服器發的）→ 畫面。原住民（NPC）先不放。 */

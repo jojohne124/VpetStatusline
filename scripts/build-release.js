@@ -118,7 +118,7 @@ for (const f of ['vpet-standalone.bat', 'vpet-standalone.sh', 'vpet-standalone.v
 copyRel(path.join('tools', 'vpet-standalone.applescript'));
 
 // tray：PowerShell 腳本 + 圖示（零 npm 相依，用 Windows 內建 NotifyIcon）
-for (const f of ['vpet-tray.ps1', 'vpet.ico'])
+for (const f of ['vpet-tray.ps1', 'vpet.ico', 'tray-refresh.ps1'])
     if (fs.existsSync(path.join(REPO, 'tools', f))) copyRel(path.join('tools', f));
 // vpet mini（桌面小視窗，WebView2）：腳本＋WebView2 SDK 三個 dll（Microsoft 簽章、可隨附散布，授權見 lib/LICENSE.txt）。
 // 只收這些固定檔名 —— 小視窗自己產生的 mini-web.json、webview-data\、除錯 log 不出貨

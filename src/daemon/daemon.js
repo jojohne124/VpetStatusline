@@ -30,6 +30,17 @@ if (require.main === module && !process.env.VPET_CHILD && (TREE_IS_RELEASE || pr
 }
 // 我是 supervisor 起的子行程：外殼不在了（tray「結束」只殺得到外殼）就跟著收掉
 if (process.env.VPET_PARENT_PID) require('./supervisor.js').watchParent(Number(process.env.VPET_PARENT_PID), () => process.exit(0));
+// 熱更後把「不會自己換新版」的舊 tray 換掉（2026-10-22）：熱更只重開這個子行程，tray 還是舊碼。
+// tray-refresh.ps1 只動「外殼的父行程、而且是 vpet-tray.ps1」那一個；新版 tray 有記號就不插手（它自己會換）
+if (require.main === module && process.env.VPET_PARENT_PID && process.platform === 'win32') {
+    const trayRefresh = require('path').join(__dirname, '..', '..', 'tools', 'tray-refresh.ps1');
+    if (require('fs').existsSync(trayRefresh)) setTimeout(() => {
+        try {
+            require('child_process').execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                '-File', trayRefresh, '-ShellPid', String(process.env.VPET_PARENT_PID)], { windowsHide: true, timeout: 60000 }, () => {});
+        } catch (e) {}
+    }, 8000).unref();
+}
 
 // 優先用「已安裝」的 core（跟 statusLine 同一份權威），抓不到再退回 repo 內。
 let core;

@@ -7,16 +7,24 @@
 # 由 vpet-standalone.vbs 以隱藏視窗啟動；也可自行執行：
 #   powershell -ExecutionPolicy Bypass -File tools\vpet-tray.ps1
 
+# 熱更交棒用：新版 tray 接手舊 tray 開的 daemon（不再開一個）。
+# param 一定要是腳本第一句（註解不算）—— 放在 Add-Type 後面會被當成指令、參數整個收不到
+param([int]$AdoptPid = 0)
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-param([int]$AdoptPid = 0)   # 熱更交棒用：新版 tray 接手舊 tray 開的 daemon（不再開一個）
 $ErrorActionPreference = 'Stop'
 # 只開一個 tray（第二次雙擊 vpet-standalone.vbs 直接結束，不會再起第二個 daemon 搶 3010）。
 # tools\vpet-mini 的小視窗也看這個 Mutex：tray 在 = daemon 是我們管的，自動更新的空檔多等一下
 $mutex = New-Object System.Threading.Mutex($false, 'Local\vpet-tray')
-# 交棒時舊 tray 還在收尾：多等幾秒讓它放掉 Mutex
-if (-not $mutex.WaitOne($(if ($AdoptPid) { 15000 } else { 0 }), $false)) { exit 0 }
+# 交棒時舊 tray 還在收尾：多等幾秒讓它放掉 Mutex。
+# 舊 tray 被 tools\tray-refresh.ps1 強制結束時 Mutex 會變成「被遺棄」，WaitOne 丟例外但其實已經拿到了
+$gotMutex = $false
+try { $gotMutex = $mutex.WaitOne($(if ($AdoptPid) { 15000 } else { 0 }), $false) } catch [System.Threading.AbandonedMutexException] { $gotMutex = $true }
+if (-not $gotMutex) { exit 0 }
+# 記號：這一版 tray 會自己換新版（Check-SelfUpdate）。tray-refresh.ps1 看到它就不插手，只處理沒有這能力的舊 tray
+$selfUpdateMark = New-Object System.Threading.Mutex($false, 'Local\vpet-tray-selfupdate')
 $root    = Split-Path -Parent $PSScriptRoot         # repo / 安裝根目錄
 $miniVbs = Join-Path $PSScriptRoot 'vpet-mini\vpet-mini.vbs'   # 小視窗（同事做的 vpet mini，2026-10-21 併進來）
 $daemon  = Join-Path $root 'src\daemon\daemon.js'

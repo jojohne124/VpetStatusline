@@ -202,6 +202,21 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     ok(/param\(\[int\]\$AdoptPid = 0\)/.test(tray) && /\(Get-Item \$selfPath\)\.LastWriteTimeUtc -eq \$selfStamp/.test(tray)
        && /'-AdoptPid', \[string\]\$proc\.Id/.test(tray) && /if \(-not \$script:handedOff\) \{ try \{ if \(-not \$proc\.HasExited\) \{ \$proc\.Kill\(\) \} \} catch \{\} \}/.test(tray)
        && /GetProcessById\(\$AdoptPid\)/.test(tray), '熱更後 tray 不會自己換新版（或交棒時把 daemon 殺了）');
+    // param 一定要是第一句（註解不算）：放在 Add-Type 後面會被當成指令，-AdoptPid 收不到 → 交棒的新 tray 直接退出（2026-10-22 踩過）
+    ok(/^param\(/.test(tray.replace(/^﻿/, '').replace(/^\s*(#[^\n]*)?\r?\n/gm, '')), 'tray 的 param 不是第一句（-AdoptPid 會收不到，熱更交棒失敗、tray 消失）');
+    // 舊 tray 被強制結束時 Mutex 是「被遺棄」：要接住，不然新 tray 拿不到就掛
+    ok(/catch \[System\.Threading\.AbandonedMutexException\] \{ \$gotMutex = \$true \}/.test(tray) && /'Local\\vpet-tray-selfupdate'/.test(tray),
+       'tray 沒接住被遺棄的 Mutex（或沒掛「會自己換新版」的記號）');
+    // 熱更後換掉不會自己換新版的舊 tray：daemon 子行程跑 tray-refresh.ps1，只動外殼的父行程（命令列是 vpet-tray.ps1）
+    ok(has('tools/tray-refresh.ps1'), 'release 少了 tools/tray-refresh.ps1');
+    const refresh = read('tools/tray-refresh.ps1');
+    ok(refresh.charCodeAt(0) === 0xFEFF && /^param\(\[int\]\$ShellPid = 0\)/m.test(refresh)
+       && /TryOpenExisting\('Local\\vpet-tray-selfupdate', \[ref\]\$mark\)\) \{ \$mark\.Dispose\(\); exit 0 \}/.test(refresh)
+       && /\$tray = Get-CimInstance Win32_Process -Filter "ProcessId=\$\(\$shell\.ParentProcessId\)"/.test(refresh)
+       && /\$tray\.CommandLine -notlike '\*vpet-tray\.ps1\*'\) \{ exit 0 \}/.test(refresh)
+       && /'-AdoptPid', \[string\]\$ShellPid/.test(refresh), 'tray-refresh.ps1 的保護條件不見了（可能誤殺別的 PowerShell 或新版 tray）');
+    ok(/process\.env\.VPET_PARENT_PID && process\.platform === 'win32'\) \{\s*const trayRefresh = /.test(read('src/daemon/daemon.js')),
+       'daemon 熱更起來後沒有跑 tray-refresh（舊 tray 換不掉）');
     // v15：系統匣雙擊照設定開（小視窗／網頁）、左鍵單擊出選單、第一次啟動跳常駐教學（熱更交棒不跳）
     ok(/function Open-Default/.test(tray) && /\$ni\.add_MouseDoubleClick\(\{ param\(\$s, \$e\) if \(\$e\.Button -eq 'Left'\) \{ \$script:clickTimer\.Stop\(\); Open-Default \} \}\)/.test(tray)
        && /ToolStripMenuItem\('雙擊圖示開啟'\)/.test(tray) && /\$menu\.Items\.Add\('怎麼讓圖示常駐顯示？'\)/.test(tray)

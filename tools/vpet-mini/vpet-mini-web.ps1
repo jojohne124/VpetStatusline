@@ -1,9 +1,8 @@
-﻿# vpet-mini-web.ps1 — 桌寵小視窗（同事做的 v12，2026-10-21 併進 repo，之後由本 repo 維護）
-# 用 WebView2 原封不動開 vpet 的 http://localhost:3010。不注入任何樣式、不改 vpet 任何檔案。
-# 入口：tools\vpet-tray.ps1（vpet-standalone.vbs 啟動的那個系統匣）選單「開啟 vpet mini 視窗」→ vpet-mini.vbs → 這支。
+﻿# vpet-mini-web.ps1 — 桌寵小視窗（第十四版，2026-10-22）
+# 用 WebView2 開vpet 的 http://localhost:3010。不改vpet任何檔案；頁面只注入一條樣式（$STYLE：標題行上下對稱，讓橫列裡的標題與按鈕同一中線，2026-10-22 作者同意）。
 # 三個視窗：
-#   主視窗 = 只有 WebView，形狀（Form.Region）= 頁面回報的實體矩形（面板、按鈕、文字行），其餘是洞（點下去是後面的視窗）
-#   小標籤 = 面板右上角上方的小把手（拖曳、右鍵選單、雙擊開完整頁）
+#   主視窗 = 只有 WebView，形狀（Form.Region）= 頁面回報的實體矩形（面板、按鈕、文字行）＋頂端橫列（面板上方標題列那一段補成整條），其餘是洞（點下去是後面的視窗）
+#   小標籤 = 頂端橫列右端的「☰ vpet 75%」按鈕（左鍵／右鍵開選單、按住拖曳移動、滑鼠移上去變亮）
 #   小方塊 = 面板右下角 14×14（拖曳 = 整頁等比例縮放 40%～200%，放開才套用）
 #   小標籤／小方塊做成主視窗的 owned window：WebView2 是獨立子視窗會蓋住同區域的控制項，疊在上面只能用另一個視窗。
 # 頁面裡唯一塞進去的是一段「量內容」的腳本（只量不改、不綁任何 id）：內容寬高（自動貼合）＋實體矩形（形狀）。
@@ -35,11 +34,11 @@ if (-not $script:mutex.WaitOne(0, $false)) {
 $script:Port = if ($env:AGUMON_DAEMON_PORT) { $env:AGUMON_DAEMON_PORT } else { '3010' }
 $script:HomeUrl = "http://localhost:$($script:Port)/"
 $script:CfgPath = Join-Path $here 'mini-web.json'
-$script:Cfg = @{ x = 80; y = 80; w = 480; h = 640; zoom = 1.0; topmost = $true; autofit = $true; readZoom = 0 }   # readZoom 0 = 關
+$script:Cfg = @{ x = 80; y = 80; w = 480; h = 640; zoom = 1.0; topmost = $true; autofit = $true; readZoom = 0; petFollow = $false }   # readZoom 0 = 關；petFollow 小寵物跟隨滑鼠
 if (Test-Path $script:CfgPath) {
     try {
         $j = Get-Content $script:CfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($k in @('x','y','w','h','zoom','topmost','autofit','readZoom')) { if ($null -ne $j.$k) { $script:Cfg[$k] = $j.$k } }
+        foreach ($k in @('x','y','w','h','zoom','topmost','autofit','readZoom','petFollow')) { if ($null -ne $j.$k) { $script:Cfg[$k] = $j.$k } }
     } catch {}
 }
 $script:Cfg.autofit = $true   # 固定開：右下角拖曳＝整頁等比例縮放
@@ -79,15 +78,26 @@ $form.Controls.Add($wv)
 # ── 小標籤（把手）──
 $tag = New-Object System.Windows.Forms.Form
 $tag.Text = 'vpet mini tag'; $tag.FormBorderStyle = 'None'; $tag.ShowInTaskbar = $false; $tag.StartPosition = 'Manual'
-$tag.BackColor = $COL_BAR; $tag.TopMost = [bool]$script:Cfg.topmost
+$tag.BackColor = $COL_LINE; $tag.TopMost = [bool]$script:Cfg.topmost   # 外圍 1 px 當按鈕的框線
+$COL_HOVER = [System.Drawing.Color]::FromArgb(255, 48, 54, 61)
+$COL_TXT_HOVER = [System.Drawing.Color]::FromArgb(255, 230, 237, 243)
 $lbl = New-Object System.Windows.Forms.Label
-$lbl.AutoSize = $true; $lbl.ForeColor = $COL_TXT; $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 8)
-$lbl.Padding = New-Object System.Windows.Forms.Padding(6, 1, 6, 1); $lbl.Location = New-Object System.Drawing.Point(0, 0)
-$lbl.Text = 'vpet'
+# 高度不讓 Label 自己量（☰ 由後備字型畫、會把行高撐高），由 Update-TagFont 決定（有橫列＝橫列高）；寬度用 TextRenderer 量文字
+$lbl.AutoSize = $false; $lbl.TextAlign = 'MiddleLeft'; $lbl.ForeColor = $COL_TXT; $lbl.BackColor = $COL_BAR; $lbl.Font = New-Object System.Drawing.Font('Consolas', 11, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+$lbl.Location = New-Object System.Drawing.Point(1, 1); $script:tagH = 19
+$lbl.Cursor = [System.Windows.Forms.Cursors]::Hand
+function Tag-Text([double]$z) { return ('☰ vpet {0}%' -f [int][Math]::Round($z * 100)) }   # 同仁不知道這裡能按：加 ☰、縮放比例外顯
+$lbl.Text = Tag-Text ([double]$script:Cfg.zoom)
 $tag.Controls.Add($lbl)
-function Fit-Tag { $sz = New-Object System.Drawing.Size($lbl.Width, $lbl.Height); $tag.MinimumSize = $sz; $tag.MaximumSize = $sz; $tag.ClientSize = $sz }
+function Fit-Tag {
+    $tw = [System.Windows.Forms.TextRenderer]::MeasureText($lbl.Text, $lbl.Font).Width + 12
+    $lbl.Size = New-Object System.Drawing.Size($tw, $script:tagH)
+    $sz = New-Object System.Drawing.Size(($tw + 2), ($script:tagH + 2)); $tag.MinimumSize = $sz; $tag.MaximumSize = $sz; $tag.ClientSize = $sz }
 function Set-Tag([string]$t, $col) { $lbl.Text = $t; if ($col) { $lbl.ForeColor = $col } else { $lbl.ForeColor = $COL_TXT }; Fit-Tag; Place-Handles }
 Fit-Tag
+# 滑鼠移上去變亮（像個按鈕）
+$lbl.add_MouseEnter({ $lbl.BackColor = $COL_HOVER; $lbl.ForeColor = $COL_TXT_HOVER })
+$lbl.add_MouseLeave({ $lbl.BackColor = $COL_BAR; $lbl.ForeColor = $COL_TXT })
 
 # ── 小方塊（縮放）──
 $grip = New-Object System.Windows.Forms.Form
@@ -97,6 +107,234 @@ $grip.MinimumSize = New-Object System.Drawing.Size($GRIP_PX, $GRIP_PX)   # 不�
 $grip.MaximumSize = New-Object System.Drawing.Size($GRIP_PX, $GRIP_PX)
 $grip.ClientSize = New-Object System.Drawing.Size($GRIP_PX, $GRIP_PX)
 $grip.Cursor = [System.Windows.Forms.Cursors]::SizeNWSE
+
+# ── 小寵物（第十五版，10-22 改成「照抄遊戲畫面」）：選單「縮成小寵物」→ 小視窗藏起來（不關，WebView 留著），原位放一隻角色；點牠一下小視窗回來 ──
+#    圖從哪來：/state 的 petLines＝遊戲此刻真正畫的那隻（8 列 × 52 格彩色半格字元：▀ 前景＝上半、背景＝下半；▄ 前景＝下半、背景＝上半；點字空白透明）
+#    → 解回 52×16 像素、裁掉四周透明、放大 petScale 倍。睡覺的 Z、心情決定的表情、戰鬥整場都是遊戲本人畫的，這裡不模擬任何動作。
+#    面向：裁出來的圖跟 characters\<角色>\art.json 的 12 幀比對（原圖面向左；比到左右翻轉版＝面向右），走的方向跟面向不合就整張翻轉；
+#    比不到單隻（睡覺有 Z、戰鬥整場、進化）就原地站著不走。尺寸：一格＝8 × 畫面縮放（跟小視窗裡那隻一樣大），戰鬥不另外放大。
+#    寵物視窗用色鍵透明（TransparencyKey）：這裡沒有 WebView、純 GDI 畫，點擊判定正常（色鍵只對 WebView2 不行）。色鍵 (255,0,255) 掃過 260 隻角色圖都沒用到。
+function Find-VpetRoot {
+    $cands = @()
+    $cf = Join-Path $here 'vpet-mini.config.json'
+    if (Test-Path $cf) { try { $c0 = Get-Content $cf -Raw -Encoding UTF8 | ConvertFrom-Json; if ($c0.vpetRoot) { $cands += [string]$c0.vpetRoot } } catch {} }
+    if ($env:VPET_ROOT) { $cands += $env:VPET_ROOT }
+    $rp = Join-Path $env:USERPROFILE '.claude\agumon-statusline\REPO_PATH'
+    if (Test-Path $rp) { try { $cands += (Get-Content $rp -Raw -Encoding UTF8).Trim() } catch {} }
+    $up = Resolve-Path (Join-Path $here '..\..') -ErrorAction SilentlyContinue; if ($up) { $cands += $up.Path }
+    $cands += 'D:\Tools\vpet'
+    foreach ($c in $cands) { if ($c -and (Test-Path (Join-Path $c 'characters'))) { return $c } }
+    return $null
+}
+$script:VpetRoot = Find-VpetRoot
+$script:petArt = @{}              # 角色 id → 已裁邊的幀清單（每幀 int[,] [y,x]＝r<<16|g<<8|b，-1 透明），只拿來比對面向
+$script:petMode = $false; $script:petDir = -1; $script:petTick = 0; $script:petRange = @{ l = 0; r = 0; y = 0 }
+$script:petSingle = $false; $script:lastChar = ''; $script:petScale = 6
+$PET_TICK_MS = 150; $PET_POLL_TICKS = 3         # 每 3 拍（0.45 秒）抄一次 /state（遊戲 0.75 秒一步，抄得比它快就不會漏太多）
+$PET_PATROL_PX = 3                               # 折返走：每拍 3 px
+# 跟著滑鼠：每拍 9 px（約 60 px/秒）二維朝滑鼠走，中心離滑鼠 ≤ 身寬×0.75 就停下站著（身體邊緣不壓到游標），離開 >120 px 才再追（遲滯，免得微動就抖）
+$PET_FOLLOW_SPEED = 9; $PET_FOLLOW_RESUME = 120; $script:petArrived = $false
+
+function Crop-Px([int[,]]$px) {
+    # 裁掉四周透明；全透明回 $null。回 @{ w; h; px }
+    $H = $px.GetLength(0); $W = $px.GetLength(1)
+    $minX = $W; $maxX = -1; $minY = $H; $maxY = -1
+    for ($y = 0; $y -lt $H; $y++) { for ($x = 0; $x -lt $W; $x++) { if ($px[$y, $x] -ge 0) { if ($x -lt $minX) { $minX = $x }; if ($x -gt $maxX) { $maxX = $x }; if ($y -lt $minY) { $minY = $y }; if ($y -gt $maxY) { $maxY = $y } } } }
+    if ($maxX -lt 0) { return $null }
+    $cw = $maxX - $minX + 1; $chh = $maxY - $minY + 1
+    $cp = New-Object 'int[,]' $chh, $cw
+    for ($y = 0; $y -lt $chh; $y++) { for ($x = 0; $x -lt $cw; $x++) { $cp[$y, $x] = $px[($minY + $y), ($minX + $x)] } }
+    return @{ w = $cw; h = $chh; px = $cp }
+}
+function Load-PetArt([string]$charId) {
+    # id 來自 /state、直接拼進路徑：只收資料夾名會有的字（不讓 ..\ 之類跑出 characters\，併入時加的）
+    if (-not $charId -or $charId -notmatch '^[A-Za-z0-9_-]+$') { return @() }
+    if ($script:petArt.ContainsKey($charId)) { return $script:petArt[$charId] }
+    $out = @()
+    try {
+        $p = Join-Path $script:VpetRoot ("characters\" + $charId + "\art.json")
+        if ($script:VpetRoot -and (Test-Path $p)) {
+            $d = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json; $W = [int]$d.width; $H = [int]$d.height
+            foreach ($fr in $d.frames) {
+                $px = New-Object 'int[,]' ($H * 2), $W
+                for ($y = 0; $y -lt $H * 2; $y++) { for ($x = 0; $x -lt $W; $x++) { $px[$y, $x] = -1 } }
+                for ($y = 0; $y -lt $H; $y++) { $row = $fr[$y]; if ($null -eq $row) { continue }
+                    for ($x = 0; $x -lt $W; $x++) { $c = if ($x -lt $row.Count) { $row[$x] } else { $null }; if ($null -eq $c) { continue }
+                        foreach ($half in 0, 1) { $r = [int]$c[$half * 3]; if ($r -ge 0) { $px[($y * 2 + $half), $x] = ($r -shl 16) -bor ([int]$c[$half * 3 + 1] -shl 8) -bor [int]$c[$half * 3 + 2] } } } }
+                $cr = Crop-Px $px; if ($cr) { $out += ,$cr }
+            }
+        }
+    } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} pet art: {1}" -f (Get-Date), $_.Exception.Message) } }
+    $script:petArt[$charId] = $out
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet art loaded: {1} frames={2}" -f (Get-Date), $charId, $out.Count) }
+    return $out
+}
+function Parse-PetLines($lines) {
+    # petLines（ANSI 24-bit 色碼＋半格字元）→ 裁邊後的 @{ w; h; px }；空的回 $null
+    $rows = @($lines); if ($rows.Count -eq 0) { return $null }
+    $cells = @(); $W = 0
+    foreach ($ln in $rows) {
+        $fg = -1; $bg = -1; $cl = New-Object System.Collections.ArrayList; $s = [string]$ln; $i = 0; $n = $s.Length
+        while ($i -lt $n) {
+            $ch = $s[$i]
+            if ($ch -eq [char]27 -and ($i + 1) -lt $n -and $s[$i + 1] -eq '[') {
+                $j = $s.IndexOf('m', $i); if ($j -lt 0) { break }
+                $code = $s.Substring($i + 2, $j - $i - 2); $i = $j + 1
+                if ($code -eq '0' -or $code -eq '') { $fg = -1; $bg = -1 }
+                elseif ($code.StartsWith('38;2;')) { $q = $code.Split(';'); $fg = ([int]$q[2] -shl 16) -bor ([int]$q[3] -shl 8) -bor [int]$q[4] }
+                elseif ($code.StartsWith('48;2;')) { $q = $code.Split(';'); $bg = ([int]$q[2] -shl 16) -bor ([int]$q[3] -shl 8) -bor [int]$q[4] }
+                continue
+            }
+            $top = -1; $bot = -1
+            if ($ch -eq [char]0x2580) { $top = $fg; $bot = $bg }
+            elseif ($ch -eq [char]0x2584) { $bot = $fg; $top = $bg }
+            elseif ($ch -eq [char]0x2588) { $top = $fg; $bot = $fg }
+            [void]$cl.Add(@($top, $bot)); $i++
+        }
+        if ($cl.Count -gt $W) { $W = $cl.Count }
+        $cells += ,$cl
+    }
+    if ($W -eq 0) { return $null }
+    $H = $rows.Count * 2
+    $px = New-Object 'int[,]' $H, $W
+    for ($y = 0; $y -lt $H; $y++) { for ($x = 0; $x -lt $W; $x++) { $px[$y, $x] = -1 } }
+    for ($r = 0; $r -lt $rows.Count; $r++) { $cl = $cells[$r]; for ($x = 0; $x -lt $cl.Count; $x++) { $px[($r * 2), $x] = $cl[$x][0]; $px[($r * 2 + 1), $x] = $cl[$x][1] } }
+    return Crop-Px $px
+}
+function Match-Facing($img) {
+    # 跟角色原圖比：回 -1（原圖方向＝面向左）、1（翻轉版＝面向右）、0（比不到：睡覺有 Z、戰鬥、進化…）
+    $frames = Load-PetArt $script:lastChar
+    foreach ($fr in $frames) {
+        if ($fr.w -ne $img.w -or $fr.h -ne $img.h) { continue }
+        $same = 0; $flip = 0; $tot = $fr.w * $fr.h
+        for ($y = 0; $y -lt $fr.h; $y++) { for ($x = 0; $x -lt $fr.w; $x++) { $v = $fr.px[$y, $x]; if ($v -eq $img.px[$y, $x]) { $same++ }; if ($v -eq $img.px[$y, ($fr.w - 1 - $x)]) { $flip++ } } }
+        if ($same -ge $tot * 0.9) { return -1 }
+        if ($flip -ge $tot * 0.9) { return 1 }
+    }
+    return 0
+}
+function Build-PetBitmap($img, [int]$k, [bool]$flipX) {
+    $bmp = New-Object System.Drawing.Bitmap(($img.w * $k), ($img.h * $k), [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::Transparent)
+    $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
+    for ($y = 0; $y -lt $img.h; $y++) { for ($x = 0; $x -lt $img.w; $x++) { $v = $img.px[$y, $x]; if ($v -lt 0) { continue }
+        $br.Color = [System.Drawing.Color]::FromArgb(255, (($v -shr 16) -band 255), (($v -shr 8) -band 255), ($v -band 255))
+        $dx = if ($flipX) { $img.w - 1 - $x } else { $x }
+        $g.FillRectangle($br, ($dx * $k), ($y * $k), $k, $k) } }
+    $g.Dispose(); $br.Dispose(); return $bmp
+}
+$PET_KEY = [System.Drawing.Color]::FromArgb(255, 255, 0, 255)
+$pet = New-Object System.Windows.Forms.Form
+$pet.Text = 'vpet mini pet'; $pet.FormBorderStyle = 'None'; $pet.ShowInTaskbar = $false; $pet.StartPosition = 'Manual'
+$pet.BackColor = $PET_KEY; $pet.TransparencyKey = $PET_KEY; $pet.TopMost = [bool]$script:Cfg.topmost
+$pet.MinimumSize = New-Object System.Drawing.Size(16, 16)
+$pbox = New-Object System.Windows.Forms.PictureBox
+$pbox.BackColor = $PET_KEY; $pbox.SizeMode = 'AutoSize'; $pbox.Location = New-Object System.Drawing.Point(0, 0)
+$pbox.Cursor = [System.Windows.Forms.Cursors]::Hand
+$pet.Controls.Add($pbox)
+function Get-State {
+    try { $req = [System.Net.HttpWebRequest]::Create("http://localhost:$($script:Port)/state"); $req.Timeout = 500; $req.ReadWriteTimeout = 500
+          $res = $req.GetResponse(); $sr = New-Object System.IO.StreamReader($res.GetResponseStream()); $txt = $sr.ReadToEnd(); $sr.Close(); $res.Close()
+          return ($txt | ConvertFrom-Json) } catch { return $null }
+}
+function Set-PetDir([int]$d) {
+    # 走的方向變了：圖立刻翻，不等下一次抄（抄回來時會按面向重算，結果一致）
+    if ($d -eq $script:petDir) { return }
+    $script:petDir = $d
+    if ($script:petSingle -and $pbox.Image) { $pbox.Image.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX); $pbox.Invalidate() }
+}
+function Refresh-Pet($st) {
+    # 抄一次遊戲畫面到寵物視窗；$st 給了就用、沒給就讀 /state
+    if ($null -eq $st) { $st = Get-State }; if ($null -eq $st) { return }
+    if ($st.character) { $script:lastChar = [string]$st.character }
+    $img = Parse-PetLines $st.petLines; if ($null -eq $img) { return }
+    $facing = Match-Facing $img
+    $script:petSingle = ($facing -ne 0)
+    $flip = $(if ($script:petSingle) { $facing -ne $script:petDir } else { $false })
+    $old = $pbox.Image
+    $pbox.Image = Build-PetBitmap $img $script:petScale $flip
+    # 尺寸變了（例如戰鬥變寬、睡覺多了 Z）：底邊不動往上長、水平置中不動
+    $newW = $pbox.Image.Width; $newH = $pbox.Image.Height
+    $ddx = [int](($pet.Width - $newW) / 2); $ddy = $pet.Height - $newH
+    $pet.ClientSize = New-Object System.Drawing.Size($newW, $newH)
+    if ($ddx -ne 0 -or $ddy -ne 0) { $pet.Location = New-Object System.Drawing.Point(($pet.Left + $ddx), ($pet.Top + $ddy)) }
+    if ($old) { $old.Dispose() }
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet refresh: kind={1} img={2}x{3} facing={4} single={5} flip={6} scale={7}" -f (Get-Date), $st.kind, $img.w, $img.h, $facing, $script:petSingle, $flip, $script:petScale) }
+}
+function Enter-Pet {
+    if ($script:petMode) { return }
+    $script:petScale = [Math]::Max(2, [int][Math]::Round(8 * [double]$script:Cfg.zoom))   # 跟小視窗裡那隻一樣大：100% 時一格 8 px
+    $st = Get-State
+    if ($null -eq $st -or -not $st.petLines) {
+        [void][System.Windows.Forms.MessageBox]::Show("讀不到 daemon 的 /state（petLines）。daemon 沒在跑？", 'vpet mini'); return }
+    $p = Get-Panel
+    # 折返走的範圍＝小視窗面板的寬；站在面板的下緣
+    $script:petRange = @{ l = $form.Left + $p.x; r = $form.Left + $p.x + $p.w; y = $form.Top + $p.y + $p.h }
+    $script:petMode = $true; $script:petTick = 0; $script:petDir = -1; $script:petArrived = $false
+    $pet.ClientSize = New-Object System.Drawing.Size(16, 16)
+    $pet.Location = New-Object System.Drawing.Point(($script:petRange.l + [int]($p.w / 2) - 8), ($script:petRange.y - 16))
+    Refresh-Pet $st
+    $tag.Hide(); $grip.Hide(); $form.Hide(); $pet.Show(); $script:petTimer.Start()
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet enter: char={1} range={2}..{3} y={4} at {5},{6} {7}x{8} scale={9}" -f (Get-Date), $script:lastChar, $script:petRange.l, $script:petRange.r, $script:petRange.y, $pet.Left, $pet.Top, $pet.Width, $pet.Height, $script:petScale) }
+}
+function Leave-Pet {
+    if (-not $script:petMode) { return }
+    $script:petTimer.Stop(); $script:petMode = $false; $pet.Hide()
+    $form.Show(); $tag.Show(); $grip.Show(); Place-Handles; $form.Activate()
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet leave" -f (Get-Date)) }
+}
+$script:petTimer = New-Object System.Windows.Forms.Timer; $script:petTimer.Interval = $PET_TICK_MS
+$script:petTimer.add_Tick({
+    if (-not $script:petMode) { return }
+    try { Pet-Tick } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} pet tick: {1}`n{2}" -f (Get-Date), $_.Exception.Message, $_.ScriptStackTrace) } }
+})
+function Pet-Tick {
+    $script:petTick++
+    if (($script:petTick % $PET_POLL_TICKS) -eq 0) { Refresh-Pet $null }
+    if (-not $script:petSingle) { return }   # 睡覺／戰鬥／進化：原地不動，看遊戲演
+    if ($script:Cfg.petFollow) {
+        $cp = [System.Windows.Forms.Cursor]::Position
+        $cx = $pet.Left + $pet.Width / 2.0; $cy = $pet.Top + $pet.Height / 2.0
+        $dx = $cp.X - $cx; $dy = $cp.Y - $cy; $dist = [Math]::Sqrt($dx * $dx + $dy * $dy)
+        $stopAt = [Math]::Max(32, $pet.Width * 0.75)
+        if ($script:petArrived) { if ($dist -gt $PET_FOLLOW_RESUME) { $script:petArrived = $false } }
+        elseif ($dist -le $stopAt) { $script:petArrived = $true }
+        if ([Math]::Abs($dx) -gt 2) { Set-PetDir $(if ($dx -gt 0) { 1 } else { -1 }) }   # 面朝滑鼠
+        if (-not $script:petArrived -and $dist -gt 0) {
+            $mv = [Math]::Min([double]$PET_FOLLOW_SPEED, $dist - $stopAt + 1)
+            $wa = [System.Windows.Forms.Screen]::FromPoint($cp).WorkingArea
+            $nx = [int][Math]::Round($pet.Left + $dx / $dist * $mv); $ny = [int][Math]::Round($pet.Top + $dy / $dist * $mv)
+            $nx = [Math]::Max($wa.Left, [Math]::Min($nx, $wa.Right - $pet.Width)); $ny = [Math]::Max($wa.Top, [Math]::Min($ny, $wa.Bottom - $pet.Height))
+            $pet.Location = New-Object System.Drawing.Point($nx, $ny)
+        }
+        return
+    }
+    # 沒跟隨滑鼠就在面板寬度內折返走（「原地不動」開關 2026-10-22 使用者決定拿掉）
+    $nx = $pet.Left + $script:petDir * $PET_PATROL_PX
+    if ($nx -lt $script:petRange.l) { $nx = $script:petRange.l; Set-PetDir 1 }
+    if (($nx + $pet.Width) -gt $script:petRange.r) { $nx = $script:petRange.r - $pet.Width; Set-PetDir -1 }
+    $pet.Left = $nx
+}
+# 點牠一下 → 小視窗回來；按住拖 → 搬牠（折返範圍跟著移）
+$script:petDrag = $null; $script:petMoved = $false
+$petDown = { param($s, $e) if ($e.Button -eq 'Left') { $script:petDrag = [System.Windows.Forms.Cursor]::Position; $script:petMoved = $false; $script:petOrig = $pet.Location } }
+$petMove = { param($s, $e) if ($script:petDrag -and $e.Button -eq 'Left') { $cp = [System.Windows.Forms.Cursor]::Position
+        if ([Math]::Abs($cp.X - $script:petDrag.X) -gt 3 -or [Math]::Abs($cp.Y - $script:petDrag.Y) -gt 3) { $script:petMoved = $true }
+        if ($script:petMoved) { $pet.Location = New-Object System.Drawing.Point(($script:petOrig.X + $cp.X - $script:petDrag.X), ($script:petOrig.Y + $cp.Y - $script:petDrag.Y)) } } }
+$petUp = { param($s, $e) if ($script:petDrag) { $script:petDrag = $null
+        if ($script:petMoved) {   # 搬完：折返範圍平移到新位置、小視窗回來時也開在對應位置
+            $dx = $pet.Left - $script:petOrig.X; $dy = $pet.Top - $script:petOrig.Y
+            $script:petRange.l += $dx; $script:petRange.r += $dx; $script:petRange.y += $dy
+            $form.Location = New-Object System.Drawing.Point(($form.Left + $dx), ($form.Top + $dy)); $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg }
+        elseif ($e.Button -eq 'Left') { Leave-Pet } } }
+$pbox.add_MouseDown($petDown); $pbox.add_MouseMove($petMove); $pbox.add_MouseUp($petUp)
+$petMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$pm1 = $petMenu.Items.Add('打開小視窗'); $pm1.add_Click({ Leave-Pet })
+$script:pmFollow = $petMenu.Items.Add('跟隨滑鼠'); $script:pmFollow.Checked = [bool]$script:Cfg.petFollow
+$script:pmFollow.add_Click({ $script:Cfg.petFollow = -not $script:Cfg.petFollow; $script:petArrived = $false; $script:pmFollow.Checked = $script:Cfg.petFollow; if ($script:mFollow) { $script:mFollow.Checked = $script:Cfg.petFollow }; Save-Cfg })
+[void]$petMenu.Items.Add('-')
+$pm3 = $petMenu.Items.Add('結束 vpet mini'); $pm3.add_Click({ $form.Close() })
+$pbox.ContextMenuStrip = $petMenu
 
 # ── 形狀與位置 ──
 function Get-Panel {
@@ -108,9 +346,46 @@ function Get-Panel {
     if ($best) { return @{ x = [int]([double]$best[0] * $z); y = [int]([double]$best[1] * $z); w = [int]([double]$best[2] * $z); h = [int]([double]$best[3] * $z) } }
     return @{ x = 0; y = 0; w = $form.Width; h = $form.Height }
 }
+function Get-Bar {
+    # 頂端橫列：面板上方、x 範圍跟面板重疊的實體矩形（頁面的「Vpet daemon」標題列）→ 從面板左緣到右緣、頂到那些矩形的最高點，
+    # 補成一整條（露出的是頁面 body 的深色底，不注入）。找不到標題列（高度不在 8～80 px）就沒有橫列，小標籤照舊貼面板上方
+    if (-not $script:Rects -or $script:Rects.Count -eq 0) { return $null }
+    $p = Get-Panel; $z = [double]$script:Cfg.zoom; $top = -1.0
+    # 優先用頁面回報的標題盒子（h1 含內距）：實體矩形只量到文字那一行，會少掉上方內距、橫列就不對稱
+    if ($script:TitleBox) { $q = $script:TitleBox; $qx = [double]$q[0] * $z; $qy = [double]$q[1] * $z; $qw = [double]$q[2] * $z; $qh = [double]$q[3] * $z
+        if (($qy + $qh) -le ($p.y + 1) -and $qx -lt ($p.x + $p.w) -and ($qx + $qw) -gt $p.x) { $top = $qy } }
+    if ($top -lt 0) { foreach ($q in $script:Rects) {
+        $qx = [double]$q[0] * $z; $qy = [double]$q[1] * $z; $qw = [double]$q[2] * $z; $qh = [double]$q[3] * $z
+        if (($qy + $qh) -le ($p.y + 1) -and $qx -lt ($p.x + $p.w) -and ($qx + $qw) -gt $p.x) { if ($top -lt 0 -or $qy -lt $top) { $top = $qy } }
+    } }
+    if ($top -lt 0) { return $null }
+    $h = $p.y - [int][Math]::Floor($top)
+    if ($h -lt 8 -or $h -gt 80) { return $null }
+    return @{ x = $p.x; y = ($p.y - $h); w = $p.w; h = $h }
+}
+# 標籤字級跟頁面標題一致：標題字級（CSS px，頁面回報）× 畫面縮放 = 螢幕 px；有橫列時按鈕高＝橫列高−2、對橫列置中
+# （標題行由 $STYLE 改成上下對稱，所以也在橫列正中間 → 兩段字同一條中線）
+$script:TitleFs = 0; $script:tagPx = 0; $script:tagBarH = -1
+function Update-TagFont([int]$barH) {
+    $px = if ($script:TitleFs -gt 0) { [int][Math]::Round($script:TitleFs * [double]$script:Cfg.zoom) } else { 11 }
+    $px = [Math]::Max(9, [Math]::Min(24, $px))
+    if ($px -eq $script:tagPx -and $barH -eq $script:tagBarH) { return }
+    $script:tagPx = $px; $script:tagBarH = $barH
+    # 字型跟頁面標題同家族（body 是 ui-monospace,Consolas,monospace；h1 粗體）：同字級下 Segoe UI 的字形比等寬字大一圈，光對字級看起來還是不一樣大
+    $fam = 'Consolas'; try { $null = New-Object System.Drawing.FontFamily($fam) } catch { $fam = 'Segoe UI' }
+    $font = New-Object System.Drawing.Font($fam, [single]$px, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $th = [System.Windows.Forms.TextRenderer]::MeasureText('☰ vpet 100%', $font).Height
+    # 按鈕不能比橫列高：裝不下就逐 px 縮字
+    while ($barH -gt 0 -and ($th + 4) -gt $barH -and $px -gt 9) { $px--; $font = New-Object System.Drawing.Font($fam, [single]$px, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel); $th = [System.Windows.Forms.TextRenderer]::MeasureText('☰ vpet 100%', $font).Height }
+    $script:tagH = if ($barH -gt 0) { $barH - 2 } else { $th + 4 }
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} tagfont fam={1} tfs={2} z={3} px={4} th={5} tagH={6} barH={7}" -f (Get-Date), $fam, $script:TitleFs, $script:Cfg.zoom, $px, $th, $script:tagH, $barH) }
+    $lbl.Font = $font; Fit-Tag
+}
 function Place-Handles {
-    $p = Get-Panel
-    $tx = [Math]::Max(0, $p.x + $p.w - $tag.Width); $ty = $p.y - $tag.Height; if ($ty -lt 0) { $ty = $p.y }
+    $p = Get-Panel; $bar = Get-Bar
+    Update-TagFont $(if ($bar) { [int]$bar.h } else { 0 })
+    if ($bar) { $tx = [Math]::Max(0, $bar.x + $bar.w - $tag.Width - 2); $ty = $bar.y + [int](($bar.h - $tag.Height) / 2) }
+    else      { $tx = [Math]::Max(0, $p.x + $p.w - $tag.Width); $ty = $p.y - $tag.Height; if ($ty -lt 0) { $ty = $p.y } }
     $tag.Location  = New-Object System.Drawing.Point(($form.Left + $tx), ($form.Top + $ty))
     $grip.Location = New-Object System.Drawing.Point(($form.Left + [Math]::Max(0, $p.x + $p.w - $GRIP_PX)), ($form.Top + [Math]::Max(0, $p.y + $p.h - $GRIP_PX)))
 }
@@ -124,6 +399,9 @@ function Apply-Region {
         $r1 = New-Object System.Drawing.Rectangle($x, $y, $w, $h)
         if ($null -eq $reg) { $reg = New-Object System.Drawing.Region($r1) } else { $reg.Union($r1) }
     }
+    $bar = Get-Bar
+    if ($bar) { $reg.Union((New-Object System.Drawing.Rectangle($bar.x, $bar.y, ($bar.w + 1), ($bar.h + 1)))) }
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} bar={1}" -f (Get-Date), $(if ($bar) { "$($bar.x),$($bar.y) $($bar.w)x$($bar.h)" } else { 'none' })) }
     $old = $form.Region; $form.Region = $reg; if ($old) { $old.Dispose() }
     if ($env:VPET_MINI_DEBUG) { $gfx = $form.CreateGraphics(); $bb = $reg.GetBounds($gfx); $gfx.Dispose(); Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} region rects={1} bounds={2},{3} {4}x{5} form={6}x{7} wv={8}x{9}" -f (Get-Date), $script:Rects.Count, [int]$bb.X, [int]$bb.Y, [int]$bb.Width, [int]$bb.Height, $form.Width, $form.Height, $wv.Width, $wv.Height) }
 }
@@ -153,16 +431,19 @@ $form.add_LocationChanged({ Place-Handles })
 $form.add_SizeChanged({ Place-Handles })
 
 # ── 拖曳移動（小標籤、墊板那一圈）──
-$script:drag = $null
-$dragDown = { param($s, $e) if ($e.Button -eq 'Left') { $script:drag = New-Object System.Drawing.Point($e.X, $e.Y) } }
+$script:drag = $null; $script:dragFrom = $null; $script:dragMoved = $false
+$dragDown = { param($s, $e) if ($e.Button -eq 'Left') { $script:drag = New-Object System.Drawing.Point($e.X, $e.Y); $script:dragFrom = [System.Windows.Forms.Cursor]::Position; $script:dragMoved = $false } }
 $dragMove = { param($s, $e)
     if ($script:drag -and $e.Button -eq 'Left') {
+        $cp = [System.Windows.Forms.Cursor]::Position
+        if ([Math]::Abs($cp.X - $script:dragFrom.X) -gt 3 -or [Math]::Abs($cp.Y - $script:dragFrom.Y) -gt 3) { $script:dragMoved = $true }
         $form.Location = New-Object System.Drawing.Point(($form.Left + $e.X - $script:drag.X), ($form.Top + $e.Y - $script:drag.Y))
     } }
-$dragUp = { param($s, $e) if ($script:drag) { $script:drag = $null; $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg } }
+# 放開：有移動 = 拖曳結束（存位置）；沒移動 = 點一下 → 開選單（左鍵也能開，不只右鍵）
+$dragUp = { param($s, $e) if ($script:drag) { $script:drag = $null
+        if ($script:dragMoved) { $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg }
+        elseif ($e.Button -eq 'Left') { $menu.Show($lbl, (New-Object System.Drawing.Point(0, $lbl.Height))) } } }
 foreach ($c in @($tag, $lbl)) { $c.add_MouseDown($dragDown); $c.add_MouseMove($dragMove); $c.add_MouseUp($dragUp) }
-$dblOpen = { param($s, $e) if ($e.Button -eq 'Left') { Start-Process $script:HomeUrl } }
-$tag.add_MouseDoubleClick($dblOpen); $lbl.add_MouseDoubleClick($dblOpen)
 
 # ── 小方塊拖曳 = 整頁等比例縮放 ──
 $script:rs = $null; $script:rsTarget = $null
@@ -182,7 +463,7 @@ $script:rsTimer.add_Tick({
     if ($script:rs -and $script:rsTarget) {
         $t = $script:rsTarget; $script:rsTarget = $null
         if ($form.Width -ne $t.w -or $form.Height -ne $t.h) { $form.Size = New-Object System.Drawing.Size([int]$t.w, [int]$t.h) }
-        Set-Tag ('vpet  {0}%' -f [int](($t.w - 26) / [Math]::Max(1, $script:ContentW) * 100)) $null
+        Set-Tag (Tag-Text (($t.w - 26) / [Math]::Max(1, $script:ContentW))) $null
     }
 })
 $script:rsTimer.Start()
@@ -197,7 +478,7 @@ function Grip-Release {
         if ($wv.CoreWebView2) { $wv.ZoomFactor = $z }
         $script:lastFit = ''
         Apply-Fit $script:ContentW $script:ContentH
-        Set-Tag ('vpet  {0}%' -f [int]($z * 100)) $null
+        Set-Tag (Tag-Text $z) $null
     }
     Save-Cfg
 }
@@ -303,7 +584,14 @@ $MEASURE = @'
       for(var j=0;j<b.children.length;j++){ var oe=b.children[j], os=getComputedStyle(oe);
         if((os.position==='fixed'||os.position==='absolute') && os.display!=='none' && os.visibility!=='hidden') overlayNeed(oe, 0); }
       var W=Math.max(Math.ceil(r+pr), Math.ceil(needW)), H=Math.max(Math.ceil(btm+pb), Math.ceil(needH));
-      if(r>0&&btm>0){ window.chrome.webview.postMessage(JSON.stringify({w:W,h:H,vw:vw,rects:solidRects()})); }
+      // 頁面標題（h1「Vpet daemon」）的字級（CSS px）：殼的「☰ vpet 75%」按鈕用同字級，看起來同一排。沒有 h1 就 0（殼用預設）
+      var h1=document.querySelector('h1'), tfs=h1?(parseFloat(getComputedStyle(h1).fontSize)||0):0, tbox=null;
+      if(h1){ var hb=h1.getBoundingClientRect(); if(hb.width>0&&hb.height>0) tbox=[Math.floor(hb.left+window.scrollX),Math.floor(hb.top+window.scrollY),Math.ceil(hb.width),Math.ceil(hb.height)]; }   // 標題整個盒子（含內距），橫列用它的上緣
+      // 前線畫布（最大的那塊）的 CSS 框：進化樹時殼把它鎖回平常的尺寸（object-fit: contain），視窗形狀才不變
+      var cvs=document.querySelectorAll('canvas'), scene=null, sa=0;
+      for(var ci=0;ci<cvs.length;ci++){ var cst=getComputedStyle(cvs[ci]); if(cst.display==='none'||cst.visibility==='hidden') continue; var cb=cvs[ci].getBoundingClientRect(); if(cb.width<=0||cb.height<=0) continue;
+        if(cb.width*cb.height>sa){ sa=cb.width*cb.height; scene=[Math.round(cb.width),Math.round(cb.height)]; } }
+      if(r>0&&btm>0){ window.chrome.webview.postMessage(JSON.stringify({w:W,h:H,vw:vw,tfs:tfs,tbox:tbox,scene:scene,rects:solidRects()})); }
     }catch(e){}
   }
   setInterval(m,700); window.addEventListener('load',m);
@@ -316,7 +604,7 @@ $MEASURE = @'
       if(t==='BUTTON'||t==='A'||t==='INPUT'||t==='SELECT'||t==='TEXTAREA'||t==='CANVAS'||t==='LABEL'||t==='IMG'||t==='VIDEO') return true;
       // data-cmd 只在按鈕類元素上才算互動：vpet把整列 .form 也標了 data-cmd（給列內按鈕讀的），列本身不可點，要能拖
       if(e.getAttribute && (e.getAttribute('onclick')||e.getAttribute('role')==='button'||e.isContentEditable)) return true;
-      // 廣場聊天紀錄：要能反白複製，不拖（2026-10-21 併進 repo 時加）
+      // 廣場聊天紀錄：要能反白複製，不拖（作者 2026-10-21 併進 repo 時加的，併回）
       if(e.id==='chatlog') return true;
       var cs=getComputedStyle(e); if(cs.cursor==='pointer'||cs.cursor==='grab'||cs.cursor==='move') return true;
     }
@@ -345,6 +633,20 @@ $MEASURE = @'
 })();
 '@
 
+# ── 唯一注入的樣式（2026-10-22，作者同意）：頁面標題 h1 原本「下方 12px 邊距」→ 改成上下各 3px 內距、行高固定，
+#    標題行就在橫列正中間，跟右端的 ☰ 按鈕同一條中線；橫列也從 30 CSS px 縮到 24。h1 不在了就沒效果、不會壞。
+$STYLE = @'
+(function(){
+  function add(){
+    if(document.getElementById('vpet-mini-style')) return;
+    var s=document.createElement('style'); s.id='vpet-mini-style';
+    s.textContent='h1{margin:0 !important;padding:3px 0 !important;line-height:1.2 !important}';
+    (document.head||document.documentElement).appendChild(s);
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',add); else add();
+})();
+'@
+
 $wv.add_CoreWebView2InitializationCompleted({
     param($s, $e)
     if (-not $e.IsSuccess) { [System.Windows.Forms.MessageBox]::Show("WebView2 啟動失敗：`n$($e.InitializationException.Message)", 'vpet mini') | Out-Null; $form.Close(); return }
@@ -353,7 +655,7 @@ $wv.add_CoreWebView2InitializationCompleted({
     $core.Settings.IsStatusBarEnabled = $false
     $core.Settings.AreDefaultScriptDialogsEnabled = $false   # 關掉內建對話框，ScriptDialogOpening 才會觸發、交給殼畫
     # 圖鑑／舞台底圖是 window.open 開新分頁 → 交給預設瀏覽器
-    # ⚠️ 只放行 http／https：Start-Process 收到 file:／本機路徑會直接執行程式，頁面萬一被塞進惡意內容就是破口（2026-10-21 審查）
+    # 只放行 http／https：Start-Process 收到 file:／本機路徑會直接執行程式，頁面萬一被塞進惡意內容就是破口（作者 2026-10-21 審查時加的，併回）
     $core.add_NewWindowRequested({ param($s2, $e2) $e2.Handled = $true
         try { $u = [Uri]$e2.Uri; if ($u.Scheme -eq 'http' -or $u.Scheme -eq 'https') { Start-Process $u.AbsoluteUri } } catch {} })
     # 頁面的 confirm／alert／prompt（例如「收進營地」的確認）：WebView2 預設畫在 WebView 裡面，視窗縮小就被切掉；
@@ -386,15 +688,26 @@ $wv.add_CoreWebView2InitializationCompleted({
               if ($null -eq $m.w) { return }
               if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_measure.log') ("{0:HH:mm:ss.fff} w={1} h={2} vw={3} rects={4}" -f (Get-Date), $m.w, $m.h, $m.vw, @($m.rects).Count) }
               if ($m.rects) { $script:Rects = @($m.rects) }
-              $script:ContentW = [int]$m.w; $script:ContentH = [int]$m.h; Apply-Fit $script:ContentW $script:ContentH
+              if ($null -ne $m.tfs -and [double]$m.tfs -gt 0) { $script:TitleFs = [double]$m.tfs }
+              $script:TitleBox = if ($m.tbox) { @($m.tbox) } else { $null }
+              # 進化樹不撐寬（常駐）：內容忽然比平常寬（進化樹 35～92 格 vs 平常 52 格）且場景是 tree → 把前線畫布鎖回平常的框（Set-TreeFit），
+              # 這一拍不貼合；下一拍量到的寬高就跟平常一樣，視窗形狀連一拍都不變。樹結束（rzTimer 看到 kind 不是 tree）解鎖。右欄顯示那種變寬不是 tree，不會誤觸。
+              $wNew = [int]$m.w
+              if (-not $script:treeFit -and $script:homeW -gt 0 -and $wNew -gt ($script:homeW + 8) -and $script:homeScene) {
+                  if ($script:lastKind -ne 'tree') { $st0 = Get-State; if ($st0) { $script:lastKind = [string]$st0.kind } }   # 寬度跳了但還沒輪到 1 秒一次的 /state：現在就問
+                  if ($script:lastKind -eq 'tree') { Set-TreeFit $true; return }
+              }
+              if ($script:lastKind -ne 'tree' -and -not $script:treeFit) { $script:homeW = $wNew; if ($m.scene) { $script:homeScene = @($m.scene) } }   # 平常的內容寬與前線畫布框（右欄顯示時會比較寬，那也算平常）
+              $script:ContentW = $wNew; $script:ContentH = [int]$m.h; Apply-Fit $script:ContentW $script:ContentH
               Apply-Region; Place-Handles }
         catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} {1}`n{2}" -f (Get-Date), $_.Exception.Message, $_.ScriptStackTrace) } }
     })
     $core.add_NavigationCompleted({ param($s2, $e2)
         if (-not $e2.IsSuccess) { Set-Tag "連不到 daemon（localhost:$($script:Port)）— 先雙擊 vpet-standalone.vbs" ([System.Drawing.Color]::FromArgb(255, 255, 90, 90)) }
-        else { Set-Tag ('vpet  {0}%' -f [int]([double]$script:Cfg.zoom * 100)) $null }
+        else { Set-Tag (Tag-Text ([double]$script:Cfg.zoom)) $null }
     })
     $null = $core.AddScriptToExecuteOnDocumentCreatedAsync($MEASURE)
+    $null = $core.AddScriptToExecuteOnDocumentCreatedAsync($STYLE)
     $wv.ZoomFactor = [double]$script:Cfg.zoom
     $core.Navigate($script:HomeUrl)
     # 除錯通道（只在設了 VPET_MINI_DEBUG 時）：_debug_cmd.js 在頁面裡執行；_debug_shell.txt「width N」模擬拖到 N 寬放開。測試不必碰滑鼠
@@ -405,7 +718,13 @@ $wv.add_CoreWebView2InitializationCompleted({
             if (Test-Path $cf) { $js = Get-Content $cf -Raw -Encoding UTF8; Remove-Item $cf; try { $null = $wv.CoreWebView2.ExecuteScriptAsync($js) } catch {} }
             $sf = Join-Path $here '_debug_shell.txt'
             if (Test-Path $sf) { $cmd = (Get-Content $sf -Raw -Encoding UTF8).Trim(); Remove-Item $sf
-                if ($cmd -match '^width (\d+)$') { $script:rs = @{}; $form.Width = [int]$matches[1]; Grip-Release } }
+                if ($cmd -match '^width (\d+)$') { $script:rs = @{}; $form.Width = [int]$matches[1]; Grip-Release }
+                elseif ($cmd -eq 'follow') { $script:Cfg.petFollow = $true; $script:petArrived = $false; $script:mFollow.Checked = $true; $script:pmFollow.Checked = $true }
+                elseif ($cmd -eq 'unfollow') { $script:Cfg.petFollow = $false; $script:mFollow.Checked = $false; $script:pmFollow.Checked = $false }
+                elseif ($cmd -eq 'pet') { Enter-Pet }
+                elseif ($cmd -eq 'unpet') { Leave-Pet }
+                elseif ($cmd -eq 'petdump') { if ($pbox.Image) { $pbox.Image.Save((Join-Path $here '_pet_now.png')) } }
+                elseif ($cmd -eq 'petpos') { $cp0 = [System.Windows.Forms.Cursor]::Position; Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} petpos mode={1} at {2},{3} {4}x{5} dir={6} single={7} visible={8} formVisible={9} cursor={10},{11} arrived={12}" -f (Get-Date), $script:petMode, $pet.Left, $pet.Top, $pet.Width, $pet.Height, $script:petDir, $script:petSingle, $pet.Visible, $form.Visible, $cp0.X, $cp0.Y, $script:petArrived) } }
         })
         $script:dbgTimer.Start()
     }
@@ -416,12 +735,12 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $m1 = $menu.Items.Add('在瀏覽器開完整網頁'); $m1.add_Click({ Start-Process $script:HomeUrl })
 $m2 = $menu.Items.Add('重新整理'); $m2.add_Click({ if ($wv.CoreWebView2) { $wv.CoreWebView2.Reload() } })
 [void]$menu.Items.Add('-')
-$mZoom = New-Object System.Windows.Forms.ToolStripMenuItem('縮放')
+$mZoom = New-Object System.Windows.Forms.ToolStripMenuItem('畫面縮放')   # 原叫「縮放」，同仁看不懂是縮什麼
 foreach ($z in 50, 75, 100, 125, 150) {
     $it = $mZoom.DropDownItems.Add("$z%"); $it.Tag = $z
     $it.add_Click({ param($s, $e) $script:Cfg.zoom = [double]$s.Tag / 100.0; $wv.ZoomFactor = $script:Cfg.zoom; $script:lastFit = ''
         if ($script:ContentW -gt 0) { Apply-Fit $script:ContentW $script:ContentH }
-        Set-Tag ('vpet  {0}%' -f [int]$s.Tag) $null; Save-Cfg })
+        Set-Tag (Tag-Text $script:Cfg.zoom) $null; Save-Cfg })
 }
 [void]$menu.Items.Add($mZoom)
 $mRead = New-Object System.Windows.Forms.ToolStripMenuItem('閱讀縮放（卡片、進化樹暫時放大到）')
@@ -430,34 +749,64 @@ foreach ($z in 0, 80, 90, 100, 125) {
     $it.add_Click({ param($s, $e) $script:Cfg.readZoom = [double]$s.Tag / 100.0; foreach ($q in $mRead.DropDownItems) { $q.Checked = ($q.Tag -eq $s.Tag) }; Save-Cfg })
 }
 [void]$menu.Items.Add($mRead)
+[void]$menu.Items.Add('-')
+$mPet = $menu.Items.Add('縮成小寵物（點牠就回來）'); $mPet.add_Click({ Enter-Pet })
+$script:mFollow = $menu.Items.Add('小寵物跟隨滑鼠'); $script:mFollow.Checked = [bool]$script:Cfg.petFollow
+$script:mFollow.add_Click({ $script:Cfg.petFollow = -not $script:Cfg.petFollow; $script:petArrived = $false; $script:mFollow.Checked = $script:Cfg.petFollow; $script:pmFollow.Checked = $script:Cfg.petFollow; Save-Cfg })
+[void]$menu.Items.Add('-')
 $script:mTop = $menu.Items.Add('永遠最上層'); $script:mTop.Checked = [bool]$script:Cfg.topmost
 $script:mTop.add_Click({ $script:Cfg.topmost = -not $script:Cfg.topmost
-    foreach ($f0 in @($form, $tag, $grip)) { $f0.TopMost = $script:Cfg.topmost }
+    foreach ($f0 in @($form, $tag, $grip, $pet)) { $f0.TopMost = $script:Cfg.topmost }
     $script:mTop.Checked = $script:Cfg.topmost; Save-Cfg })
 [void]$menu.Items.Add('-')
 $mQ = $menu.Items.Add('結束 vpet mini'); $mQ.add_Click({ $form.Close() })
 $tag.ContextMenuStrip = $menu; $lbl.ContextMenuStrip = $menu
 
-$form.add_FormClosed({ $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg; foreach ($f0 in @($tag, $grip)) { try { $f0.Close() } catch {} } })
+$form.add_FormClosed({ $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg; foreach ($f0 in @($tag, $grip, $pet)) { try { $f0.Close() } catch {} } })
 
 # ── 閱讀縮放：卡片／進化樹這類「有字」的場景，字是vpet畫進 canvas 的點陣，縮小會缺筆畫；
 #    每秒看一次 daemon 的 /state（他網頁自己也在用的端點，不綁 id）的 kind，有字場景就暫時升到閱讀縮放，結束回原縮放 ──
 $script:TEXT_KINDS = @('card', 'tree')
 $script:baseZoom = $null      # 暫時升上去時記住原本的縮放；$null = 沒在暫升
+$script:treeFit = $false; $script:homeW = 0; $script:homeScene = $null; $script:lastKind = ''   # 進化樹不撐寬：鎖著沒、平常的內容寬、平常的前線畫布框 [w,h]、最近一次 /state 的 kind
+# 進化樹不撐寬（常駐，2026-10-22 使用者要「視窗形狀完全不變」）：樹那張圖 35～92 格比平常 52 格寬，整頁縮放會讓視窗變矮、撐寬會讓視窗變寬，
+# 唯一形狀不變的做法是把前線畫布的 CSS 框鎖在平常的寬高、圖用 object-fit: contain 等比縮進去（上下留空）。這是第二條注入的樣式，只在樹期間存在。
+# 圖由瀏覽器縮小，比整頁縮放糊一點（image-rendering 改 auto，不然 pixelated 縮小會丟列缺筆畫）。
+function Set-TreeFit([bool]$on) {
+    if ($on -eq $script:treeFit) { return }
+    $script:treeFit = $on
+    if (-not $wv.CoreWebView2) { return }
+    if ($on) {
+        $w0 = [int]$script:homeScene[0]; $h0 = [int]$script:homeScene[1]
+        $js = "(function(){var cvs=document.querySelectorAll('canvas'),best=null,ba=0;for(var i=0;i<cvs.length;i++){var b=cvs[i].getBoundingClientRect();if(b.width*b.height>ba){ba=b.width*b.height;best=cvs[i];}}" +
+              "if(best)best.setAttribute('data-vpet-mini-fit','1');var s=document.getElementById('vpet-mini-fit');if(!s){s=document.createElement('style');s.id='vpet-mini-fit';(document.head||document.documentElement).appendChild(s);}" +
+              "s.textContent='canvas[data-vpet-mini-fit]{width:" + $w0 + "px !important;height:" + $h0 + "px !important;object-fit:contain;image-rendering:auto !important}';})();"
+    } else {
+        $js = "(function(){var s=document.getElementById('vpet-mini-fit');if(s)s.remove();})();"
+    }
+    try { $null = $wv.CoreWebView2.ExecuteScriptAsync($js) } catch {}
+    if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} treefit {1} (frame {2})" -f (Get-Date), $(if ($on) { 'on' } else { 'off' }), $(if ($script:homeScene) { "$($script:homeScene[0])x$($script:homeScene[1])" } else { '?' })) }
+}
 function Set-Zoom([double]$z) {
     if ($wv.CoreWebView2) { $wv.ZoomFactor = $z }
     $script:lastFit = ''
     if ($script:ContentW -gt 0) { Apply-Fit $script:ContentW $script:ContentH }
-    Set-Tag ('vpet  {0}%' -f [int]($z * 100)) $null
+    Set-Tag (Tag-Text $z) $null
 }
 $script:rzTimer = New-Object System.Windows.Forms.Timer
 $script:rzTimer.Interval = 1000
 $script:rzTimer.add_Tick({
     if ($script:rs) { return }
-    $kind = $null
-    try { $req = [System.Net.HttpWebRequest]::Create("http://localhost:$($script:Port)/state"); $req.Timeout = 500; $req.ReadWriteTimeout = 500
-          $res = $req.GetResponse(); $sr = New-Object System.IO.StreamReader($res.GetResponseStream()); $txt = $sr.ReadToEnd(); $sr.Close(); $res.Close()
-          $kind = [string](($txt | ConvertFrom-Json).kind) } catch { return }
+    $st = Get-State; if ($null -eq $st) { return }
+    $kind = [string]$st.kind
+    # 小寵物：角色跟 /state 的 character 走（進化後換圖）；進化開始那一刻小視窗自動回來（跟 tray 的「進化時自動開小視窗」同一個意思）
+    $ch = [string]$st.character
+    if ($ch) { $script:lastChar = $ch }
+    if ($script:petMode -and $kind -eq 'evo') { Leave-Pet }
+    $script:lastKind = $kind
+    # 進化樹不撐寬：樹結束就解鎖畫布（鎖上那一步通常在量測那邊做；這裡補一次以防寬度沒跳）
+    if ($kind -ne 'tree' -and $script:treeFit) { Set-TreeFit $false }
+    elseif ($kind -eq 'tree' -and -not $script:treeFit -and $script:homeScene) { Set-TreeFit $true }
     $want = $script:TEXT_KINDS -contains $kind
     $rz = [double]$script:Cfg.readZoom
     if ($rz -le 0) { $want = $false }   # 0 = 關（vpet畫布改依解析度放大後通常不需要）
@@ -483,7 +832,10 @@ $script:dmTimer.add_Tick({
     if ($ok) { $script:deadTicks = 0; return }
     $script:deadTicks++
     $trayAlive = $false
-    try { $mx = $null; $trayAlive = [System.Threading.Mutex]::TryOpenExisting('Local\vpet-tray', [ref]$mx); if ($mx) { $mx.Dispose() } } catch {}   # tools\vpet-tray.ps1 開的
+    # 我們的 tray 開 Local\vpet-mini-tray；同仁 repo 的 tools\vpet-tray.ps1 開 Local\vpet-tray（2026-10-22 起小視窗也可能由他的 tray 帶）→ 兩個都認
+    foreach ($mn in 'Local\vpet-mini-tray', 'Local\vpet-tray') {
+        try { $mx = $null; if ([System.Threading.Mutex]::TryOpenExisting($mn, [ref]$mx)) { $trayAlive = $true }; if ($mx) { $mx.Dispose() } } catch {}
+    }
     $limit = if ($trayAlive) { 45 } else { 5 }
     if ($env:VPET_MINI_DEBUG -and $script:deadTicks -eq 1) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} port down, trayAlive={1}, limit={2} ticks" -f (Get-Date), $trayAlive, $limit) }
     if ($script:deadTicks -ge $limit) { $script:dmTimer.Stop(); $form.Close() }

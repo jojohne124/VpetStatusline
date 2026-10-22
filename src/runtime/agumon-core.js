@@ -235,6 +235,11 @@ function matchRanchRule(rule, pet, now, opts = {}) {
             // keptAt，被換出來的那隻是整筆從 ranch 移除 —— 之後再收進去是全新 id。
             // 所以 keptAt 天生就是「連續待在營地多久」，中途取出自然歸零。
             if (!(now - (pet.keptAt || 0) >= c.hours * 3600e3)) return false;
+        } else if (c.type === 'kept_mood_below') {
+            // 收進營地那一刻的心情要低於 c.value（2026-10-22：大便獸太容易，要心情不好時被丟著才會變）。
+            // keptMood 在 keep／swap 時記下；舊資料沒有就看牠現在的心情
+            const m = typeof pet.keptMood === 'number' ? pet.keptMood : getMood(s);
+            if (!(m < c.value)) return false;
         } else {
             return false;
         }
@@ -453,7 +458,7 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
             if (forceFile) clearForceCharacter(forceFile);
             return { op: 'keep', ok: false, reason: 'full' };
         }
-        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) });
+        ranch.pets.push({ id: newRanchId(ranch), keptAt: Date.now(), keptMood: getMood(st), state: snapshotPet(st) });
         saveRanch(ranch, ranchFile);
         // 抽新的那一步交給 force.character（CLI 一併寫入），走既有的換角色路徑
         return { op: 'keep', ok: true };
@@ -466,7 +471,7 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
         // 收進去的那隻**原地**放回同一格，不是刪掉再接到最後面：院子的走動區域是照名單的
         // 索引分的（plaza.js yardOccupants），後面的每一隻都往前挪一格的話，
         // 換一隻會讓全營地的人同時換區、瞬移。id 照樣換新（撞號，見 ranch-spec）。
-        ranch.pets[i] = { id: newRanchId(ranch), keptAt: Date.now(), state: snapshotPet(st) };
+        ranch.pets[i] = { id: newRanchId(ranch), keptAt: Date.now(), keptMood: getMood(st), state: snapshotPet(st) };
         saveRanch(ranch, ranchFile);
         restorePet(st, incoming.state);
         return { op: 'swap', ok: true, to: st.characterId };

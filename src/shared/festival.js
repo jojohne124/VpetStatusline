@@ -50,12 +50,20 @@ const FESTIVALS = [
     { id: 'dragonboat', name: '端午',   lunar: true, acc: 'dragon' },
     { id: 'qixi',       name: '七夕',   lunar: true, acc: 'flower' },
     { id: 'midautumn',  name: '中秋',   lunar: true, acc: 'pomelo' },
+    // 選舉（2026-10-22）：投票日由使用者通知才加進 dates（'YYYY-MM-DD'）；前一週起到投票日當天。只換背景（投票所）
+    { id: 'election',   name: '選舉',   dates: ['2026-11-28'], acc: null },
+    // 尾牙（2026-10-22）：日期未定 → dates 先空著（只有 dev 預覽看得到）。會場舞台背景＋整段都圍爐（feastAll）
+    { id: 'weiya',      name: '尾牙',   dates: [], acc: null, lead: 0, feast: true, feastAll: true },
 ];
 
 /** 某節日在某一年的期間 { start, end, day }（ms，end 不含）；農曆表查不到那一年 → null */
 function windowOf(f, year) {
     let m = f.month, d = f.day;
-    if (f.lunar) {
+    if (f.dates) {   // 指定日期的節日（選舉、尾牙）：那一年有列才算
+        const ds = f.dates.map(s => String(s).split('-').map(Number)).find(([y]) => y === year);
+        if (!ds) return null;
+        [, m, d] = ds;
+    } else if (f.lunar) {
         const md = LUNAR[f.id] && LUNAR[f.id][year];
         if (!md) return null;
         [m, d] = md;
@@ -98,6 +106,7 @@ function feastOn(f, ms, preview) {
     if (!f || !f.feast) return false;
     if (preview) return true;
     const w = windowOf(f, new Date(ms).getFullYear());
+    if (f.feastAll) return !!w && ms >= w.start && ms < w.end;   // 尾牙：整段都圍爐
     return !!w && ms >= w.start && ms < w.day;
 }
 

@@ -26,7 +26,10 @@ const W      = require('../shared/plaza-walk.js');
 const ST     = require('../shared/stairs-sim.js');   // 下樓梯（docs/plaza-stairs-spec.md）
 const DN     = require('../shared/dino-sim.js');     // 小恐龍（docs/plaza-dino-spec.md）
 const DS     = require('../shared/duel-sim.js');     // 手動戰鬥（docs/plaza-duel-spec.md）
-const STOCK  = require('./stock-source.js');         // 偷看盤（docs/plaza-peek-spec.md）：台股報價
+const STOCK  = require('./stock-source.js');
+const CWA    = require('./cwa-source.js');           // 天氣：氣象署自動站實測（授權碼只在 plaza-host 這台）
+const CWA_REFRESH_MS = 10 * 60 * 1000;               // 自動站大約 10 分鐘一筆
+const CWA_RETRY_MS   = 5 * 60 * 1000;         // 偷看盤（docs/plaza-peek-spec.md）：台股報價
 
 const DEFAULT_PORT = 37373;
 const CAP          = 20;        // 同時在場上限（畫面可讀性決定，見規格 §九）
@@ -507,6 +510,21 @@ function createPlazaServer(opts = {}) {
         }).finally(() => { stockRefreshing = false; stockNextAt = now() + stockWait; });
         stockNextAt = t + stockWait;
     }
+    // ── 天氣（氣象署）：plaza-host 拿授權碼統一抓，/weather 發給大家（daemon 沒在廣場也會來問）。
+    //    授權碼不送出去；沒有授權碼 = /weather 回 404，daemon 退回各自抓 Open-Meteo
+    const cwaKey = opts.cwaKey || null, cwaFetch = opts.cwaFetch || CWA.fetchStation;
+    let cwaData = null, cwaAt = 0, cwaBusy = false, cwaNext = 0;
+    function cwaRefresh() {
+        if (!cwaKey || cwaBusy || now() < cwaNext) return;
+        cwaBusy = true;
+        Promise.resolve().then(() => cwaFetch(cwaKey))
+            .then((r) => { cwaData = r; cwaAt = now(); cwaNext = now() + (opts.cwaRefreshMs ?? CWA_REFRESH_MS); })
+            .catch((e) => { cwaNext = now() + (opts.cwaRetryMs ?? CWA_RETRY_MS); log('天氣：氣象署抓不到（' + e.message + '）'); })
+            .finally(() => { cwaBusy = false; });
+    }
+    const cwaTimer = setInterval(cwaRefresh, Math.min(60000, opts.cwaRefreshMs ?? CWA_REFRESH_MS));
+    cwaTimer.unref();
+    cwaRefresh();
     const stockTimer = setInterval(stockTick, Math.min(5000, Math.max(20, stockRefreshMs / 6)));
     stockTimer.unref();
 
@@ -1060,6 +1078,11 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'GET' && u.pathname === '/update/bundle') return serveUpdate(res, 'bundle.bin', 'application/octet-stream');
         if (req.method === 'GET' && u.pathname === '/events') return openEvents(req, res, u.searchParams.get('id'));
         if (req.method === 'GET' && u.pathname === '/roster') return reply(res, 200, { ok: true, roster: roster() });
+        if (req.method === 'GET' && u.pathname === '/weather') {
+            if (!cwaKey) return reply(res, 404, { ok: false, error: '這台廣場沒有氣象署授權碼' });
+            if (!cwaData) { cwaRefresh(); return reply(res, 503, { ok: false, error: '還沒抓到氣象署的資料' }); }
+            return reply(res, 200, { ok: true, ...cwaData, at: cwaAt });
+        }
         if (req.method === 'POST' && u.pathname === '/join') {
             return readBody(req, (j) => { const r = join(j); reply(res, r.status, r.body); });
         }
@@ -1122,7 +1145,7 @@ function createPlazaServer(opts = {}) {
     pinger.unref();
 
     function close() {
-        clearInterval(reaper); clearInterval(pinger); clearInterval(stockTimer);
+        clearInterval(reaper); clearInterval(pinger); clearInterval(stockTimer); clearInterval(cwaTimer);
         for (const r of rooms.values()) if (r.timer) clearInterval(r.timer);
         for (const inv of invites.values()) clearTimeout(inv.timer);
         for (const t of battleTimers) clearTimeout(t);
@@ -1146,7 +1169,8 @@ if (require.main === module) {
     let adminToken = null;
     try { adminToken = loadAdminToken(ADMIN_KEY_FILE, true); }
     catch (e) { console.log('管理金鑰讀寫失敗，管理功能關閉：' + e.message); }
-    const p = createPlazaServer({ log: (m) => console.log(`[${ts()}] ${m}`), adminToken });
+    const cwaKey = CWA.loadKey();   // ~/.vpet/cwa.key：沒有就不提供 /weather（大家各自抓 Open-Meteo）
+    const p = createPlazaServer({ log: (m) => console.log(`[${ts()}] ${m}`), adminToken, cwaKey });
     p.server.listen(port, '0.0.0.0', () => {
         const os = require('os');
         const ips = Object.values(os.networkInterfaces()).flat()
@@ -1156,6 +1180,7 @@ if (require.main === module) {
         console.log(`   其他人的 daemon 預設連 http://${os.hostname()}:${port}`);
         console.log('   （防火牆要放行這個 port 的 inbound TCP；Ctrl+C 結束 = 全場回前線）');
         if (adminToken) console.log(`   管理金鑰：${ADMIN_KEY_FILE}（開發版 daemon 讀這個檔才能踢人／管聊天；不要外流）`);
+        console.log(cwaKey ? `   天氣：氣象署自動站（授權碼 ${CWA.KEY_FILE}，不要外流）` : '   天氣：沒有氣象署授權碼，大家各自抓 Open-Meteo');
     });
     p.server.on('error', (e) => { console.log('廣場伺服器起不來：' + e.message); process.exit(1); });
 }

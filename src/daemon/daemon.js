@@ -693,6 +693,8 @@ const weather = wxSrc.create({
     installRoot: core.INSTALL_ROOT,
     stateDir:    STATE_DIR,
     log:         (m) => console.log('   ' + m),
+    // 氣象署實測由 plaza-host 轉發（授權碼在那台）；問不到就照舊用 Open-Meteo
+    plazaUrl:    () => plazaClient.url(),
 });
 // 天氣預覽：?w=rain 之類的參數強制指定，讓五種表演不用等真的下雨才看得到。
 // 只影響回傳的畫面，不寫進任何檔案，也不影響真實天氣的抓取。

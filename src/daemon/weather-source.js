@@ -65,10 +65,19 @@ function parse(json) {
     return { code: num(cur.weather_code), tempC: num(cur.temperature_2m), cloud: num(cur.cloud_cover), at: Date.now() };
 }
 
-/** 原始觀測 + 設定 → 對外的天氣狀態。每次 get() 都重算，所以改對照表立刻生效。 */
+// 氣象署實測（plaza-host 轉發）多久內算新鮮：自動站 10 分鐘一筆，抓不到時最多沿用 90 分鐘
+const CWA_FRESH_MS = 90 * 60 * 1000;
+/** 原始觀測 + 設定 → 對外的天氣狀態。每次 get() 都重算，所以改對照表立刻生效。
+ *  有新鮮的氣象署實測（raw.cwa）就以它為準：天空看測站的「天氣」文字、氣溫看測站；沒有才用 Open-Meteo */
 function view(raw, cfg) {
+    const c = raw.cwa;
+    if (c && c.sky && Date.now() - (c.at || 0) < CWA_FRESH_MS) {
+        const t = Number.isFinite(c.tempC) ? c.tempC : raw.tempC;
+        const w = WX.classify(raw.code, t, { coldBelowC: cfg.coldBelowC, cloud: raw.cloud });
+        return { ...w, sky: c.sky, tempC: t, city: cfg.city, at: c.at, source: 'cwa', obs: c.text || null };
+    }
     const w = WX.classify(raw.code, raw.tempC, { coldBelowC: cfg.coldBelowC, cloud: raw.cloud });
-    const out = { ...w, city: cfg.city, at: raw.at || 0 };
+    const out = { ...w, city: cfg.city, at: raw.at || 0, source: 'open-meteo' };
     if (!raw.at) out.stale = true;
     return out;
 }
@@ -77,12 +86,25 @@ function view(raw, cfg) {
  * 建一個天氣來源。get() 永遠**立刻**回傳（可能是快取或預設值），
  * 需要更新時在背景抓，抓完下一次 get() 才看得到新的。
  */
-function create({ installRoot, stateDir, log = () => {} }) {
+// plaza-host 的 /weather（氣象署實測，授權碼在那台）。問不到（不在公司網路、主機沒授權碼）就 null
+async function fetchPlazaWeather(base) {
+    if (!base) return null;
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 3000);
+    try {
+        const res = await fetch(new URL('/weather', base).toString(), { signal: ac.signal });
+        if (!res.ok) return null;
+        const j = await res.json();
+        return j && j.ok && j.sky ? { sky: j.sky, text: j.text || null, tempC: Number.isFinite(j.tempC) ? j.tempC : null, obsAt: j.obsAt || null, at: Date.now() } : null;
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+}
+
+function create({ installRoot, stateDir, log = () => {}, plazaUrl = null }) {
     const cfg = loadConfig(installRoot);
     // 只留原始觀測。舊版的快取檔存的是判定過的物件，但那個物件裡本來就有 code/tempC，
     // 所以直接沿用同一個檔、不需要遷移，讀進來就會用新的對照表重新判定。
     const c0 = readCache(stateDir) || {};
-    let raw = { code: c0.code ?? null, tempC: c0.tempC ?? null, cloud: c0.cloud ?? null, at: c0.at || 0 };
+    let raw = { code: c0.code ?? null, tempC: c0.tempC ?? null, cloud: c0.cloud ?? null, at: c0.at || 0, cwa: c0.cwa || null };
     let inflight = false;
     let nextTry = 0;
 
@@ -92,9 +114,11 @@ function create({ installRoot, stateDir, log = () => {} }) {
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
         try {
+            // 氣象署實測（plaza-host 轉發）：跟 Open-Meteo 一起問，有就以它為準（見 view）
+            const cwa = await fetchPlazaWeather(typeof plazaUrl === 'function' ? plazaUrl() : plazaUrl);
             const res = await fetch(url(cfg), { signal: ac.signal });
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            raw = parse(await res.json());
+            raw = { ...parse(await res.json()), cwa: cwa || (raw.cwa && Date.now() - raw.cwa.at < CWA_FRESH_MS ? raw.cwa : null) };
             writeCache(stateDir, raw);
             const d = WX.describe(view(raw, cfg));
             log(`天氣：${cfg.city} ${d.label} ${d.temp}`);
@@ -120,4 +144,4 @@ function create({ installRoot, stateDir, log = () => {} }) {
     };
 }
 
-module.exports = { create, parse, view, loadConfig, DEFAULTS, REFRESH_MS, RETRY_MS };
+module.exports = { create, parse, view, loadConfig, fetchPlazaWeather, DEFAULTS, REFRESH_MS, RETRY_MS, CWA_FRESH_MS };

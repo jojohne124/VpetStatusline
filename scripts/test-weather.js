@@ -184,5 +184,45 @@ console.log('— 日夜的圖示 —');
     ok(WX.describe({ sky: WX.SKY.CLEAR, night: true }).label === '晴', '夜裡的晴天文字不該被改掉');
 }
 
-console.log(`\n結果：${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ── 氣象署自動站實測（2026-10-21）：plaza-host 拿授權碼抓、/weather 轉發；daemon 有新鮮的就以它為準 ──
+(async () => {
+    console.log('— 氣象署（自動站實測）—');
+    const CWA = require('../src/daemon/cwa-source.js');
+    const S = require('../src/daemon/plaza-server.js');
+    const cases = [['晴', WX.SKY.CLEAR], ['多雲', WX.SKY.CLOUDY], ['陰', WX.SKY.CLOUDY], ['有霧', WX.SKY.CLOUDY], ['陰有雨', WX.SKY.RAIN],
+                   ['有大雨', WX.SKY.STORM], ['有雷雨', WX.SKY.THUNDER], ['陰有雷', WX.SKY.THUNDER], ['-99', null], ['', null], ['看不懂', null]];
+    for (const [t, want] of cases) ok(CWA.classifyText(t) === want, `氣象署的「${t}」應判成 ${want}，得到 ${CWA.classifyText(t)}`);
+    const sample = { records: { Station: [{ StationName: '五股', ObsTime: { DateTime: '2026-10-21T19:00:00+08:00' },
+        WeatherElement: { Weather: '多雲', AirTemperature: '23.4', Now: { Precipitation: '0.0' } } }] } };
+    const pr = CWA.parse(sample);
+    ok(pr && pr.sky === WX.SKY.CLOUDY && pr.tempC === 23.4 && pr.station === '五股' && pr.obsAt === Date.parse('2026-10-21T19:00:00+08:00'), '氣象署的回應解析錯：' + JSON.stringify(pr));
+    ok(CWA.parse({ records: { Station: [{ WeatherElement: { Weather: '晴', AirTemperature: '-99' } }] } }).tempC === null, '氣溫 -99（沒資料）被當成真的 -99 度');
+    ok(CWA.loadKey(require('path').join(require('os').tmpdir(), 'no-such-cwa.key')) === null, '沒有授權碼檔也讀到東西');
+    // daemon：新鮮的氣象署實測優先；太舊的不用；Open-Meteo 照舊是後備
+    const cfg = SRC.DEFAULTS;
+    const om = { code: 0, tempC: 30, cloud: 0, at: Date.now() };
+    const v1 = SRC.view({ ...om, cwa: { sky: WX.SKY.RAIN, tempC: 22, text: '有雨', at: Date.now() } }, cfg);
+    ok(v1.sky === WX.SKY.RAIN && v1.tempC === 22 && v1.source === 'cwa', '有新鮮的氣象署實測卻沒用它：' + JSON.stringify(v1));
+    const v2 = SRC.view({ ...om, cwa: { sky: WX.SKY.RAIN, tempC: 22, at: Date.now() - SRC.CWA_FRESH_MS - 1000 } }, cfg);
+    ok(v2.sky === WX.SKY.CLEAR && v2.source === 'open-meteo', '太舊的氣象署資料還在用');
+    ok(SRC.view({ ...om, cwa: { sky: null, at: Date.now() } }, cfg).source === 'open-meteo', '氣象署的天氣看不懂時沒有退回 Open-Meteo');
+    // plaza-host：沒授權碼 → 404；有 → 轉發實測，授權碼不能出現在回應裡
+    const KEY = 'CWA-00000000-1111-2222-3333-444444444444';
+    for (const [k, want] of [[null, 404], [KEY, 200]]) {
+        const ps = S.createPlazaServer({ cwaKey: k, cwaFetch: async (key) => { if (key !== KEY) throw new Error('錯的授權碼'); return pr; } });
+        await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
+        const base = 'http://127.0.0.1:' + ps.server.address().port;
+        await new Promise(r => setTimeout(r, 50));
+        const res = await fetch(base + '/weather'), body = await res.text();
+        ok(res.status === want, `/weather（${k ? '有' : '沒有'}授權碼）應回 ${want}，得到 ${res.status}`);
+        ok(!body.includes(KEY), '/weather 的回應裡有授權碼');
+        if (want === 200) {
+            const got = await SRC.fetchPlazaWeather(base);
+            ok(got && got.sky === WX.SKY.CLOUDY && got.tempC === 23.4, 'daemon 從 plaza-host 拿不到氣象署實測：' + JSON.stringify(got));
+        } else ok(await SRC.fetchPlazaWeather(base) === null, 'plaza-host 沒授權碼時 daemon 沒有退回（應該拿到 null）');
+        await ps.close();
+    }
+    ok(await SRC.fetchPlazaWeather('http://127.0.0.1:1') === null, '連不到 plaza-host 時沒有安靜退回');
+    console.log(`\n結果：${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+})();

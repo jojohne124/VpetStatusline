@@ -1601,6 +1601,10 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #hud::before{content:'';position:absolute;inset:-8px -16px -8px -20px;z-index:-1;
        background:radial-gradient(closest-side,rgba(0,0,0,.85),rgba(0,0,0,.7) 55%,rgba(0,0,0,0))}
   body.yard #hud,body.plaza #hud{display:block}
+  /* 廣場人數（2026-10-22）：左上角，跟右上的看板同風格；不跟「顯示天氣日期」一起藏 */
+  #plazacount{position:absolute;display:none;top:6px;left:8px;z-index:3;pointer-events:none;font-size:12px;font-weight:600;color:#e6edf3;
+              text-shadow:0 1px 3px #000, 0 0 6px #000, 0 0 2px #000}
+  body.plaza #plazacount{display:block}
   body.nohud #hud{display:none!important}   /* 「顯示天氣日期」取消勾選 */
   #hud .wx{font-size:13px;font-weight:600;letter-spacing:.5px}
   #hud .prev{color:#d29922;font-size:10px}
@@ -1863,7 +1867,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
-  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button><button id="stout" style="display:none">🚪 先離開（回廣場）</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
+  <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button><button id="stout" style="display:none">🚪 先離開（回廣場）</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="plazacount"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
     <div id="controls">
       ${UI_BUTTONS.filter(([c, , o]) => !(IS_RELEASE && ((o && o.dev) || DEV_ONLY.has(c))))
                   .map(([c, label, o]) => c === 'br' ? `<span class="rowbr" data-scope="home" data-when="${o.when}"></span>` : `<button data-cmd="${c}" data-help="${c}" data-scope="${(o && o.scope) || 'home'}"${o && o.when ? ` data-when="${o.when}"` : ''}${o && o.accent ? ' class="accent"' : o && o.dev ? ' class="devonly"' : ''}${o && o.confirm ? ` data-confirm="${o.confirm}"` : ''}${o && (o.scope === 'plaza' || o.scope === 'yard') ? ' style="display:none"' : ''}>${label}${o && o.dev ? ' <span class="devtag">dev</span>' : ''}</button>`)
@@ -2811,6 +2815,14 @@ function festFloor(g,ts,W,H,id){
     for(let y=HZ;y<H;y+=4) for(let x=0;x<W;x+=6) R(x,y,6,4,((x/6+(y-HZ)/4)%2)?'#1b2030':'#1f2536');
     const cs=['#de2028','#5b8cff','#ffd84a','#f0508c'];
     for(let i=0;i<6;i++){ const a=Math.max(0,Math.sin(ts/900+i*1.7)); R(Math.floor(festRnd(i+1000)*W),HZ+2+Math.floor(festRnd(i+1100)*(H-HZ-3)),2,1,cs[i%cs.length],a*0.25); }
+  } else if(id==='election'){
+    // 投票所（學校活動中心）：磨石子地，灰底帶細碎的白點與黑點
+    R(0,HZ,W,H-HZ,'#2c2e32');
+    sprinkle(60,1300,'#3a3d42',0.9); sprinkle(25,1400,'#202226',0.9);
+  } else if(id==='weiya'){
+    // 尾牙會場：深灰地板（2026-10-22 回報：地板不要紅色、改深灰），一條條長板、接縫錯開
+    R(0,HZ,W,H-HZ,'#34363a');
+    for(let y=HZ+3,r=0;y<H;y+=3,r++){ R(0,y,W,1,'#28292c'); for(let x=(r%3)*5;x<W;x+=15) R(x,y-2,1,2,'#28292c'); }
   } else if(id==='lunarny'){
     // 三合院的青磚地＋滿地鞭炮紅紙屑
     bricks(6,3,['#2a2d33','#2d3037','#282b30'],'#232529');
@@ -2861,6 +2873,69 @@ function festFloor(g,ts,W,H,id){
 }
 // 節日背景現在有沒有在畫（廣場一律、營地看開關）
 // 廣場、營地都看同一顆「顯示節慶造型」：關掉 = 自己看到的畫面不過節（2026-10-21：廣場原本只拿掉自己的帽子）
+// ── 選舉（投票所）：地平線以上是活動中心的牆。牆上貼三張候選人看板（候選人的顏色：綠、藍、tiffany 綠），
+//    牆前一排白色投票箱（箱子本身不上色，只有「投票箱」的標籤），兩側是投票圈選處的隔板 ──
+const ELECTION_COLORS=['#1f9d55','#2453c4','#0abab5'];   // 候選人 1、2、3 號
+function festElection(g,ts,W,H){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  R(0,0,W,HZ,'#3a3d43'); R(0,HZ-3,W,3,'#2f3237'); R(0,HZ-3,W,1,'#4a4e55');   // 牆、踢腳板
+  // 上方的「投票所」布條（白底紅字）
+  const bw=22, bx=Math.round((W-bw)/2);
+  R(bx,1,bw,4,'#e9e9e4'); R(bx,1,bw,1,'#ffffff');
+  g.save(); g.fillStyle='#c0202a'; g.font='bold '+Math.round(CH*1.3)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText('投 票 所',(bx+bw/2)*CW,3*(CH/2)); g.restore();
+  // 候選人看板：顏色是候選人的，中間是點陣小人頭像、下面號碼
+  // 整排置中（gap 取整後剩下的零頭左右平分，不然整排會偏左）
+  const pw=9, gap=Math.floor((W-pw*3)/4), x0=Math.round((W-pw*3-gap*2)/2);
+  ELECTION_COLORS.forEach((c,i)=>{
+    const x=x0+(pw+gap)*i, y=5;                            // 看板下緣停在投票箱上面，號碼不被擋
+    R(x,y,pw,7,c); R(x+1,y+1,pw-2,4,'#f2f0e6');
+    R(x+3,y+1,3,2,'#c9a27e'); R(x+2,y+3,5,2,c);          // 頭像：臉＋穿候選人色的衣服
+    g.save(); g.fillStyle='#ffffff'; g.font='bold '+Math.round(CH*0.9)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillText(String(i+1),(x+pw/2)*CW,(y+5.9)*(CH/2)); g.restore();
+  });
+  // 兩側的圈選處隔板（灰色屏風）
+  for(const x of [1,W-8]){ R(x,HZ-9,7,9,'#5c6068'); R(x,HZ-9,7,1,'#767b84'); R(x+3,HZ-9,1,9,'#4a4e55'); }
+  // 投票箱：不記名投票 → 只有一個、放正中間（2026-10-22 回報）。白色箱子、上面一條投票口、正面貼「投票箱」標籤
+  {
+    // 放在牆前的桌子上、跟看板拉開距離，看起來不像是 2 號專用
+    const boxW=11, x=Math.round((W-boxW)/2), y=HZ-1;
+    R(x-4,y+7,boxW+8,2,'#8a6a46'); R(x-4,y+7,boxW+8,1,'#a8865c');        // 桌面
+    R(x-3,y+9,1,4,'#5a4430'); R(x+boxW+2,y+9,1,4,'#5a4430');             // 桌腳
+    R(x,y,boxW,7,'#e6e8ea'); R(x,y,boxW,1,'#ffffff'); R(x+boxW-1,y,1,7,'#b9bdc2');
+    R(x+3,y,5,1,'#2b2e33');                                // 投票口
+    R(x+1,y+3,boxW-2,2,'#ffffff'); R(x+1,y+3,boxW-2,1,'#d0d4d8');
+    g.save(); g.fillStyle='#c0202a'; g.font=Math.round(CH*0.75)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillText('投票箱',(x+boxW/2)*CW,(y+4)*(CH/2)); g.restore();
+  }
+}
+// ── 尾牙（會場舞台）：地平線以上是舞台，紅色布幕＋金邊、中間紅布條「尾牙」、上面兩道聚光燈慢慢掃；
+//    台口一排燈泡（前景，鏡頭前）。大家在台下圍圓桌吃飯（feastAll，桌子沿用春節圍爐那張）──
+function festWeiya(g,gf,ts,W,H){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  R(0,0,W,HZ,'#1a0d10');                                   // 會場深處
+  const sx=6, sw=W-12;
+  R(sx,1,sw,HZ-4,'#7a1218');                               // 布幕
+  for(let x=sx+1;x<sx+sw;x+=3) R(x,1,1,HZ-4,'#5e0d12');    // 布幕的直褶
+  R(sx,1,sw,1,'#d4a53a'); R(sx,HZ-4,sw,1,'#d4a53a');       // 金邊
+  for(const x of [sx,sx+sw-2]) R(x,1,2,HZ-4,'#9a1b22');    // 兩側收起的幕
+  R(sx-1,HZ-3,sw+2,3,'#5a3a1e'); R(sx-1,HZ-3,sw+2,1,'#8a5a2b');   // 舞台檯面
+  // 紅布條＋金字「尾牙」
+  const bw=20, bx=Math.round((W-bw)/2);
+  R(bx,3,bw,5,'#c4161c'); R(bx,3,bw,1,'#e8484e'); R(bx,7,bw,1,'#8e1015');
+  g.save(); g.fillStyle='#ffd84a'; g.font='bold '+Math.round(CH*1.6)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText('尾　牙',(bx+bw/2)*CW,5.6*(CH/2)); g.restore();
+  // 台上的麥克風架
+  R(Math.round(W/2),HZ-9,1,6,'#9aa0a6'); R(Math.round(W/2)-1,HZ-10,3,1,'#2b2e33');
+  // 聚光燈：兩道從上面斜斜照下來，慢慢左右掃（很淡）
+  for(let k=0;k<2;k++){
+    const cx=W*(k?0.7:0.3)+Math.sin(ts/2200+k*2)*6;
+    g.save(); g.globalAlpha=0.08; g.fillStyle='#fff3c4'; g.beginPath();
+    g.moveTo((cx-1)*CW,0); g.lineTo((cx+1)*CW,0); g.lineTo((cx+7)*CW,HZ*(CH/2)); g.lineTo((cx-7)*CW,HZ*(CH/2)); g.fill(); g.restore();
+  }
+  // 台口一排燈泡（前景，一閃一閃）
+  for(let x=sx;x<sx+sw;x+=3) festDot(gf,x,HZ-1,(Math.floor(ts/400)+x)%2?'#ffd84a':'#fff3c4',0.85);
+}
 function festShown(){ return !!festState.id && (view==='plaza' || view==='yard') && festState.bg; }
 function festDraw(ts){
   const cv=document.getElementById('fest');
@@ -2921,6 +2996,10 @@ function festDraw(ts){
     // 先放煙火、再蓋天際線：煙火在大樓後面的天空炸開
     festFireworks(g,ts,W,H,['#de2028','#ffffff','#5b8cff','#ffd84a','#f0508c','#5fe08a'],wxState.night?1300:2600);
     festSkyline(g,ts,W,H);
+  } else if(festState.id==='election'){
+    festElection(g,ts,W,H);
+  } else if(festState.id==='weiya'){
+    festWeiya(g,gf,ts,W,H);
   } else if(festState.id==='lunarny'){
     // 上緣一整排紅燈籠微微晃，掛在**鏡頭前**（前景畫布，角色走過去會被擋住）；
     // 下緣兩角掛鞭炮，底下一直冒火花
@@ -3313,6 +3392,7 @@ async function pollPlaza(){
   lastPlazaTags=p.tags||[]; lastPlazaMe=p.me;
   drawNameTags(p.tags, p.owner);
   drawBubbles(p.tags, p.chat, p.serverNow);
+  document.getElementById('plazacount').textContent='👥 '+(p.names||[]).length;   // 含躲起來的（人還在廣場）
   renderChat(p.chat);
   renderAdmin(p.members);
   renderInvite(p.invite);
@@ -6158,7 +6238,7 @@ const server = http.createServer((req, res) => {
                                               acc: fest && festOpt.costume ? fest.acc : null,
                                               swap: fest && festOpt.costume ? fest.swap || null : null,
                                               swapSalt: new URL(req.url, 'http://x').searchParams.get('ds') || null,
-                                              feast });
+                                              feast, feastStyle: fest && fest.id });
             // 場地尺寸一定要回傳，**空營地時尤其重要**：沒有這個，前端拿不到尺寸只能
             // 沿用上一次畫過的畫布（家裡那個 52 欄的小舞台），空營地看起來就變成
             // 一個小方塊，像功能壞掉而不是「這裡還沒有東西」。
@@ -6290,7 +6370,7 @@ const server = http.createServer((req, res) => {
                 // 圍爐是這台自己畫的場景 → 看本人的「顯示節慶造型」：關掉就看到大家散步
                 const feast = me.costume !== false && festFeast(fest, nowS, festQ);
                 const out = plaza.composePlazaLive(core, occ, step,
-                    { caches: plazaCaches, me: me.name, nowMs: Date.now() + plazaClient.skew(), feast });
+                    { caches: plazaCaches, me: me.name, nowMs: Date.now() + plazaClient.skew(), feast, feastStyle: fest && fest.id });
                 const mine = list.find(m => m.id === me.id);
                 body = { ok: true, active: true, step, me: me.name, notice: plazaNotice,
                          mode: mine && mine.mode === 'manual' ? 'manual' : 'auto', feast,

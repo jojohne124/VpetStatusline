@@ -198,6 +198,10 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
        && /if \(\$null -eq \$prev -or \$prev -eq \$kind\) \{ return \}/.test(tray), 'tray 沒有進化／戰鬥提醒（或啟動那一拍也會跳）');
     ok(/kind: 'evo',/.test(read('src/runtime/agumon-core.js')) && /frontName: name\(real\.characterId\)/.test(read('src/daemon/daemon.js')), '頁面／core 改到提醒依賴的 kind（evo）或 jogress.frontName 了 —— tray 要一起改');
     ok(!has('tools/vpet-mini/vpet-tray.ps1') && !has('tools/vpet-mini/vpet.vbs'), '同事版的另一個系統匣也出貨了（會變成兩個 tray）');
+    // 熱更後 tray 自己換新版：看自己的檔案被換掉 → 起新的（接手同一個 daemon）、自己退場時不殺 daemon
+    ok(/param\(\[int\]\$AdoptPid = 0\)/.test(tray) && /\(Get-Item \$selfPath\)\.LastWriteTimeUtc -eq \$selfStamp/.test(tray)
+       && /'-AdoptPid', \[string\]\$proc\.Id/.test(tray) && /if \(-not \$script:handedOff\) \{ try \{ if \(-not \$proc\.HasExited\) \{ \$proc\.Kill\(\) \} \} catch \{\} \}/.test(tray)
+       && /GetProcessById\(\$AdoptPid\)/.test(tray), '熱更後 tray 不會自己換新版（或交棒時把 daemon 殺了）');
     // 跟頁面的約定：/state 的 kind、整列 .form 的 data-cmd、#chatlog（改到要一起改小視窗）
     const page = read('src/daemon/daemon.js');
     ok(/id="chatlog"/.test(page) && /<div class="form\$\{f\.dev \? ' devonly' : ''\}" data-help=/.test(page) && /kind: result\.kind/.test(page),

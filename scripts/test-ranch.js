@@ -114,6 +114,7 @@ console.log('— keep —');
     const lost = GROWTH_KEYS.filter(k => JSON.stringify(kept[k]) !== JSON.stringify(veteran()[k]));
     ok(lost.length === 0, `收進營地時弄丟：${lost.join(', ')}`);
     ok(typeof ranch.pets[0].id === 'string' && ranch.pets[0].id.length >= 4, 'id 沒有產生');
+    ok(ranch.pets[0].keptMood === 2, '收進營地時沒記下那一刻的心情（大便獸的條件要看它）');
 
     // 同一筆 trigger 重放不該再收一次
     core.applyRanchOp(st, JSON.parse(fs.readFileSync(FORCE, 'utf8')), RANCH);
@@ -541,6 +542,22 @@ console.log('— 特殊進化（營地時效）—');
         ok(JSON.parse(fs.readFileSync(ALBUM, 'utf8')).counts[TO] === 1, '營地裡變的那隻換出來又多算一次');
     }
     ok(age() === null, '已經變過的不該再變一次');
+
+    // 收進營地時心情要 < 0（2026-10-22：大便獸太容易）。舊資料沒有 keptMood 就看現在的心情
+    {
+        fs.writeFileSync(RULES, JSON.stringify({ rules: [{ id: 'test-neglect', to: TO, fromStage: 'Child',
+            conditions: [{ type: 'ranch_hours', hours: 48 }, { type: 'kept_mood_below', value: 0 }] }] }));
+        const putM = (keptMood, mood) => fs.writeFileSync(RANCH, JSON.stringify({ cap: 8, seq: 1, pets: [
+            { id: 'r1', keptAt: Date.now() - 49 * H, ...(keptMood === undefined ? {} : { keptMood }), state: child({ mood }) } ] }));
+        putM(-1, 2);  ok(age() !== null, '心情不好時收進營地、放 49 小時，應該要變');
+        putM(0, -2);  ok(age() === null, '收進營地時心情 0（不是 < 0）也變了');
+        putM(2, -2);  ok(age() === null, '收進營地時心情好也變了（之後心情變差不算）');
+        putM(undefined, -1); ok(age() !== null, '舊資料沒有 keptMood：現在心情不好應該照樣會變');
+        putM(undefined, 1);  ok(age() === null, '舊資料沒有 keptMood：現在心情好卻變了');
+        const real = JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'characters', 'special-evolutions.json'), 'utf8'));
+        const suka = real.rules.find(r => r.to === 'sukamon');
+        ok(suka && suka.conditions.some(c => c.type === 'kept_mood_below' && c.value === 0), '大便獸的規則沒有「收進營地時心情 < 0」');
+    }
 
     // ── 不該觸發的情況 ──
     rule();

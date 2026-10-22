@@ -299,13 +299,19 @@ function packDots(d) {
 }
 
 // 圓桌＋火鍋。回傳 dot 圖與它左上角在畫布上的位置；step 讓熱氣飄動
-const TB = {
+const TB_BASE = {
     cloth: [190, 38, 42], clothHi: [214, 64, 60], trim: [232, 182, 70], skirt: [128, 22, 30], skirtLo: [96, 16, 24],
     potRim: [70, 74, 82], potIn: [44, 46, 52], soup: [222, 96, 40], soupHi: [246, 150, 70],
     tofu: [245, 240, 225], veg: [80, 170, 80], meat: [236, 140, 150],
     plate: [235, 235, 240], steam: [225, 228, 235],
 };
-function feastTable(t, step) {
+// 尾牙（2026-10-22 回報：桌子不要紅色）：白桌巾、香檳金邊、淺灰桌裙，盤子改淡藍才看得出來
+const TB_STYLE = {
+    weiya: { ...TB_BASE, cloth: [236, 236, 232], clothHi: [250, 250, 247], trim: [206, 178, 104],
+             skirt: [200, 200, 196], skirtLo: [162, 162, 160], plate: [186, 200, 220] },
+};
+function feastTable(t, step, style) {
+    const TB = TB_STYLE[style] || TB_BASE;
     const { rx, ry } = t, SK = FEAST_SKIRT, UP = 7;   // SK：桌裙高度；UP：熱氣往上飄的空間
     const w = rx * 2 + 1, h = ry * 2 + 1 + SK + UP;
     const dots = []; for (let y = 0; y < h; y++) dots.push(new Array(w).fill(null));
@@ -486,7 +492,7 @@ function composePlaza(core, occupants, step, opts = {}) {
     placed.sort((a, b) => (a.y - b.y) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
     // 圍爐的桌子也參加前後排序：腳在桌子中線後面的先畫（桌子擋住下半身），前面的後畫
-    const table = feast ? feastTable(feast.table, step) : null;
+    const table = feast ? feastTable(feast.table, step, opts.feastStyle) : null;
     // 圍爐的角色和桌子不畫進 dot 緩衝，改成一層「原圖＋縮放倍率」交給前端畫（layer）：
     // 縮小時不丟像素 —— 16x16 原圖整張送過去，前端每個像素畫成 k 個 dot 大（回報過：
     // 最近點縮放把眼睛、輪廓吃掉）。順序就是前後關係。owner 還是照縮小後的範圍算

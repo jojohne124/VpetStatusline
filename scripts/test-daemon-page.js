@@ -1604,6 +1604,8 @@ setTimeout(async () => {
         ok(starts.length === 40 && Math.max(...starts) - Math.min(...starts) > 0.5 && speeds.size > 10 && [...speeds].every(ms => ms >= 900 && ms <= 1600),
            '手動戰鬥的力度條每回合還是同一個速度、從同一個地方開始（節奏背得起來）');
     }
+    ok(/<div id="plazacount"><\/div>/.test(src) && /document\.getElementById\('plazacount'\)\.textContent='👥 '\+\(p\.names\|\|\[\]\)\.length;/.test(src)
+       && /body\.plaza #plazacount\{display:block\}/.test(src), '廣場沒有顯示人數');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

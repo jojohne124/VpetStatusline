@@ -74,9 +74,30 @@ ok(id(at(2028, 10, 3)) === 'midautumn' && id(at(2028, 10, 4)) === 'doubleten', '
     for (let y = 2027; y <= 2029; y++) {
         const seen = new Set();
         for (let t = at(y, 1, 1, 12); t < at(y + 1, 1, 1); t += 864e5) { const f = id(t); if (f) seen.add(f); }
-        const miss = FEST.FESTIVALS.filter(f => !seen.has(f.id)).map(f => f.id);
+        const miss = FEST.FESTIVALS.filter(f => !f.dates && !seen.has(f.id)).map(f => f.id);   // 指定日期的（選舉、尾牙）不是每年都有
         ok(miss.length === 0, `${y} 年有節日一天都輪不到：${miss.join(',')}`);
     }
+}
+
+console.log('— 指定日期的節日（選舉、尾牙）—');
+{
+    // 選舉：投票日 2026/11/28，前一週（11/21）起到當天
+    ok(id(at(2026, 11, 20, 23, 59)) === null && id(at(2026, 11, 21, 0, 0)) === 'election', '選舉應該 11/21 00:00 開始');
+    ok(id(at(2026, 11, 28, 23, 0)) === 'election' && id(at(2026, 11, 29, 0, 0)) === null, '選舉應該到投票日當天結束');
+    ok(id(at(2027, 11, 25)) === null, '沒列的年份不該有選舉');
+    ok(FEST.active(0, 'election').acc === null, '選舉不戴配件');
+    // 尾牙：日期還沒定 → 平常不會出現，dev 預覽看得到；有日期時整段都圍爐
+    const wy = FEST.FESTIVALS.find(f => f.id === 'weiya');
+    ok(wy && wy.dates.length === 0 && (FEST.active(0, 'weiya') || {}).id === 'weiya', '尾牙應該只有 dev 預覽看得到');
+    ok(FEST.feastOn(wy, at(2027, 1, 20, 19), true), '尾牙預覽要圍爐');
+    const wy2 = { ...wy, dates: ['2027-01-22'] };
+    ok(FEST.feastOn(wy2, at(2027, 1, 22, 12)) && !FEST.feastOn(wy2, at(2027, 1, 23, 0, 1)), '尾牙當天整天圍爐、隔天結束');
+    // 尾牙的桌子不要紅色（2026-10-22 回報）；春節照舊紅桌巾。廣場、營地兩邊都要把節日帶進去
+    const t = P.feastLayout(6).table, red = ([r, g, b]) => r > 120 && r > g * 2 && r > b * 2;
+    const reds = (style) => P.feastTable(t, 0, style).dots.flat().filter(c => c && red(c)).length;
+    ok(reds('weiya') < reds(undefined) / 5 && reds(undefined) > 50, `尾牙桌子還是紅的（紅點 ${reds('weiya')}，春節 ${reds(undefined)}）`);
+    const dsrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok((dsrc.match(/feast, feastStyle: fest && fest\.id/g) || []).length === 2, '廣場／營地沒把節日（feastStyle）帶給圓桌');
 }
 
 console.log('— 農曆對照表 —');
@@ -218,7 +239,7 @@ if (hasDitto && hasArt) {
 // daemon 有把換角色接到三個出口：營地合成、廣場每個人、營地拿起來那隻（都跟著節慶造型開關）
 {
     const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
-    ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null,\s*feast \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
+    ok(/swap: fest && festOpt\.costume \? fest\.swap \|\| null : null,\s*swapSalt: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('ds'\) \|\| null,\s*feast, feastStyle: fest && fest\.id \}\);/.test(src), '營地合成沒有帶 swap／swapSalt（或沒跟著節慶造型開關）');
     ok(/swapSalt: args\.ds \|\| null,/.test(src) && /const ga=\{which:hit\.id,ds:yardSalt[,}]/.test(src), '營地拿起來的那隻沒帶進場亂數（拿起來會變另一隻）');
     ok(/qs\.push\('ds='\+yardSalt\);/.test(src), '營地畫面沒有把進場亂數送給 /yard');
     ok(/if\(v==='yard' && view!=='yard'\) yardSalt=Math\.random\(\)/.test(src), '切進營地沒有重抽進場亂數');
@@ -344,8 +365,8 @@ console.log('— 圍爐（春節前一週）—');
     }
     // daemon：營地、廣場都接上；前端圍爐時不能拎、沒有自動／手動、WASD 不動
     const src = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
-    ok(/const feast = festOpt\.costume && festFeast\(fest, Date\.now\(\), festQ\);/.test(src) && /swapSalt: [^\n]*,\s*feast \}\);/.test(src), '營地沒有接圍爐');
-    ok(/const feast = me\.costume !== false && festFeast\(fest, nowS, festQ\);\s*const out = plaza\.composePlazaLive\(core, occ, step,\s*\{[^}]*feast \}\);/.test(src), '廣場沒有接圍爐');
+    ok(/const feast = festOpt\.costume && festFeast\(fest, Date\.now\(\), festQ\);/.test(src) && /swapSalt: [^\n]*,\s*feast, feastStyle: fest && fest\.id \}\);/.test(src), '營地沒有接圍爐');
+    ok(/const feast = me\.costume !== false && festFeast\(fest, nowS, festQ\);\s*const out = plaza\.composePlazaLive\(core, occ, step,\s*\{[^}]*feast, feastStyle: fest && fest\.id \}\);/.test(src), '廣場沒有接圍爐');
     ok(/const festFeast = \(f, ms, q\) => FEST\.feastOn\(f, ms, !IS_RELEASE && !!\(q \|\| process\.env\.VPET_FESTIVAL\)\);/.test(src), 'release 版也吃圍爐預覽');
     ok(/if\(lastYard&&lastYard\.feast\) return;/.test(src), '圍爐時營地還能拎走');
     // 廣場的 dev 節日預覽：只有這個畫面（/plaza?fest=），release 沒有

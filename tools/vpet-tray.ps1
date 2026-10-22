@@ -10,11 +10,13 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+param([int]$AdoptPid = 0)   # 熱更交棒用：新版 tray 接手舊 tray 開的 daemon（不再開一個）
 $ErrorActionPreference = 'Stop'
 # 只開一個 tray（第二次雙擊 vpet-standalone.vbs 直接結束，不會再起第二個 daemon 搶 3010）。
 # tools\vpet-mini 的小視窗也看這個 Mutex：tray 在 = daemon 是我們管的，自動更新的空檔多等一下
 $mutex = New-Object System.Threading.Mutex($false, 'Local\vpet-tray')
-if (-not $mutex.WaitOne(0, $false)) { exit 0 }
+# 交棒時舊 tray 還在收尾：多等幾秒讓它放掉 Mutex
+if (-not $mutex.WaitOne($(if ($AdoptPid) { 15000 } else { 0 }), $false)) { exit 0 }
 $root    = Split-Path -Parent $PSScriptRoot         # repo / 安裝根目錄
 $miniVbs = Join-Path $PSScriptRoot 'vpet-mini\vpet-mini.vbs'   # 小視窗（同事做的 vpet mini，2026-10-21 併進來）
 $daemon  = Join-Path $root 'src\daemon\daemon.js'
@@ -42,7 +44,10 @@ $psi.Arguments       = "`"$daemon`" --authoritative"
 $psi.WorkingDirectory = $root
 $psi.UseShellExecute = $false
 $psi.CreateNoWindow  = $true
-$proc = [System.Diagnostics.Process]::Start($psi)
+# 熱更交棒：接手舊 tray 開的那個 daemon（更新外殼的 PID 從頭到尾不變），不要再開第二個
+$proc = $null
+if ($AdoptPid) { try { $proc = [System.Diagnostics.Process]::GetProcessById($AdoptPid) } catch { $proc = $null } }
+if (-not $proc) { $proc = [System.Diagnostics.Process]::Start($psi) }
 
 # ── tray 圖示 ──
 $icon = if (Test-Path $icoPath) { New-Object System.Drawing.Icon $icoPath }
@@ -99,7 +104,26 @@ $quit.add_Click({
 $ni.ContextMenuStrip = $menu
 $ni.add_MouseDoubleClick({ Start-Process $url })   # 雙擊圖示＝開視窗
 
-$ni.ShowBalloonTip(2500, 'vpet 已啟動', "在工作列右下角。雙擊圖示開啟視窗。`n$url", 'Info')
+if (-not $AdoptPid) { $ni.ShowBalloonTip(2500, 'vpet 已啟動', "在工作列右下角。雙擊圖示開啟視窗。`n$url", 'Info') }
+
+# ── 熱更後換新版 tray（2026-10-22 回報：熱更只重開 daemon，tray 還是舊的，選單要手動重開才會變）──
+#    每 30 秒看自己的檔案；被更新換掉了 → 起一個新版 tray（-AdoptPid 接手同一個 daemon），自己安靜退場、不殺 daemon
+$selfPath = $PSCommandPath
+$selfStamp = (Get-Item $selfPath).LastWriteTimeUtc
+$script:handedOff = $false
+function Check-SelfUpdate {
+    try {
+        if ($script:handedOff -or $proc.HasExited) { return }
+        if ((Get-Item $selfPath).LastWriteTimeUtc -eq $selfStamp) { return }
+        $script:handedOff = $true
+        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden',
+            '-File', ('"' + $selfPath + '"'), '-AdoptPid', [string]$proc.Id)
+        $ni.Visible = $false; $ni.Dispose()
+        try { $mutex.ReleaseMutex() } catch {}
+        [System.Windows.Forms.Application]::Exit()
+    } catch {}
+}
+$script:selfTicks = 0
 
 # ── 提醒：每秒讀 /state 的 kind（頁面自己也每秒讀它），從別的場景變成 evo（進化）／battle（戰鬥）那一刻提醒一次 ──
 #    啟動那一拍不提醒（不然一開 vpet 剛好在打就跳）。名字用 /state 的 jogress.frontName（顯示名），拿不到退回 character
@@ -139,12 +163,14 @@ $timer.add_Tick({
         return
     }
     $st = Get-VpetState; if ($st) { On-Kind $st.kind $st.name }
+    $script:selfTicks++; if ($script:selfTicks -ge 30) { $script:selfTicks = 0; Check-SelfUpdate }
 })
 $timer.Start()
 
 try {
     [System.Windows.Forms.Application]::Run()
 } finally {
-    try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
+    # 交棒給新版 tray 時不殺 daemon（新的 tray 接手）
+    if (-not $script:handedOff) { try { if (-not $proc.HasExited) { $proc.Kill() } } catch {} }
     try { $ni.Visible = $false; $ni.Dispose() } catch {}
 }

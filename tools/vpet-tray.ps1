@@ -78,9 +78,11 @@ public static class VpetTrayNative {
 # ── 提醒（同事 vpet mini v13 的功能，2026-10-22 併進來）：進化／戰鬥開始時跳 Windows 通知氣泡＋提示音，
 #    進化時順便把小視窗叫出來。各項可在選單「提醒」開關，存 tools\vpet-tray.json（自動產生，不進 git）──
 $prefPath = Join-Path $PSScriptRoot 'vpet-tray.json'
-$PREF = @{ notifyEvo = $true; notifyBattle = $true; sound = $true; autoOpenMini = $true }
+# dblClick：雙擊圖示開 'mini'（小視窗）或 'web'（網頁）；hintShown：第一次啟動的常駐教學跳過了沒（v15）
+$PREF = @{ notifyEvo = $true; notifyBattle = $true; sound = $true; autoOpenMini = $true; hintShown = $false; dblClick = 'mini' }
 try { if (Test-Path $prefPath) { $j = Get-Content $prefPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($k in 'notifyEvo','notifyBattle','sound','autoOpenMini') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } } } } catch {}
+        foreach ($k in 'notifyEvo','notifyBattle','sound','autoOpenMini','hintShown') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } }
+        if ($j.dblClick -eq 'web' -or $j.dblClick -eq 'mini') { $PREF.dblClick = [string]$j.dblClick } } } catch {}
 function Save-Pref { try { ($PREF | ConvertTo-Json -Compress) | Set-Content $prefPath -Encoding UTF8 } catch {} }
 $mNotify = New-Object System.Windows.Forms.ToolStripMenuItem('提醒')
 $mNE = $mNotify.DropDownItems.Add('進化：跳通知'); $mNE.Checked = $PREF.notifyEvo;    $mNE.add_Click({ $PREF.notifyEvo = -not $PREF.notifyEvo; $mNE.Checked = $PREF.notifyEvo; Save-Pref })
@@ -90,6 +92,22 @@ if (Test-Path $miniVbs) {
     $mNO = $mNotify.DropDownItems.Add('進化時自動開小視窗'); $mNO.Checked = $PREF.autoOpenMini; $mNO.add_Click({ $PREF.autoOpenMini = -not $PREF.autoOpenMini; $mNO.Checked = $PREF.autoOpenMini; Save-Pref })
 }
 [void]$menu.Items.Add($mNotify)
+# ── 雙擊圖示開什麼、圖示常駐教學（同事 vpet mini v15 的功能，2026-10-22 併進來）──
+#    雙擊照設定開小視窗或網頁（預設小視窗；小視窗檔不在就退回網頁）
+function Open-Default {
+    if ($PREF.dblClick -ne 'web' -and (Test-Path $miniVbs)) { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $miniVbs + '"') } else { Start-Process $url }
+}
+if (Test-Path $miniVbs) {
+    $mDbl = New-Object System.Windows.Forms.ToolStripMenuItem('雙擊圖示開啟')
+    $mDblMini = $mDbl.DropDownItems.Add('小視窗'); $mDblWeb = $mDbl.DropDownItems.Add('網頁（完整版）')
+    function Sync-Dbl { $mDblMini.Checked = ($PREF.dblClick -ne 'web'); $mDblWeb.Checked = ($PREF.dblClick -eq 'web') }
+    $mDblMini.add_Click({ $PREF.dblClick = 'mini'; Sync-Dbl; Save-Pref }); $mDblWeb.add_Click({ $PREF.dblClick = 'web'; Sync-Dbl; Save-Pref }); Sync-Dbl
+    [void]$menu.Items.Add($mDbl)
+}
+#    圖示常駐顯示：Windows 不讓程式自己決定，只能教玩家拖一次（第一次啟動跳一次、選單隨時可再看）
+$PIN_HINT = "vpet 圖示在右下角的「^」裡。想讓它一直看得到：點「^」，把 vpet 圖示拖到旁邊那排放開，Windows 會記住。"
+function Show-PinHint([string]$title = '怎麼讓圖示常駐顯示？') { $ni.ShowBalloonTip(8000, $title, $PIN_HINT, 'Info') }
+$mPin = $menu.Items.Add('怎麼讓圖示常駐顯示？'); $mPin.add_Click({ Show-PinHint })
 $menu.Items.Add('-') | Out-Null
 # 結束時小視窗一起關（送 WM_CLOSE，讓它自己存位置）
 function Close-Mini { try { $h = [VpetTrayNative]::FindWindow([NullString]::Value, 'vpet mini'); if ($h -ne [IntPtr]::Zero) { [void][VpetTrayNative]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) } } catch {} }
@@ -102,9 +120,21 @@ $quit.add_Click({
     [System.Windows.Forms.Application]::Exit()
 })
 $ni.ContextMenuStrip = $menu
-$ni.add_MouseDoubleClick({ Start-Process $url })   # 雙擊圖示＝開視窗
+# 左鍵單擊也出選單（NotifyIcon 只有右鍵會自動出；用內部的 ShowContextMenu 才會出在正確位置、點外面會收），雙擊照設定開。
+# 單擊要等一個「雙擊時限」再出選單，不然雙擊的第一下會先把選單叫出來
+function Show-TrayMenu { $m = $ni.GetType().GetMethod('ShowContextMenu', [System.Reflection.BindingFlags]'NonPublic,Instance'); if ($m) { $m.Invoke($ni, $null) } else { $menu.Show([System.Windows.Forms.Cursor]::Position) } }
+$script:clickTimer = New-Object System.Windows.Forms.Timer; $script:clickTimer.Interval = [Math]::Max(200, [System.Windows.Forms.SystemInformation]::DoubleClickTime)
+$script:clickTimer.add_Tick({ $script:clickTimer.Stop(); Show-TrayMenu })
+$ni.add_MouseClick({ param($s, $e) if ($e.Button -eq 'Left') { $script:clickTimer.Stop(); $script:clickTimer.Start() } })
+$ni.add_MouseDoubleClick({ param($s, $e) if ($e.Button -eq 'Left') { $script:clickTimer.Stop(); Open-Default } })
 
-if (-not $AdoptPid) { $ni.ShowBalloonTip(2500, 'vpet 已啟動', "在工作列右下角。雙擊圖示開啟視窗。`n$url", 'Info') }
+# 第一次啟動跳一個氣泡：標題「vpet 已啟動」、內容是怎麼常駐顯示（之後不跳，從選單看）。晚 1.5 秒等圖示站穩。
+# 原本每次啟動都跳「已啟動」，Windows 一次只顯示一個氣泡會互吞，所以併成這一個。熱更交棒（AdoptPid）不跳
+if (-not $AdoptPid -and -not $PREF.hintShown) {
+    $script:hintTimer = New-Object System.Windows.Forms.Timer; $script:hintTimer.Interval = 1500
+    $script:hintTimer.add_Tick({ $script:hintTimer.Stop(); Show-PinHint 'vpet 已啟動'; $PREF.hintShown = $true; Save-Pref })
+    $script:hintTimer.Start()
+}
 
 # ── 熱更後換新版 tray（2026-10-22 回報：熱更只重開 daemon，tray 還是舊的，選單要手動重開才會變）──
 #    每 30 秒看自己的檔案；被更新換掉了 → 起一個新版 tray（-AdoptPid 接手同一個 daemon），自己安靜退場、不殺 daemon

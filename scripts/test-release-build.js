@@ -190,7 +190,7 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
        'vpet mini 的新視窗沒有限制只開 http／https');
     ok(/if\(e\.id==='chatlog'\) return true;/.test(mini), 'vpet mini 的聊天紀錄會被當成空白拖曳（字沒辦法反白複製）');
     // 系統匣只有一個（repo 自己的），選單開小視窗、結束時一起關；小視窗看同一個 Mutex
-    ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /TryOpenExisting\('Local\\vpet-tray'/.test(mini),
+    ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /foreach \(\$mn in 'Local\\vpet-mini-tray', 'Local\\vpet-tray'\) \{\s*try \{ \$mx = \$null; if \(\[System\.Threading\.Mutex\]::TryOpenExisting\(\$mn,/.test(mini),
        'tray 跟小視窗沒有用同一個 Mutex（自動更新空檔的判斷會錯）');
     ok(/\$menu\.Items\.Add\('開啟 vpet mini 視窗'\)/.test(tray) && /Close-Mini/.test(tray), 'tray 選單沒有「開啟 vpet mini 視窗」（或結束時沒關小視窗）');
     // 提醒（v13）：進化／戰鬥開始跳通知，選單可開關；靠 /state 的 kind（evo、battle）與 jogress.frontName
@@ -202,6 +202,16 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     ok(/param\(\[int\]\$AdoptPid = 0\)/.test(tray) && /\(Get-Item \$selfPath\)\.LastWriteTimeUtc -eq \$selfStamp/.test(tray)
        && /'-AdoptPid', \[string\]\$proc\.Id/.test(tray) && /if \(-not \$script:handedOff\) \{ try \{ if \(-not \$proc\.HasExited\) \{ \$proc\.Kill\(\) \} \} catch \{\} \}/.test(tray)
        && /GetProcessById\(\$AdoptPid\)/.test(tray), '熱更後 tray 不會自己換新版（或交棒時把 daemon 殺了）');
+    // v15：系統匣雙擊照設定開（小視窗／網頁）、左鍵單擊出選單、第一次啟動跳常駐教學（熱更交棒不跳）
+    ok(/function Open-Default/.test(tray) && /\$ni\.add_MouseDoubleClick\(\{ param\(\$s, \$e\) if \(\$e\.Button -eq 'Left'\) \{ \$script:clickTimer\.Stop\(\); Open-Default \} \}\)/.test(tray)
+       && /ToolStripMenuItem\('雙擊圖示開啟'\)/.test(tray) && /\$menu\.Items\.Add\('怎麼讓圖示常駐顯示？'\)/.test(tray)
+       && /if \(-not \$AdoptPid -and -not \$PREF\.hintShown\)/.test(tray) && !/ShowBalloonTip\(2500, 'vpet 已啟動'/.test(tray),
+       'tray 沒有 v15 的雙擊設定／常駐教學（或熱更交棒時也會跳教學）');
+    // 小寵物拿 /state 的 character 拼路徑讀 art.json：只收資料夾名會有的字
+    ok(/\$charId -notmatch '\^\[A-Za-z0-9_-\]\+\$'/.test(mini), 'vpet mini 讀角色圖沒有檢查 id（可以拼出 characters 以外的路徑）');
+    // v15 小寵物照抄 /state 的 petLines、用 character 找角色圖比面向
+    ok(/petLines: out\.petLines,/.test(read('src/daemon/daemon.js')) && /character: st\.characterId,/.test(read('src/daemon/daemon.js'))
+       && /\$st\.petLines/.test(mini) && /\$st\.character/.test(mini), '/state 的 petLines／character 改了 —— vpet mini 的小寵物要一起改');
     // 跟頁面的約定：/state 的 kind、整列 .form 的 data-cmd、#chatlog（改到要一起改小視窗）
     const page = read('src/daemon/daemon.js');
     ok(/id="chatlog"/.test(page) && /<div class="form\$\{f\.dev \? ' devonly' : ''\}" data-help=/.test(page) && /kind: result\.kind/.test(page),

@@ -1,9 +1,9 @@
 # vpet mini — vpet 的桌面小視窗
 
 把 vpet 的網頁（`http://localhost:3010`）原封不動放進一個**只有面板大小、永遠最上層、可拖、可縮放**的小視窗。
-同事做的 v12（2026-10-21），同一天併進 repo，**之後由本 repo 維護**。只支援 Windows。
+同事做的 v12（2026-10-21），同一天併進 repo，**之後由本 repo 維護**；v13（提醒）、v15（小寵物、頂端橫列、系統匣雙擊）2026-10-22 併入。只支援 Windows。
 
-- 不注入樣式。頁面裡只塞一段「量尺寸」的腳本（只量不改）。
+- 頁面裡塞一段「量尺寸」的腳本（只量不改），加兩條樣式：常駐的 `h1` 上下對稱內距、進化樹期間鎖畫布大小（見維護須知）。
 - 相依：Windows 11 內建的 WebView2 runtime、PowerShell 5.1。`lib\` 內附 WebView2 SDK 三個 dll（Microsoft 簽章，授權見 `lib\LICENSE.txt`），不用另外裝。
 
 ## 怎麼開
@@ -16,15 +16,22 @@
 - 戰鬥開始（`battle`）：通知氣泡「Vpet開打了！／( ◞•̀д•́)═○💥○═(•̀д•́◟ )」＋提示音。
 - 啟動那一拍不提醒；Windows「專注輔助」開著時氣泡會被壓掉，只剩提示音。
 
+**系統匣圖示**（v15）：左鍵單擊或右鍵出選單；雙擊照選單「雙擊圖示開啟」的設定開小視窗（預設）或網頁。
+第一次啟動跳一次「怎麼讓圖示常駐顯示」的教學（Windows 不讓程式自己決定，只能教玩家把圖示從「^」拖出來），之後從選單再看。
+設定都存 `tools\vpet-tray.json`（`dblClick`、`hintShown`）。
+
 ## 小視窗怎麼操作
 
 | 動作 | 效果 |
 |---|---|
 | 面板空白處按住拖曳（不是按鈕、輸入框、畫布、連結、聊天紀錄） | 移動視窗 |
 | 「▸ 進階指令」那一列 | 按在文字上＝展開／收合；按在文字右邊的空白＝拖曳 |
-| 小標籤（面板右上角上方，「vpet 100%」） | 拖曳移動、右鍵選單、雙擊在瀏覽器開完整網頁 |
+| 頂端橫列右端的「☰ vpet 100%」按鈕 | 點一下（左鍵或右鍵）開選單、按住拖曳移動視窗。數字是目前的畫面縮放，字型字級跟頁面標題一致 |
 | 小方塊（面板右下角 14×14）拖曳 | 整頁等比例縮放 40%～200%，拖時只動外框、放開才套用 |
-| 右鍵選單 | 在瀏覽器開完整網頁／重新整理／縮放 50～150%／閱讀縮放／永遠最上層／結束 |
+| 選單 | 在瀏覽器開完整網頁／重新整理／畫面縮放 50～150%／閱讀縮放／縮成小寵物／小寵物跟隨滑鼠／永遠最上層／結束 |
+| 選單「縮成小寵物」 | 小視窗藏起來（不關），原位出現一隻角色，**照抄遊戲此刻畫的那隻**（`/state` 的 `petLines`，每 0.45 秒），睡覺、表情、戰鬥都同步。走動時在面板寬度內左右走；點牠小視窗回來、按住拖搬家、右鍵有選單；進化開始時小視窗自動回來 |
+| 選單「小寵物跟隨滑鼠」 | 約 60 px/秒朝游標走，離游標「身寬 × 0.75」內停下，離開 120 px 再追；睡覺／戰鬥時不追 |
+| 進化樹（常駐） | 樹那張圖比平常寬，原本視窗會撐寬；現在樹期間把前線畫布鎖在平常寬高、等比縮進去，視窗形狀不變（圖會糊一點） |
 | 頁面內「圖鑑」「舞台底圖」 | 交給預設瀏覽器開新分頁（只放行 http／https） |
 | 頁面的 confirm／alert／prompt | 改用 Windows 對話框顯示，不受視窗大小影響 |
 
@@ -32,14 +39,14 @@
 - 只會開一個小視窗；再開一次只是叫到前面。3010 連不上時：tray 還在就等最多 90 秒（自動更新的空檔），tray 不在了 10 秒關。
 - 閱讀縮放（預設關）：卡片／進化樹場景暫時升到指定縮放。頁面的前線畫布已經照 `devicePixelRatio` 畫（2026-10-21），通常不需要。
 
-`mini-web.json`（位置／縮放／最上層）、`webview-data\`（WebView2 的瀏覽器資料）是小視窗自己產生的，不進 git、不出貨；自動更新只覆寫出貨的檔案，不會刪它們。刪掉就回預設。
+`mini-web.json`（位置／縮放／最上層／小寵物設定）、`webview-data\`（WebView2 的瀏覽器資料）是小視窗自己產生的，不進 git、不出貨；自動更新只覆寫出貨的檔案，不會刪它們。刪掉就回預設。
 
 ## 壞掉時
 
 - 「WebView2 啟動失敗」：Windows 的 WebView2 runtime 不在（Win11 內建，`C:\Program Files (x86)\Microsoft\EdgeWebView\`）。
 - 小標籤紅字「連不到 daemon」：daemon 沒在跑，重開 `vpet-standalone.vbs`。
-- 視窗尺寸怪：右鍵「縮放 100%」，或刪 `mini-web.json`。
-- 除錯：設環境變數 `VPET_MINI_DEBUG=1` 再開。寫 `_measure.log`／`_fit.log`／`_err.log`；`_debug_cmd.js` 出現時在頁面執行它、`_debug_shell.txt` 寫 `width N` 模擬拖到 N 寬放開。不必碰滑鼠就能驗。
+- 視窗尺寸怪：選單「畫面縮放 100%」，或刪 `mini-web.json`。
+- 除錯：設環境變數 `VPET_MINI_DEBUG=1` 再開。寫 `_measure.log`／`_fit.log`／`_err.log`；`_debug_cmd.js` 出現時在頁面執行它、`_debug_shell.txt` 寫 `width N`（模擬拖到 N 寬放開）／`pet`／`unpet`／`follow`／`unfollow`／`petpos`／`petdump`。指令檔每 300 ms 讀一次，兩個指令之間要等。不必碰滑鼠就能驗。
 
 ---
 
@@ -48,7 +55,7 @@
 每條都是實際踩過的坑（同事的交接，併進來時更新過）。
 
 ### 架構
-三個 WinForms 視窗：**主視窗**只放 WebView2，形狀（`Form.Region`）＝頁面回報的實體矩形；**小標籤**、**小方塊**是主視窗的 owned window（WebView2 是獨立子視窗，會蓋住同區域的控制項，把手只能用另外的視窗疊上去）。系統匣與 daemon 歸 `tools\vpet-tray.ps1`。
+三個 WinForms 視窗：**主視窗**只放 WebView2，形狀（`Form.Region`）＝頁面回報的實體矩形＋頂端橫列（頁面標題那段補成面板寬的一條）；**小標籤**（☰ 按鈕，放橫列右端）、**小方塊**是主視窗的 owned window（WebView2 是獨立子視窗，會蓋住同區域的控制項，把手只能用另外的視窗疊上去）。系統匣與 daemon 歸 `tools\vpet-tray.ps1`。
 
 ### 跟頁面（`src/daemon/daemon.js`）的約定 —— 改到這些要一起改小視窗（`test-release-build` 有檢查）
 - `/state` 的 `kind`：`card`、`tree` 是「有字的場景」（閱讀縮放用）；系統匣的提醒看 `evo`（進化）、`battle`（戰鬥），名字看 `jogress.frontName`。
@@ -56,6 +63,12 @@
 - 頁面的 `confirm`／`alert`、圖鑑的 `window.open`。
 - 聊天紀錄 `#chatlog`：不拖（要能反白複製）。
 - tray 開的 Mutex `Local\vpet-tray`：小視窗靠它判斷 daemon 是不是我們管的（自動更新空檔多等）。
+- `/state` 的 `petLines`（小寵物照抄：8 列 × 52 格，`▀` 前景＝上半、背景＝下半，`▄` 反之，`█` 兩半前景，點字空白透明）與 `character`（拿 `characters\<character>\art.json` 的 12 幀逐像素比面向，比不到就原地站；id 只收英數、底線、連字號）。
+- 頁面標題 `h1`：☰ 按鈕的字級、頂端橫列的上緣都量它；沒有 `h1` 就退回預設。
+
+### 注入的樣式（只有兩條）
+- `$STYLE`（常駐）：`h1{margin:0;padding:3px 0;line-height:1.2}`，標題行上下對稱、跟 ☰ 按鈕同一中線；`h1` 不在了就沒效果、不會壞。
+- `Set-TreeFit`（只在進化樹期間）：最大那塊畫布加 `data-vpet-mini-fit`，塞 `<style id="vpet-mini-fit">` 把它鎖在平常寬高（`!important`，頁面每幀都會重設 `cv.style.width`）、`object-fit:contain`、`image-rendering:auto`（pixelated 縮小會丟列）；樹結束移除。
 
 ### 頁面裡唯一的腳本（`$MEASURE`，`AddScriptToExecuteOnDocumentCreatedAsync`）
 每 0.7 秒＋DOM 變動＋resize 時量一次，`postMessage` 給殼：

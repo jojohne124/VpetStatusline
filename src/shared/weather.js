@@ -35,6 +35,9 @@ const SKY_ORDER = [SKY.CLEAR, SKY.CLOUDY, SKY.RAIN, SKY.STORM, SKY.THUNDER];
 // 中央氣象署的寒流定義是台北測站最低溫 ≤ 10°C，但那一年只有幾天，做了幾乎看不到；
 // 12°C 大約落在「強烈大陸冷氣團」，一個冬天會出現個幾次 —— 夠特別又不會永遠見不到。
 const COLD_C = 12;
+// 雲量（%）到這裡以上，「晴」改判「陰」（2026-10-21：碼 1「大致晴朗」雲量 35%，窗外看起來是陰的，畫面卻是晴）。
+// 只把晴改成陰；下雨、雷雨照碼判，不看雲量
+const CLOUDY_PCT = 30;
 
 // WMO 天氣碼 → 天空狀態。這是 Open-Meteo 回傳的標準碼表。
 // 沒列到的碼一律當陰天（見 classify）—— 寧可少演一點，也不要因為碰到沒看過的碼就爆掉。
@@ -61,8 +64,11 @@ function classify(code, tempC, opts = {}) {
     const coldBelow = opts.coldBelowC == null ? COLD_C : opts.coldBelowC;
     const c = Number.isFinite(code) ? Math.round(code) : null;
     const t = Number.isFinite(tempC) ? tempC : null;
+    let sky = c == null ? SKY.CLEAR : (CODE_TO_SKY.get(c) || SKY.CLOUDY);
+    // opts.cloud：雲量 %（沒有就不看，舊快取沒存雲量也照碼判）
+    if (sky === SKY.CLEAR && c != null && Number.isFinite(opts.cloud) && opts.cloud >= CLOUDY_PCT) sky = SKY.CLOUDY;
     return {
-        sky:   c == null ? SKY.CLEAR : (CODE_TO_SKY.get(c) || SKY.CLOUDY),
+        sky,
         cold:  t != null && t <= coldBelow,
         tempC: t,
         code:  c,
@@ -121,7 +127,7 @@ function describe(w) {
 // 連帶結論：這個模組現在是純粹的「天氣是什麼」，不含任何繪圖。畫面全在前端。
 
 module.exports = {
-    SKY, SKY_ORDER, COLD_C, WMO,
+    SKY, SKY_ORDER, COLD_C, CLOUDY_PCT, WMO,
     DAY_START, DAY_END, isNight,
     classify, describe, SKY_LABEL,
 };

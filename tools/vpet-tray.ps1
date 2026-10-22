@@ -87,14 +87,15 @@ public static class VpetTrayNative {
 #    進化時順便把小視窗叫出來。各項可在選單「提醒」開關，存 tools\vpet-tray.json（自動產生，不進 git）──
 $prefPath = Join-Path $PSScriptRoot 'vpet-tray.json'
 # dblClick：雙擊圖示開 'mini'（小視窗）或 'web'（網頁）；hintShown：第一次啟動的常駐教學跳過了沒（v15）
-$PREF = @{ notifyEvo = $true; notifyBattle = $true; sound = $true; autoOpenMini = $true; hintShown = $false; dblClick = 'mini' }
+$PREF = @{ notifyEvo = $true; notifyBattle = $true; notifyEvent = $true; sound = $true; autoOpenMini = $true; hintShown = $false; dblClick = 'mini' }
 try { if (Test-Path $prefPath) { $j = Get-Content $prefPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($k in 'notifyEvo','notifyBattle','sound','autoOpenMini','hintShown') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } }
+        foreach ($k in 'notifyEvo','notifyBattle','notifyEvent','sound','autoOpenMini','hintShown') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } }
         if ($j.dblClick -eq 'web' -or $j.dblClick -eq 'mini') { $PREF.dblClick = [string]$j.dblClick } } } catch {}
 function Save-Pref { try { ($PREF | ConvertTo-Json -Compress) | Set-Content $prefPath -Encoding UTF8 } catch {} }
 $mNotify = New-Object System.Windows.Forms.ToolStripMenuItem('提醒')
 $mNE = $mNotify.DropDownItems.Add('進化：跳通知'); $mNE.Checked = $PREF.notifyEvo;    $mNE.add_Click({ $PREF.notifyEvo = -not $PREF.notifyEvo; $mNE.Checked = $PREF.notifyEvo; Save-Pref })
 $mNB = $mNotify.DropDownItems.Add('戰鬥：跳通知'); $mNB.Checked = $PREF.notifyBattle; $mNB.add_Click({ $PREF.notifyBattle = -not $PREF.notifyBattle; $mNB.Checked = $PREF.notifyBattle; Save-Pref })
+$mNV = $mNotify.DropDownItems.Add('事件：跳通知'); $mNV.Checked = $PREF.notifyEvent; $mNV.add_Click({ $PREF.notifyEvent = -not $PREF.notifyEvent; $mNV.Checked = $PREF.notifyEvent; Save-Pref })
 $mNS = $mNotify.DropDownItems.Add('提示音');       $mNS.Checked = $PREF.sound;        $mNS.add_Click({ $PREF.sound = -not $PREF.sound; $mNS.Checked = $PREF.sound; Save-Pref })
 if (Test-Path $miniVbs) {
     $mNO = $mNotify.DropDownItems.Add('進化時自動開小視窗'); $mNO.Checked = $PREF.autoOpenMini; $mNO.add_Click({ $PREF.autoOpenMini = -not $PREF.autoOpenMini; $mNO.Checked = $PREF.autoOpenMini; Save-Pref })
@@ -171,7 +172,17 @@ function Get-VpetState {
           $res = $req.GetResponse(); $sr = New-Object System.IO.StreamReader($res.GetResponseStream(), [System.Text.Encoding]::UTF8); $txt = $sr.ReadToEnd(); $sr.Close(); $res.Close()
           $s = $txt | ConvertFrom-Json
           $n = ''; try { $n = [string]$s.jogress.frontName } catch {}; if (-not $n) { $n = [string]$s.character }
-          return @{ kind = [string]$s.kind; name = $n } } catch { return $null }
+          $ev = $null; try { if ($s.event) { $ev = @{ id = [string]$s.event.id; title = [string]$s.event.title } } } catch {}
+          return @{ kind = [string]$s.kind; name = $n; event = $ev } } catch { return $null }
+}
+# 事件（/state 的 event，2026-10-22）：新的一個出現（id 變了）那一刻跳「事件發生!!」。啟動那一拍不跳（跟進化／戰鬥一樣）
+$script:lastEventId = $null
+function On-Event($ev) {
+    $id = if ($ev) { $ev.id } else { '' }
+    $prev = $script:lastEventId; $script:lastEventId = $id
+    if ($null -eq $prev -or -not $id -or $id -eq $prev) { return }
+    if ($PREF.notifyEvent) { $ni.ShowBalloonTip(5000, '事件發生!!', $(if ($ev.title) { $ev.title } else { '回 vpet 看看' }), 'Info') }
+    if ($PREF.sound) { [System.Media.SystemSounds]::Exclamation.Play() }
 }
 function On-Kind([string]$kind, [string]$name) {
     $prev = $script:lastKind; $script:lastKind = $kind
@@ -200,7 +211,7 @@ $timer.add_Tick({
         [System.Windows.Forms.Application]::Exit()
         return
     }
-    $st = Get-VpetState; if ($st) { On-Kind $st.kind $st.name }
+    $st = Get-VpetState; if ($st) { On-Kind $st.kind $st.name; On-Event $st.event }
     $script:selfTicks++; if ($script:selfTicks -ge 30) { $script:selfTicks = 0; Check-SelfUpdate }
 })
 $timer.Start()

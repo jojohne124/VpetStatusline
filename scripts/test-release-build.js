@@ -231,6 +231,29 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     const page = read('src/daemon/daemon.js');
     ok(/id="chatlog"/.test(page) && /<div class="form\$\{f\.dev \? ' devonly' : ''\}" data-help=/.test(page) && /kind: result\.kind/.test(page),
        '頁面改到 vpet mini 依賴的東西了（#chatlog、.form 的 data-cmd、/state 的 kind）—— 小視窗要一起改');
+    // 事件（2026-10-22）：/state 的 event = { id, kind, title }；現在是營地事件（page2Quest 還沒看過）
+    {
+        const m = page.match(/function currentEvent\(ranch\) \{[\s\S]*?\n\}/);
+        const currentEvent = m ? new Function(m[0] + '; return currentEvent;')() : () => undefined;
+        const e1 = currentEvent({ page2Quest: { at: 123, seen: false } });
+        ok(e1 && e1.id === 'camp:123' && e1.kind === 'camp' && e1.title, '營地事件沒有變成 /state 的 event：' + JSON.stringify(e1));
+        ok(currentEvent({ page2Quest: { at: 123, seen: true } }) === null && currentEvent({}) === null && currentEvent(null) === null, '沒有事件（或看過了）還是出 event');
+        ok(/\n\s*event,\s+\/\/ 「事件」/.test(page) && /event = currentEvent\(ranchNow\);/.test(page), '/state 沒有帶 event');
+    }
+    // 小視窗收到新事件：小寵物沒跟隨 → 比照進化回小視窗；跟隨滑鼠 → 頭上冒「❗」停下來等點；事件沒了收掉「❗」
+    ok(/if \(\$evId -and \$null -ne \$script:lastEventId -and \$evId -ne \$script:lastEventId\) \{\s*if \(\$script:petMode\) \{\s*if \(\$script:Cfg\.petFollow\) \{ \$script:petAlert = \$true; Refresh-Pet \$st \} else \{ Leave-Pet \}/.test(mini)
+       && /if \(\$script:petAlert\) \{ return \}/.test(mini) && /function Leave-Pet \{\s*if \(-not \$script:petMode\) \{ return \}\s*\$script:petAlert = \$false/.test(mini)
+       && /if \(\$script:petAlert\) \{ \$pbox\.Image = Add-PetAlert/.test(mini), '小視窗收到事件的反應不對（小寵物沒回來／跟隨時沒冒驚嘆號、沒停下）');
+    // 驚嘆號：棋盤格的「半透明」黑底（色鍵視窗做不出真的半透明）＋紅色驚嘆號
+    ok(/\(\(\$x \+ \$y\) % 2\) -eq 0\) \{ \$out\.SetPixel\(\(\$bx \+ \$x\), \$y, \[System\.Drawing\.Color\]::Black\)/.test(mini) && /FromArgb\(255, 255, 77, 79\)/.test(mini),
+       '小寵物的驚嘆號不是棋盤格黑底＋紅色');
+    // 劇情對話框：舞台下方放不下（小視窗）就放視窗正中間，上緣留空間給助手外框（原本頂到視窗頂、頭像被切掉）
+    ok(/let top=st\.bottom\+10; if\(top\+ph>H-8\) top=Math\.max\(STORY_TOP_MIN, Math\.round\(\(H-ph\)\/2\)\);/.test(page) && /const STORY_TOP_MIN=16;/.test(page),
+       '對話框在小視窗裡沒有置中（或助手頭像會被切掉）');
+    // 系統匣：新事件跳「事件發生!!」，啟動那一拍不跳，選單可關
+    ok(/function On-Event\(\$ev\)/.test(tray) && /if \(\$null -eq \$prev -or -not \$id -or \$id -eq \$prev\) \{ return \}/.test(tray)
+       && /ShowBalloonTip\(5000, '事件發生!!'/.test(tray) && /On-Event \$st\.event/.test(tray) && /DropDownItems\.Add\('事件：跳通知'\)/.test(tray),
+       '系統匣沒有「事件發生!!」通知（或啟動時也會跳）');
 }
 
 try { fs.rmSync(OUT, { recursive: true, force: true }); } catch (_) {}

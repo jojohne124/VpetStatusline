@@ -56,6 +56,10 @@ async function fetchManifest(base, timeoutMs = MANIFEST_TIMEOUT_MS) {
 
 const localVersion = (root) => { try { return fs.readFileSync(path.join(root, 'VERSION'), 'utf8').trim(); } catch (e) { return ''; } };
 const isRelease = (root) => fs.existsSync(path.join(root, 'RELEASE'));
+// 檔案被別的程式占用（Windows 上載入中的 dll）時 rename 會丟的錯
+const LOCKED = ['EPERM', 'EBUSY', 'EACCES'];
+const OLD_SUFFIX = '.vpet-old';
+const sameContent = (file, data) => { try { return fs.readFileSync(file).equals(Buffer.from(data)); } catch (e) { return false; } };
 
 /**
  * 檢查＋更新。opts（測試用）：root、base、publicKey、stateDir、installDir、node。
@@ -96,15 +100,30 @@ async function run(opts = {}) {
     if (pkg.version !== m.version) return fail('包裡的版本跟 manifest 對不上');
     if (!pkg.files.RELEASE || !pkg.files['src/daemon/daemon.js']) return fail('更新包缺少必要檔案');
 
-    // 逐檔寫暫存再改名：寫到一半斷電，頂多是新舊混雜，不會出現半個檔案
+    // 逐檔寫暫存再改名：寫到一半斷電，頂多是新舊混雜，不會出現半個檔案。
+    // 2026-10-22 很多人更新失敗：vpet mini 開著時 WebView2 的 dll 被載入，蓋不過去（EPERM）。所以：
+    //   ① 內容一樣的檔不碰（dll 幾乎不會變）；② 真的被占用 → 舊檔先改名成 .vpet-old（載入中的 dll 不能蓋、但能改名）再放新的。
+    //   .vpet-old 等下次更新再刪（那時候多半沒人在用了）
+    let cur = '';
     try {
         for (const [rel, data] of Object.entries(pkg.files)) {
             const dst = path.join(root, rel);
+            cur = dst;
+            try { fs.unlinkSync(dst + OLD_SUFFIX); } catch (e) {}
+            if (sameContent(dst, data)) continue;
             fs.mkdirSync(path.dirname(dst), { recursive: true });
             fs.writeFileSync(dst + '.vpet-tmp', data);
-            fs.renameSync(dst + '.vpet-tmp', dst);
+            try { fs.renameSync(dst + '.vpet-tmp', dst); }
+            catch (e) {
+                if (!LOCKED.includes(e.code)) throw e;
+                fs.renameSync(dst, dst + OLD_SUFFIX);
+                fs.renameSync(dst + '.vpet-tmp', dst);
+            }
         }
-    } catch (e) { return fail('寫檔失敗：' + e.message); }
+    } catch (e) {
+        try { fs.unlinkSync(cur + '.vpet-tmp'); } catch (_) {}
+        return fail('寫檔失敗：' + e.message);
+    }
 
     // install：把新的 runtime 部署到 ~/.claude/agumon-statusline。原本怎麼裝就怎麼裝（daemon-only 與否）
     const args = [path.join(root, 'scripts', 'install.js')];

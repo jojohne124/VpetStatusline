@@ -105,6 +105,75 @@ const put = (dir, rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel))
     r = await U.run(opts(t));
     ok(r.code === U.EXIT_FAILED && /install/.test(readRes().error), 'install 失敗沒有記成失敗');
 
+    // 2026-10-22 很多人更新失敗：vpet mini 開著時 WebView2 的 dll 被載入、蓋不過去（EPERM）。
+    // 內容一樣的檔不碰；不一樣又被占用 → 舊檔改名成 .vpet-old 再放新的。用真的 dll、真的 LoadLibrary 鎖住來驗（只有 Windows）
+    {
+        const DLL = path.join(__dirname, '..', 'tools', 'vpet-mini', 'lib', 'WebView2Loader.dll');
+        const lockSrc = tmp('src3');
+        fs.cpSync(src, lockSrc, { recursive: true });
+        const dllData = fs.readFileSync(DLL);
+        put(lockSrc, 'tools/vpet-mini/lib/WebView2Loader.dll', Buffer.concat([dllData, Buffer.from([0])]));   // 新版的 dll（多一個 byte）
+        put(lockSrc, 'tools/same.txt', 'same\n');
+        const lbuf = B.pack(lockSrc, 'v4');
+        fs.writeFileSync(path.join(updDir, 'bundle.bin'), lbuf);
+        fs.writeFileSync(path.join(updDir, 'manifest.json'), JSON.stringify(B.sign(lbuf, 'v4', K.priv)));
+        t = mkTree('v1');
+        put(t, 'tools/same.txt', 'same\n');
+        const old = new Date(2020, 0, 1); fs.utimesSync(path.join(t, 'tools/same.txt'), old, old);
+        put(t, 'tools/vpet-mini/lib/WebView2Loader.dll', dllData);
+        let holder = null;
+        if (process.platform === 'win32') {
+            const dllPath = path.join(t, 'tools', 'vpet-mini', 'lib', 'WebView2Loader.dll'), flag = path.join(t, 'held.txt');
+            const ps1 = "Add-Type 'using System; using System.Runtime.InteropServices; public static class LL { [DllImport(\"kernel32.dll\", CharSet=CharSet.Unicode)] public static extern IntPtr LoadLibrary(string p); }'\n"
+                + "$h = [LL]::LoadLibrary('" + dllPath + "'); Set-Content '" + flag + "' $h; Start-Sleep 30\n";
+            fs.writeFileSync(path.join(t, 'hold.ps1'), ps1);
+            holder = require('child_process').spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(t, 'hold.ps1')], { stdio: 'ignore', windowsHide: true });
+            const t1 = Date.now(); while (!fs.existsSync(flag) && Date.now() - t1 < 15000) await new Promise(r2 => setTimeout(r2, 200));
+            let locked = false;
+            try { fs.writeFileSync(dllPath + '.probe', dllData); fs.renameSync(dllPath + '.probe', dllPath); } catch (e) { locked = true; try { fs.unlinkSync(dllPath + '.probe'); } catch (_) {} }
+            ok(locked, '測試本身沒鎖住 dll（驗不到被占用的情況）');
+        }
+        r = await U.run(opts(t));
+        if (holder) holder.kill();
+        ok(r.code === U.EXIT_UPDATED, 'dll 被占用（vpet mini 開著）時更新失敗：' + JSON.stringify(readRes()));
+        ok(fs.readFileSync(path.join(t, 'tools/vpet-mini/lib/WebView2Loader.dll')).length === dllData.length + 1, '被占用的 dll 沒換成新版');
+        ok(fs.statSync(path.join(t, 'tools/same.txt')).mtime.getFullYear() === 2020, '內容一樣的檔也重寫了（會去碰被占用的 dll）');
+        ok(!fs.readdirSync(path.join(t, 'tools/vpet-mini/lib')).some(f => f.endsWith('.vpet-tmp')), '留下了寫到一半的暫存檔');
+    }
+
+    console.log('— 更新失敗回報 —');
+    {
+        const failFile = path.join(tmp('rep'), 'update-fails.jsonl');
+        const rs = PS.createPlazaServer({ updateFailFile: failFile });
+        await new Promise(r2 => rs.server.listen(0, '127.0.0.1', r2));
+        const rbase = 'http://127.0.0.1:' + rs.server.address().port;
+        const res = await fetch(rbase + '/update/report', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'ABC123', host: 'PC-1', from: 'v1', to: 'v2', error: '寫檔失敗：EPERM ' + 'x'.repeat(900), at: 5 }) });
+        ok(res.status === 200, '回報更新失敗，伺服器沒收');
+        const has = () => { try { return fs.readFileSync(failFile, 'utf8').trim().length > 0; } catch (e) { return false; } };
+        const t1 = Date.now(); while (!has() && Date.now() - t1 < 3000) await new Promise(r2 => setTimeout(r2, 50));
+        const rec = JSON.parse(fs.readFileSync(failFile, 'utf8').trim());
+        ok(rec.name === 'ABC123' && rec.host === 'PC-1' && rec.to === 'v2' && /EPERM/.test(rec.error) && rec.error.length === 500, '更新失敗回報存的不對：' + JSON.stringify(rec).slice(0, 200));
+        await rs.close();
+        const dsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+        ok(/if \(!j \|\| j\.ok !== false \|\| j\.reported\) return;/.test(dsrc) && /JSON\.stringify\(\{ \.\.\.j, reported: true \}/.test(dsrc)
+           && /if \(require\.main === module && process\.env\.VPET_CHILD\) setTimeout\(reportUpdateFailure, 10000\)/.test(dsrc),
+           'daemon 沒有回報更新失敗（或會一直重複報）');
+        // 按更新 → 先關 vpet mini（WM_CLOSE 給標題「vpet mini」的視窗、等它結束），有關到就記著、重開後開回來（10 分鐘內）
+        const mini = fs.readFileSync(path.join(__dirname, '..', 'tools', 'vpet-mini', 'vpet-mini-web.ps1'), 'utf8');
+        ok(/\$form\.Text = 'vpet mini'/.test(mini) && /FindWindow\(\[NullString\]::Value, 'vpet mini'\)/.test(dsrc) && /PostMessage\(\$h, 0x10,/.test(dsrc),
+           '更新前關小視窗找的視窗標題跟小視窗對不上');
+        ok(/setTimeout\(\(\) => closeMiniForUpdate\(\(\) => \{\s*if \(!plazaClient\.active\(\)\) return bye\(\);/.test(dsrc)
+           && /if \(!err\) \{ try \{ fs\.writeFileSync\(MINI_REOPEN_FILE/.test(dsrc) && /const t = setTimeout\(fin, 9000\);/.test(dsrc),
+           '按更新沒有先關小視窗（或關不掉時會卡住更新）');
+        // 只在真的 release 樹做：這支測試自己也會按更新，不能把桌面上真的小視窗關掉（踩過）
+        ok(/if \(process\.platform !== 'win32' \|\| !TREE_IS_RELEASE\) return done\(\);/.test(dsrc)
+           && /process\.env\.VPET_CHILD && TREE_IS_RELEASE && process\.platform === 'win32'\) setTimeout/.test(dsrc),
+           '開發版／測試起的 daemon 按更新也會去關（開）桌面上的小視窗');
+        ok(/if \(Date\.now\(\) - at > 10 \* 60 \* 1000 \|\| !fs\.existsSync\(MINI_VBS\)\) return;/.test(dsrc) && /spawn\('wscript\.exe', \[MINI_VBS\]/.test(dsrc),
+           '更新後沒有把小視窗開回來（或很久以前的記號也會開）');
+    }
+
     await ps.close();
     // 伺服器沒開：要很快跳過，不能卡住 daemon 啟動
     const t0 = Date.now();

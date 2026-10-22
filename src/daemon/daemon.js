@@ -454,6 +454,69 @@ async function checkUpdate() {
 setTimeout(checkUpdate, 5000).unref();
 setInterval(checkUpdate, UPDATE_CHECK_MS).unref();
 // 上一次啟動前 updater 的結果（state/update.json）：10 分鐘內的才算「剛剛」，頁面顯示一次
+// 更新失敗回報（2026-10-22：很多人顯示更新失敗，原因只在各自的 state/update.json）：
+// 子行程起來 10 秒後看一次，失敗而且還沒報過 → POST 廣場主機 /update/report（存在主機，只給我們看），報過就記 reported
+function reportUpdateFailure() {
+    const file = path.join(STATE_DIR, 'update.json');
+    let j; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return; }
+    if (!j || j.ok !== false || j.reported) return;
+    let name = null; try { name = JSON.parse(fs.readFileSync(PVP_FILE, 'utf8')).code || null; } catch (e) {}
+    const body = JSON.stringify({ from: j.from || '', to: j.to || '', error: String(j.error || '').slice(0, 500), at: j.at || 0,
+                                  name, host: require('os').hostname() });
+    let u; try { u = new URL('/update/report', UPDATER.baseUrl()); } catch (e) { return; }
+    const req = require('http').request({ hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'POST', timeout: 5000,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+        res.resume();
+        if (res.statusCode === 200) { try { fs.writeFileSync(file, JSON.stringify({ ...j, reported: true }, null, 2)); } catch (e) {} }
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => {});
+    req.end(body);
+}
+if (require.main === module && process.env.VPET_CHILD) setTimeout(reportUpdateFailure, 10000).unref();
+// ── 更新時幫忙關掉／開回 vpet mini（2026-10-22：開著小視窗的人更新失敗一大片）──
+// 關：找標題「vpet mini」的視窗送 WM_CLOSE（跟 tray「結束」同一招，小視窗自己存位置），等它的行程結束最多 6 秒。
+// 有關到 → 記 MINI_REOPEN_FILE；重開後的子行程看到它就把小視窗開回來（開回來的是新版）
+const MINI_REOPEN_FILE = path.join(STATE_DIR, 'mini-reopen');
+const MINI_VBS = path.join(TREE_ROOT, 'tools', 'vpet-mini', 'vpet-mini.vbs');
+const MINI_CLOSE_PS = [
+    "Add-Type 'using System; using System.Runtime.InteropServices; public static class VpetMiniClose {",
+    ' [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);',
+    " [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }'",
+    "$h = [VpetMiniClose]::FindWindow([NullString]::Value, 'vpet mini'); if ($h -eq [IntPtr]::Zero) { exit 3 }",
+    "$ps = @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -like '*vpet-mini-web.ps1*' })",
+    '[void][VpetMiniClose]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)',
+    'foreach ($p in $ps) { Wait-Process -Id $p.ProcessId -Timeout 6 -ErrorAction SilentlyContinue }',
+    'exit 0',
+].join('\n');
+function closeMiniForUpdate(done) {
+    // 只在真的 release 樹做：測試、開發版起的 daemon 不能去關桌面上那個（2026-10-22 測試把真的小視窗關掉過）
+    if (process.platform !== 'win32' || !TREE_IS_RELEASE) return done();
+    let finished = false;
+    const fin = () => { if (!finished) { finished = true; done(); } };
+    const t = setTimeout(fin, 9000);   // 怎樣都不能卡住更新
+    try {
+        require('child_process').execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', MINI_CLOSE_PS],
+            { windowsHide: true, timeout: 8000 }, (err) => {
+                if (!err) { try { fs.writeFileSync(MINI_REOPEN_FILE, String(Date.now())); } catch (e) {} }
+                clearTimeout(t); fin();
+            });
+    } catch (e) { clearTimeout(t); fin(); }
+}
+// 重開後開回小視窗：只認 10 分鐘內記的（更新卡很久、或下次手動開 vpet 時不要突然跳出來）
+if (require.main === module && process.env.VPET_CHILD && TREE_IS_RELEASE && process.platform === 'win32') setTimeout(() => {
+    let at = 0; try { at = Number(fs.readFileSync(MINI_REOPEN_FILE, 'utf8')) || 0; fs.unlinkSync(MINI_REOPEN_FILE); } catch (e) { return; }
+    if (Date.now() - at > 10 * 60 * 1000 || !fs.existsSync(MINI_VBS)) return;
+    try { require('child_process').spawn('wscript.exe', [MINI_VBS], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch (e) {}
+}, 3000).unref();
+// ── 事件（2026-10-22）：要本人來看的事，統一從 /state 的 event 出去 —— { id, kind, title } 或 null。
+// 小視窗、系統匣只看 id 有沒有變（新的一個出現那一刻）來反應，以後加新的事件只改這裡。
+// 現在只有營地事件：「牠逃到營地了」還沒看過（page2Quest.seen）
+function currentEvent(ranch) {
+    const q = ranch && ranch.page2Quest;
+    if (q && !q.seen) return { id: 'camp:' + (q.at || 0), kind: 'camp', title: '牠跑到營地了！' };
+    return null;
+}
 function lastUpdateResult() {
     try {
         const j = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'update.json'), 'utf8'));
@@ -786,9 +849,10 @@ function doTick() {
         if (AUTHORITATIVE) { try { fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ ts: now, pid: process.pid })); } catch (e) {} }
         // 營地人數也帶出去：「收進營地」這顆鈕在兩個分頁都有，但只有院子分頁會打 /yard。
         // 沒有這一份的話，家裡分頁沒辦法在按下去之前就知道滿了。
-        let ranchInfo = null, jogress = null;
+        let ranchInfo = null, jogress = null, event = null;
         try {
             const ranchNow = core.loadRanch();
+            event = currentEvent(ranchNow);
             ranchInfo = { kept: (ranchNow.pets || []).length, cap: core.ranchCap(ranchNow),
                           // 營地第二頁第一階段：「牠逃到營地了」在前線跳一次（看過就記 seen）
                           page2Notice: !!(ranchNow.page2Quest && !ranchNow.page2Quest.seen) };
@@ -799,6 +863,7 @@ function doTick() {
             at: now,
             ranch: ranchInfo,
             jogress,
+            event,                                        // 「事件」：等本人來看的事（小視窗、系統匣看這格反應）
             kind: out.kind,
             cutIn: !!out.cutIn,                           // 正在演 cut-in 的拍 → 前端塗黑邊
             phase: out.phase,
@@ -1234,11 +1299,12 @@ function applyCommand(action, args = {}) {
     if (action === 'selfUpdate') {
         if (!process.env.VPET_CHILD) return { ok: false, error: '這個 daemon 不是由更新外殼啟動的（開發版或舊的啟動方式），請手動重啟。' };
         const bye = () => process.exit(require('./supervisor.js').RESTART_CODE);
-        setTimeout(() => {
+        // 先關 vpet mini（它開著時 WebView2 的 dll 被鎖住、舊版 ps1 也還在跑），重開後再開回來（MINI_REOPEN_FILE）
+        setTimeout(() => closeMiniForUpdate(() => {
             if (!plazaClient.active()) return bye();
             const t = setTimeout(bye, 1000);
             plazaClient.leave().finally(() => { clearTimeout(t); bye(); });
-        }, 300);
+        }), 300);
         return { ok: true, action, output: '更新中，daemon 重開後頁面會自動重新整理…' };
     }
     // 下樓梯：開房（第一期只有無限制）／出發／方向（-1/0/1，只在改變時送）／離開房間
@@ -1283,8 +1349,18 @@ function applyCommand(action, args = {}) {
         return { ok: true, action, char: st.characterId || 'agumon', ...miniBest(args.kind, Number(args.val)) };
     }
       if (action === 'volleyResign') return plazaClient.stairs('vresign').then(r => (r.ok ? { ok: true, action } : r));
+    // 一秒 25 次：收到就回，轉送廣場在背後跑（2026-10-22 排球 lag：等廣場回應會佔住瀏覽器的連線、按鍵排隊）。
+    // 對手照格號（f）收，先到後到都沒關係
     if (action === 'volleyInput') {
-        return plazaClient.stairs('vin', { f: Number(args.f), k: Number(args.k) }).then(r => (r.ok ? { ok: true, action } : r));
+        plazaClient.stairs('vin', { f: Number(args.f), k: Number(args.k) }).catch(() => {});
+        return { ok: true, action };
+    }
+    // 卡頓統計（只給我們看，存在廣場主機）：舊版伺服器沒有這支就算了
+    if (action === 'volleyStats') {
+        const n = (k) => Math.max(0, Math.min(1e7, Math.round(Number(args[k]) || 0)));
+        plazaClient.stairs('vstat', { dur: n('dur'), frames: n('frames'), stalls: n('stalls'), stallMs: n('stallMs'),
+                                      stallMax: n('stallMax'), gapMax: n('gapMax'), hidden: n('hidden'), opp: String(args.opp || '').slice(0, 40) }).catch(() => {});
+        return { ok: true, action };
     }
     if (action === 'volleyEnd') {
         return plazaClient.stairs('vend', { winner: args.winner, score: [Number(args.s0), Number(args.s1)] })
@@ -3795,7 +3871,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='plazaHide'||action==='stockQuery'||action==='duelCom');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyStats'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='plazaHide'||action==='stockQuery'||action==='duelCom');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4180,13 +4256,15 @@ function storyFxDraw(){
   for(let x=0;x<W;x++){ px(x,0); px(x,H-1); }
   for(let y=1;y<H-1;y++){ px(0,y); px(W-1,y); }
 }
-// 對話框放在舞台下方（放不下就蓋在舞台上），左右夾在視窗內
+// 對話框放在舞台下方；放不下（vpet mini 小視窗）就放在視窗正中間（2026-10-22：原本往上頂到視窗頂、助手頭像被切掉）。
+// 上緣至少留 STORY_TOP_MIN：助手外框比 CutIn 大一圈、往上凸 12px。左右夾在視窗內
+const STORY_TOP_MIN=16;
 function storyPlace(){
   const p=document.getElementById('storypanel'), st=document.getElementById('stage').getBoundingClientRect();
   const W=document.documentElement.clientWidth, H=document.documentElement.clientHeight;
   const pw=p.offsetWidth, ph=p.offsetHeight;
   const left=Math.max(12, Math.min(W-pw-12, st.left+(st.width-pw)/2));
-  let top=st.bottom+10; if(top+ph>H-8) top=Math.max(8, st.bottom-ph-8);
+  let top=st.bottom+10; if(top+ph>H-8) top=Math.max(STORY_TOP_MIN, Math.round((H-ph)/2));
   p.style.left=left+'px'; p.style.top=top+'px';
 }
 function storyLine(){
@@ -5745,14 +5823,28 @@ function vbTrailPush(g){
   else vbTrail.length=0;
 }
 let vbGame=null, vbPrev=null, vbStartAt=0, vbSides=[], vbMe=0, vbMine=new Map(), vbTheirs=new Map(), vbRaf=0, vbKeys=new Set(), vbStallAt=0, vbEndSent=false, vbStepAt=0;
+// 卡頓統計（2026-10-22 排球 lag）：玩家看不到，結束時送到廣場主機存檔（~/.vpet/volley-stats.jsonl）給我們看。
+// stalls／stallMs／stallMax：等對手按鍵等超過 VB_STALL_MIN 的次數、總共、最久（我在等 = 對手那邊慢）；
+// gapMax：我這邊兩次畫面更新最久隔多久（視窗被蓋住、縮小時瀏覽器會停掉，那就是我這邊慢）；hidden：比賽中網頁被藏起來幾次
+const VB_STALL_MIN=100;
+let vbStat=null;
+function vbStatNew(){ vbStat={ at:performance.now(), stalls:0, stallMs:0, stallMax:0, gapMax:0, hidden:0, last:0, sent:false }; }
+function vbStatSend(g){
+  const s=vbStat; if(!s||s.sent||comState||!g||g.f<VB_DELAY) return;
+  s.sent=true;
+  sendCmd('volleyStats',{ dur:String(Math.round(performance.now()-s.at)), frames:String(g.f), stalls:String(s.stalls),
+    stallMs:String(Math.round(s.stallMs)), stallMax:String(Math.round(s.stallMax)), gapMax:String(Math.round(s.gapMax)), hidden:String(s.hidden),
+    opp:vbSides[1-vbMe]||'' });
+}
+document.addEventListener('visibilitychange',()=>{ if(document.hidden&&vbStat&&!vbStat.sent&&vbGame) vbStat.hidden++; });
 function vbBegin(info){
   if(!VB||!info) return;
   if(vbGame&&vbStartAt===info.startAt){ if(!vbRaf) vbRaf=requestAnimationFrame(vbFrame); return; }
   vbGame=VB.createGame(); vbPrev=null; vbStartAt=info.startAt; vbSides=info.sides||[];
-  vbMe=Math.max(0,vbSides.indexOf(stMeId())); vbMine=new Map(); vbTheirs=new Map(); vbEndSent=false; vbStallAt=0;
+  vbMe=Math.max(0,vbSides.indexOf(stMeId())); vbMine=new Map(); vbTheirs=new Map(); vbEndSent=false; vbStallAt=0; vbStatNew();
   if(!vbRaf) vbRaf=requestAnimationFrame(vbFrame);
 }
-function vbStop(){ if(vbRaf){ cancelAnimationFrame(vbRaf); vbRaf=0; } vbGame=null; vbKeys.clear(); }
+function vbStop(){ vbStatSend(vbGame); if(vbRaf){ cancelAnimationFrame(vbRaf); vbRaf=0; } vbGame=null; vbKeys.clear(); }
 function vbPlaying(){ if(comState) return comState.kind==='volley'&&!!vbGame&&!vbGame.over; const m=stMine(); return !!(m&&m.kind==='volley'&&m.state==='play'&&vbGame&&!vbGame.over); }
 function vbIn(d){ if(d&&d.id!==(stairs&&stairs.meId)&&Number.isInteger(d.f)) vbTheirs.set(d.f,d.k|0); }
 function vbKeyBits(){
@@ -5786,10 +5878,17 @@ function vbFrame(){
     VB.step(g,keys); vbStepAt=performance.now(); vbTrailPush(g);
     vbMine.delete(g.f-1); vbTheirs.delete(g.f-1);
   }
-  vbStallAt=stalled?(vbStallAt||performance.now()):0;
+  const tNow=performance.now();
+  if(vbStat&&!vbStat.sent&&!comState&&g.f>0){
+    if(vbStat.last) vbStat.gapMax=Math.max(vbStat.gapMax,tNow-vbStat.last);
+    vbStat.last=tNow;
+    if(!stalled&&vbStallAt){ const d=tNow-vbStallAt; if(d>=VB_STALL_MIN){ vbStat.stalls++; vbStat.stallMs+=d; vbStat.stallMax=Math.max(vbStat.stallMax,d); } }
+  }
+  vbStallAt=stalled?(vbStallAt||tNow):0;
   if(g.over&&!vbEndSent){
     vbEndSent=true;   // 兩邊算的一樣：誰先報都可以，伺服器收第一個
     sendCmd('volleyEnd',{ winner:vbSides[g.winner]||'', s0:String(g.score[0]), s1:String(g.score[1]) });
+    vbStatSend(g);
   }
   vbDraw(now);
 }

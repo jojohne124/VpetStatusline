@@ -133,9 +133,21 @@ console.log('— 輸入同步（鎖步）—');
     ok(stallA + stallB > 0, '前提不成立：模擬的網路沒有延遲（測不到等待）');
 }
 
+{
+    console.log('— daemon：按鍵立刻回覆、卡頓統計 —');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    // 按鍵不等廣場回應（等了會佔住瀏覽器連線、按鍵排隊 → 對手一直在等）
+    ok(/if \(action === 'volleyInput'\) \{\s*plazaClient\.stairs\('vin', [^\n]*\)\.catch\(\(\) => \{\}\);\s*return \{ ok: true, action \};/.test(src), 'daemon 送排球按鍵還在等廣場回應');
+    // 頁面結束時送統計（正常打完、中途結束都送），玩家畫面不顯示
+    ok(/function vbStop\(\)\{ vbStatSend\(vbGame\);/.test(src) && /sendCmd\('volleyEnd'[^\n]*\n\s*vbStatSend\(g\);/.test(src)
+       && /\|\|action==='volleyStats'\|\|/.test(src), '排球結束沒送卡頓統計（或統計失敗會跳訊息給玩家）');
+}
+
 (async () => {
     console.log('— 伺服器：房間、開打、轉送按鍵、結果、中途離開 —');
-    const ps = S.createPlazaServer({ volleyCountdownMs: 30, stairsLostMs: 200, graceMs: 3000 });
+    const statFile = path.join(require('os').tmpdir(), 'vpet-test-vstat-' + process.pid + '.jsonl');
+    try { fs.unlinkSync(statFile); } catch (e) {}
+    const ps = S.createPlazaServer({ volleyCountdownMs: 30, stairsLostMs: 200, graceMs: 3000, volleyStatFile: statFile });
     await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
     const url = 'http://127.0.0.1:' + ps.server.address().port;
     const seen = { a: [], b: [], c: [] };
@@ -170,6 +182,12 @@ console.log('— 輸入同步（鎖步）—');
         const rb = end.result.find(r => r.id === b.me().id), ra = end.result.find(r => r.id === a.me().id);
         ok(rb.rank === 1 && ra.rank === 2 && ra.score === 3 && rb.score === 7, '結果不對：' + JSON.stringify(end.result));
         ok(a.stairsEnd().kind === 'volley', '結果沒記住是打排球');
+        // 卡頓統計（2026-10-22）：結束後各報一筆，存在主機的 jsonl（對手記名字、數字夾在範圍內）
+        ok((await a.stairs('vstat', { dur: 61000, frames: 1500, stalls: 4, stallMs: 900.4, stallMax: 1e12, gapMax: 'x', hidden: 1, opp: b.me().id })).ok, '送卡頓統計失敗');
+        ok(await until(() => { try { return fs.readFileSync(statFile, 'utf8').trim().length > 0; } catch (e) { return false; } }), '卡頓統計沒存檔');
+        const vs = JSON.parse(fs.readFileSync(statFile, 'utf8').trim().split('\n').pop());
+        ok(vs.name === '阿張' && vs.opp === '阿明' && vs.stalls === 4 && vs.stallMs === 900 && vs.stallMax === 1e7 && vs.gapMax === 0 && vs.hidden === 1 && vs.frames === 1500,
+           '卡頓統計存的不對：' + JSON.stringify(vs));
         // 打到一半有人離開 → 留下來的贏
         await a.stairs('open', { mode: 'endless', kind: 'volley' });
         const r2 = [...ps.rooms.values()][0];
@@ -200,6 +218,7 @@ console.log('— 輸入同步（鎖步）—');
     } finally {
         for (const x of [a, b, c]) { try { await x.leave(); } catch (e) {} }
         await ps.close();
+        try { fs.unlinkSync(statFile); } catch (e) {}
     }
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);

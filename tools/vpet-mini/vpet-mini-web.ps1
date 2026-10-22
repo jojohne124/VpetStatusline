@@ -223,6 +223,25 @@ function Build-PetBitmap($img, [int]$k, [bool]$flipX) {
         $g.FillRectangle($br, ($dx * $k), ($y * $k), $k, $k) } }
     $g.Dispose(); $br.Dispose(); return $bmp
 }
+# 事件的「❗」（跟隨滑鼠時不直接彈回小視窗，改成頭上冒這個、停下來等點）：在寵物圖上面多一條，畫黑底紅驚嘆號。
+# 寵物視窗是色鍵透明（每個點只能全透明或不透明），做不出真的半透明 → 黑底用棋盤格（黑點、透明點交錯），
+# 遠看就是半透明的暗底，背後透得過來（2026-10-22 使用者選的：半透明黑底＋紅色驚嘆號）。不反鋸齒（半透明的邊會變粉紅）
+function Add-PetAlert($bmp, [int]$k) {
+    $ah = [Math]::Max(20, $k * 6); $bw = [Math]::Max(14, $k * 4)
+    $out = New-Object System.Drawing.Bitmap($bmp.Width, ($bmp.Height + $ah), [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bx = [int](($bmp.Width - $bw) / 2); $bh = $ah - 2
+    for ($y = 0; $y -lt $bh; $y++) { for ($x = 0; $x -lt $bw; $x++) {
+        if ($x -eq 0 -or $y -eq 0 -or $x -eq $bw - 1 -or $y -eq $bh - 1 -or (($x + $y) % 2) -eq 0) { $out.SetPixel(($bx + $x), $y, [System.Drawing.Color]::Black) } } }
+    $g = [System.Drawing.Graphics]::FromImage($out)
+    $g.SmoothingMode = 'None'
+    $g.DrawImage($bmp, 0, $ah, $bmp.Width, $bmp.Height)
+    $sw = [Math]::Max(2, [int]($bw / 4)); $sx = $bx + [int](($bw - $sw) / 2)
+    $red = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 77, 79))
+    $g.FillRectangle($red, $sx, 3, $sw, [Math]::Max(2, $bh - 6 - $sw - 2))
+    $g.FillRectangle($red, $sx, ($bh - 3 - $sw), $sw, $sw)
+    $g.Dispose(); $red.Dispose(); $bmp.Dispose(); return $out
+}
+$script:petAlert = $false; $script:lastEventId = $null
 $PET_KEY = [System.Drawing.Color]::FromArgb(255, 255, 0, 255)
 $pet = New-Object System.Windows.Forms.Form
 $pet.Text = 'vpet mini pet'; $pet.FormBorderStyle = 'None'; $pet.ShowInTaskbar = $false; $pet.StartPosition = 'Manual'
@@ -253,6 +272,7 @@ function Refresh-Pet($st) {
     $flip = $(if ($script:petSingle) { $facing -ne $script:petDir } else { $false })
     $old = $pbox.Image
     $pbox.Image = Build-PetBitmap $img $script:petScale $flip
+    if ($script:petAlert) { $pbox.Image = Add-PetAlert $pbox.Image $script:petScale }
     # 尺寸變了（例如戰鬥變寬、睡覺多了 Z）：底邊不動往上長、水平置中不動
     $newW = $pbox.Image.Width; $newH = $pbox.Image.Height
     $ddx = [int](($pet.Width - $newW) / 2); $ddy = $pet.Height - $newH
@@ -279,6 +299,7 @@ function Enter-Pet {
 }
 function Leave-Pet {
     if (-not $script:petMode) { return }
+    $script:petAlert = $false
     $script:petTimer.Stop(); $script:petMode = $false; $pet.Hide()
     $form.Show(); $tag.Show(); $grip.Show(); Place-Handles; $form.Activate()
     if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet leave" -f (Get-Date)) }
@@ -292,6 +313,7 @@ function Pet-Tick {
     $script:petTick++
     if (($script:petTick % $PET_POLL_TICKS) -eq 0) { Refresh-Pet $null }
     if (-not $script:petSingle) { return }   # 睡覺／戰鬥／進化：原地不動，看遊戲演
+    if ($script:petAlert) { return }         # 頭上冒「❗」：停下來等點（不追滑鼠）
     if ($script:Cfg.petFollow) {
         $cp = [System.Windows.Forms.Cursor]::Position
         $cx = $pet.Left + $pet.Width / 2.0; $cy = $pet.Top + $pet.Height / 2.0
@@ -804,6 +826,17 @@ $script:rzTimer.add_Tick({
     if ($ch) { $script:lastChar = $ch }
     if ($script:petMode -and $kind -eq 'evo') { Leave-Pet }
     $script:lastKind = $kind
+    # 事件（/state 的 event，2026-10-22）：新的一個出現那一刻（id 變了）——
+    #   小寵物、沒跟隨滑鼠 → 比照進化，直接回小視窗；跟隨滑鼠 → 頭上冒「❗」、停下不追，等點牠才回（不突然擋到游標底下）
+    #   一般小視窗：頁面自己會跳對話框，叫到最前面就好。事件被看掉（event 沒了）→ 收掉「❗」
+    $evId = ''; try { if ($st.event) { $evId = [string]$st.event.id } } catch {}
+    if ($evId -and $null -ne $script:lastEventId -and $evId -ne $script:lastEventId) {
+        if ($script:petMode) {
+            if ($script:Cfg.petFollow) { $script:petAlert = $true; Refresh-Pet $st } else { Leave-Pet }
+        } else { $form.Activate() }
+    }
+    if (-not $evId -and $script:petAlert) { $script:petAlert = $false; if ($script:petMode) { Refresh-Pet $st } }
+    $script:lastEventId = $evId
     # 進化樹不撐寬：樹結束就解鎖畫布（鎖上那一步通常在量測那邊做；這裡補一次以防寬度沒跳）
     if ($kind -ne 'tree' -and $script:treeFit) { Set-TreeFit $false }
     elseif ($kind -eq 'tree' -and -not $script:treeFit -and $script:homeScene) { Set-TreeFit $true }

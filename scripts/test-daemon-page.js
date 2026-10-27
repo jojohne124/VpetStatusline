@@ -1518,7 +1518,7 @@ setTimeout(async () => {
     // 加入別人的房間：聊天室的系統訊息後面有「加入」、選單列出正在等人的房間、頭上有 🦖／🪜
     ok(/if\(m\.stairsRoom\)\{ const jb=document\.createElement\('button'\); jb\.className='stjoin'/.test(src) && /function stJoinButtons\(\)/.test(src), '聊天室開房的訊息後面沒有「加入」鈕');
     ok(/<button data-j="'\+stEsc\(r\.id\)\+'"/.test(src), '小遊戲選單沒有列出正在等人的房間');
-    ok(/g\.fillText\(rk==='dino'\?'🦖':rk==='volley'\?'🏐':rk==='gomoku'\?'⚫':rk==='duel'\?'⚔':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🏐／⚫／⚔／🪜');
+    ok(/g\.fillText\(rk==='dino'\?'🦖':rk==='volley'\?'🏐':rk==='gomoku'\?'⚫':rk==='duel'\?'⚔':rk==='commute'\?'🛵':'🪜',bx,by\);/.test(src), '在房間裡的人頭上沒有 🦖／🏐／⚫／⚔／🛵／🪜');
     // 手動戰鬥進小遊戲選單（2026-10-22）：排最下面、可開房、一個人出發 = 跟電腦打；說明講強度跟戰力有關
     {
         const mg = (src.match(/const MINI_GAMES=\[([^]*?)\n\];/) || [])[1] || '';
@@ -1529,7 +1529,7 @@ setTimeout(async () => {
            && /if \(action === 'duelCom'\) return duelDev\(\{ com: true \}\);/.test(src) && !/'duelCom'\]\);/.test(src),
            '手動戰鬥的房一個人出發沒有變成跟電腦打（或跟電腦打被擋在開發版）');
         ok(/else \{ mbStop\(\); stPanel\(m\); \}/.test(src), '手動戰鬥的房沒有等人的畫面');
-        ok(/kind: \['dino', 'volley', 'gomoku', 'duel'\]\.includes\(args\.kind\)/.test(src), 'daemon 開房時把手動戰鬥改成了下樓梯');
+        ok(/kind: \['dino', 'volley', 'gomoku', 'duel', 'commute'\]\.includes\(args\.kind\)/.test(src), 'daemon 開房時把手動戰鬥／上班快遲到改成了下樓梯');
     }
     // 打排球（docs/plaza-volley-spec.md）：模擬內嵌、輸入同步（送 f+延遲、兩邊都到才算）、擊球用攻擊幀
     ok(/const VB=\$\{VOLLEY_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ VOLLEY_SRC/.test(src), '頁面沒有內嵌打排球的模擬（volley-sim.js）');
@@ -1545,7 +1545,14 @@ setTimeout(async () => {
     ok(/sendCmd\('plazaInvite',\{to:String\(t\.key\)\.slice\(2\),kind:'duel'\}\)/.test(src), '點別人的 vpet 沒有「邀請手動戰鬥」');
     ok(/if\(m\.kind==='duel'\)\{[^]*?if\(m\.state==='play'&&m\.duel\)\{ document\.getElementById\('stairspanel'\)\.style\.display='none'; mbStart\(\); \}/.test(src), '手動戰鬥的房間開打了頁面沒開演');
     ok(/sendCmd\('duelPick',args\)/.test(src) && /if\(comState\)\{ d\.picks\[0\]=pk;/.test(src), '手動戰鬥的選擇沒送伺服器（或 dev 測試沒在本地收）');
-    ok(/\+\(PLAZA_ADMIN&&DS\?'<div class="mp-game devonly"><b>⚔ 手動戰鬥（dev 測試）/.test(src) && /const DEV_ONLY\s*= new Set\(\[[^\]]*'duelDev'/.test(src), 'dev 測試對戰沒有擋在開發版');
+    // 廣場的「手動戰鬥（dev 測試）」拔掉了（2026-10-27）；前線的 dev 小遊戲改放手動戰鬥（跟電腦打）和上班快遲到
+    ok(!/<b>⚔ 手動戰鬥（dev 測試）<\/b>/.test(src) && /const DEV_ONLY\s*= new Set\(\[[^\]]*'duelDev'/.test(src), '廣場的手動戰鬥 dev 測試沒拔掉（或 duelDev 沒擋在開發版）');
+    ok(/const FRONT_GAMES=\[[^]*?\{ id:'commute'[^]*?\{ id:'duel'[^]*?\];/.test(src) && /if\(b\.dataset\.s==='duel'\)\{ miniClose\(\); mbDevStart\('com'\); return; \}/.test(src)
+       && /else if\(kind==='commute'\) cmSoloDay\(0\);/.test(src), '前線的小遊戲沒有手動戰鬥、上班快遲到');
+    ok(/const CMS=\$\{COMMUTE_SRC \? /.test(src), '頁面沒有內嵌上班快遲到的模擬（前線單機跑不了）');
+    // 進化凍結、自動戰鬥：撥動鈕，狀態跟著 /state 的 force（2026-10-27：兩顆鈕看不出現在的狀態）
+    ok(/toggle: \{ key: 'freezeEvolve', on: 'freeze', off: 'unfreeze' \}/.test(src) && /toggle: \{ key: 'autoBattleOff', on: 'battleOn', off: 'battleOff', invert: true \}/.test(src)
+       && /syncToggles\(s\.force\);/.test(src) && /force = \{ freezeEvolve: !!f\.freezeEvolve, autoBattleOff: !!f\.autoBattleOff \}/.test(src), '進化凍結／自動戰鬥不是撥動鈕（或沒跟著狀態）');
     ok(/cv\.style\.width=\(69\*CW\)\+'px'; cv\.style\.height=\(54\*\(CH\/2\)\)\+'px';/.test(src) && /mbStop\(\); mbUnstyle\(\);/.test(src), '手動戰鬥的畫布沒縮到跟其他小遊戲一樣大（或換遊戲時沒還原）');
     // 前線小遊戲（單機）：按鈕只在前線、下樓梯模擬內嵌、玩的時候報 frontMini、daemon 收到就不觸發自動戰鬥也不排隊、個人最佳只記本機
     ok(/\$\{IS_RELEASE \? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly"/.test(src)

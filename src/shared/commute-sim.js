@@ -112,12 +112,10 @@ function lightAt(map, L, t) {
     return u < LIGHT.G ? 'G' : u < LIGHT.G + LIGHT.Y ? 'Y' : 'R';
 }
 
-const inIsland = (map, x0, x1) => map.islands.find(I => x1 > I.x0 && x0 < I.x1) || null;
-// 圓環中央島：照畫面上的橢圓判定（中心在 1.5 道、上下半徑 ISLAND_RY 道、前後半徑是島長一半）。
-// 以前是整個長方形 0.3～2.7 道，島頭島尾畫面上是空的也算撞（2026-10-27 試玩：一般轉彎就被判撞到）
-// 再放寬（2026-10-27 試玩 log：ly=0.75 擦到島頭、ly=1.05 擦到島尾就出局）：判定的橢圓比畫的小一圈（上下 0.8 道、前後 9 成），
-// 畫面上要明顯騎上草地才算撞
-const ISLAND_RY = 0.8, ISLAND_RX = 0.9;
+// 圓環（2026-10-27 改版）：上兩道往上繞、下兩道往下繞，島夾在中間，四道都能騎。
+// 判定的島＝中線（1.5 道）附近的扁橢圓：上下半徑 ISLAND_RY 道、前後半徑島長一半 × ISLAND_RX。
+// 第 1、2 道（離中線 0.5 道）騎得過去；騎在兩道中間、壓著中線才會撞島
+const ISLAND_RY = 0.3, ISLAND_RX = 0.9;
 function hitIsland(map, x0, x1, ly) {
     for (const I of map.islands) {
         const cx = (I.x0 + I.x1) / 2, hx = (I.x1 - I.x0) / 2 * ISLAND_RX;
@@ -150,9 +148,8 @@ function createDay({ seed = 1, day = 0, players = [] } = {}) {
         while (x < map.len + 200) {
             const k = r(), type = k < df.truck ? 'truck' : k < df.truck + df.van ? 'van' : 'car';
             const [v0, v1] = VEH[type].v;
-            // 中間兩道開局就落在圓環島上的、最下面那道落在施工上的不放
-            const blocked = ((lane === 1 || lane === 2) && inIsland(map, x - 30, x + VEH[type].len + 10))
-                || (lane === LANES - 1 && inWorks(map, x - 30, x + VEH[type].len + 10));
+            // 最下面那道落在施工上的不放（圓環四道都能走，不用避）
+            const blocked = lane === LANES - 1 && inWorks(map, x - 30, x + VEH[type].len + 10);
             if (!blocked) addCar(g, type, lane, Math.round(x), v0 + r() * (v1 - v0));
             x += VEH[type].len + df.gap[0] + r() * (df.gap[1] - df.gap[0]);
         }
@@ -183,11 +180,9 @@ function stepCars(g) {
     const map = g.map, t = g.t;
     const riders = g.players.filter(p => p.state === 'ride').map(p => ({ x: p.x, len: BIKE_LEN, ly: p.ly }));
     for (const c of g.cars) {
-        // 中間兩道的車：快到圓環就往外側換；最下面那道快到施工就往上一道換（那道離太近就先停在前面等）
-        const I = map.islands.find(I => c.x + c.len > I.x0 - 40 && c.x < I.x1);
+        // 最下面那道快到施工就往上一道換（那道離太近就先停在前面等）。圓環四道都能走，車子照常
         const W = (map.works || []).find(w => c.x + c.len > w.x0 - 40 && c.x < w.x1);
-        const block = I && (c.lane === 1 || c.lane === 2) ? [I.x0, c.lane === 1 ? 0 : 3]
-                    : W && c.lane === LANES - 1 ? [W.x0, LANES - 2] : null;
+        const block = W && c.lane === LANES - 1 ? [W.x0, LANES - 2] : null;
         if (block) {
             const to = block[1];
             const clear = ![...g.cars, ...riders].some(o => o !== c && Math.abs(o.ly - to) < 1 && o.x < c.x + c.len + 6 && o.x + o.len > c.x - 10);

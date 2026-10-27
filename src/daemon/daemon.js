@@ -1871,7 +1871,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #chatlog button.stjoin{margin-left:6px;padding:0 6px;font-size:11px;line-height:16px}
   #stairspanel{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:340px;max-width:94%;
                background:rgba(13,17,23,.94);border:1px solid #444c56;border-radius:8px;padding:10px 12px;
-               color:#c9d1d9;font:12px/1.6 "Microsoft JhengHei","PingFang TC",sans-serif;text-align:center}
+               color:#c9d1d9;font:12px/1.6 "Microsoft JhengHei","PingFang TC",sans-serif;text-align:center;
+               max-height:calc(100% - 12px);overflow-y:auto;box-sizing:border-box}   /* 內容比舞台高（上班快遲到的一週結算）就在裡面捲動，不要上下被裁掉 */
   #stairspanel .st-h{font-size:14px;font-weight:700;color:#e6edf3}
   #stairspanel .st-mode{font-size:11px;color:#d29922;font-weight:400}
   #stairspanel .st-res{margin-top:4px;font-size:13px} #stairspanel .st-res b{color:#58a6ff;font-size:16px}
@@ -1889,6 +1890,22 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #stairspanel .st-pl.empty canvas{border-style:dashed;background:transparent}
   #stairspanel .st-pl.empty span{color:#7f868e}
   #stairspanel .st-hint{margin-top:4px;font-size:11px;color:#8b949e}
+  /* 上班快遲到的一週結算 */
+  #stairspanel .cm-week{margin:6px 0 2px;text-align:left}
+  #stairspanel .cm-row{display:flex;align-items:center;gap:6px;padding:1px 6px;border-radius:6px;line-height:1.25}
+  #stairspanel .cm-row:nth-child(odd){background:rgba(255,255,255,.04)}
+  #stairspanel .cm-row.me{background:rgba(247,198,49,.16);color:#f7c631}
+  #stairspanel .cm-row .rk{width:22px;text-align:center;font-size:16px}
+  #stairspanel .cm-row canvas{width:28px;height:28px;image-rendering:pixelated}
+  #stairspanel .cm-row .nm{flex:1;font-size:13px;display:flex;flex-direction:column;gap:3px}
+  #stairspanel .cm-row .pips{display:flex;gap:3px} #stairspanel .cm-row .pips i{width:12px;height:7px;border-radius:2px;display:inline-block}
+  #stairspanel .cm-row .sc{text-align:right;font-size:12px;line-height:1.2} #stairspanel .cm-row .sc b{font-size:17px;color:#58a6ff}
+  #stairspanel .cm-row .sc small{color:#8b949e}
+  #stairspanel.cmw{width:400px;padding:6px 10px}   /* 上班快遲到的一週結算：寬一點，獎項排三欄，一個畫面看完（4 人＋5 個獎項也不用捲） */
+  #stairspanel.cmw .st-hint{margin-top:2px} #stairspanel.cmw .st-btns{margin-top:4px}
+  #stairspanel .cm-awards{margin:6px 0 2px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;text-align:left;font-size:11px;line-height:1.35}
+  #stairspanel .cm-awards div{border:1px dashed #444c56;border-radius:6px;padding:3px 6px;display:flex;flex-direction:column;min-width:0}
+  #stairspanel .cm-awards span{color:#8b949e} #stairspanel .cm-awards b{color:#e6edf3;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stairspanel .st-btns{margin-top:8px;display:flex;gap:8px;justify-content:center}
   #stairspanel button.pri{background:#238636;border-color:#238636;color:#fff}
   #stairspanel .st-wait{color:#8b949e}
@@ -4496,6 +4513,21 @@ async function slideToPage(to, dropId){
     ov.remove(); slideOv=null; slideMask=null; sliding=false;
   }
 }
+// ── 小遊戲畫布：照螢幕的實際像素畫（2026-10-27）──
+// 以前畫布是 1 倍，小視窗滾輪放大、高解析螢幕時被瀏覽器硬拉大，字和線條都糊。現在畫布大小＝顯示大小 × devicePixelRatio，
+// 畫之前 setTransform 放大，各遊戲照舊用自己的版面座標（W×H）畫。dispW／dispH：顯示大小（手動戰鬥版面 552×432、顯示 69×54 格）
+function miniCanvas(cv,W,H,dispW,dispH){
+  dispW=dispW||W; dispH=dispH||H;
+  const dpr=Math.max(1,Math.min(4,window.devicePixelRatio||1)), BW=Math.round(dispW*dpr), BH=Math.round(dispH*dpr);
+  if(cv.width!==BW||cv.height!==BH){ cv.width=BW; cv.height=BH; }
+  cv.style.width=dispW+'px'; cv.style.height=dispH+'px';
+  cv.dataset.lw=W; cv.dataset.lh=H;   // 版面大小：滑鼠位置換算用（miniXY）
+  const g=cv.getContext('2d'); g.setTransform(BW/W,0,0,BH/H,0,0); g.imageSmoothingEnabled=false;
+  return g;
+}
+// 滑鼠／觸控的位置 → 版面座標
+function miniXY(e){ const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect(), lw=+cv.dataset.lw||rc.width, lh=+cv.dataset.lh||rc.height;
+  return [(e.clientX-rc.left)*lw/rc.width,(e.clientY-rc.top)*lh/rc.height]; }
 // ── 下樓梯（docs/plaza-stairs-spec.md）───────────────────────────────────
 // 廣場伺服器算位置、每 50ms 推一拍；這裡只負責畫（60fps，在兩拍之間補間）和送方向。
 // 房間清單、等待、結果跟著 /plaza 輪詢走；遊戲中的每一拍走 /stairs/stream（SSE）。
@@ -4617,9 +4649,8 @@ function stFrame(){
 function stDraw(){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   const DW=CW, DH=CH/2, Wpx=ST_W*DW, Hpx=ST_H*DH;
-  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,Wpx,Hpx);
   const bg=g.createLinearGradient(0,0,0,Hpx); bg.addColorStop(0,'#141a24'); bg.addColorStop(1,'#0b0e14');
   g.fillStyle=bg; g.fillRect(0,0,Wpx,Hpx);
   if(!stCur){ g.fillStyle='#8b949e'; g.font='14px sans-serif'; g.textAlign='center'; g.fillText('準備中…',Wpx/2,Hpx/2); return; }
@@ -4815,23 +4846,19 @@ function stRoomKindOf(id){
 const stEsc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 // 排行榜列表（結果面板、小遊戲選單共用）：kind 決定顯示層數（B12）還是分數
 function stBoardHtml(kind, board, meName, n){
-  const val=(b)=>kind==='dino'?String(b.score):kind==='commute'?b.days+' 天　'+cmDur(b.total):'B'+b.floor;
+  const val=(b)=>kind==='dino'?String(b.score):kind==='commute'?b.days+' 天・'+cmAvg(b).replace(' 到公司',''):'B'+b.floor;
   if(!board||!board.length) return '<div class="st-board"><div class="st-bh">排行榜</div><div class="st-bh">還沒有紀錄</div></div>';
   return '<div class="st-board"><div class="st-bh">排行榜</div>'+board.slice(0,n||10).map((b,i)=>
     '<div class="st-row'+(meName&&b.name===meName?' me':'')+'"><span>'+(i+1)+'.</span><span>'+stEsc(b.name)+'</span><span>'+val(b)+'</span></div>').join('')+'</div>';
 }
 // 一局結束：成績、紀錄、排行榜前 10，「回到廣場」收掉（房間已經解散了）
 function stEndPanel(end){
-  const el=document.getElementById('stairspanel'); el.style.display='block';
+  const el=document.getElementById('stairspanel'); el.style.display='block'; el.classList.toggle('cmw',end.kind==='commute');
   document.getElementById('stairscv').style.display='';
   const dino=end.kind==='dino', volley=end.kind==='volley', gomoku=end.kind==='gomoku', duel=end.kind==='duel', commute=end.kind==='commute', me=end.result.find(r=>r.id===stairs.meId);
-  let h='<div class="st-h">'+(commute?'🛵 上班快遲到':duel?'⚔ 手動戰鬥':gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+'　結束</div>';
-  // 上班快遲到：一週結算（名次、出勤天數、總通勤時間、每天的結果）
-  if(commute){
-    const ic=(x)=>x.ok?'✅':(CM_WHY[x.why]||'❔');
-    h+='<div class="st-board">'+end.result.map(r=>'<div class="st-row'+(r.id===stairs.meId?' me':'')+'"><span>'+r.rank+'.</span><span>'+stEsc(r.name)+'　'+(r.log||[]).map(ic).join('')+'</span><span>'+r.days+' 天　'+cmDur(r.total)+'</span></div>').join('')+'</div>';
-    if(cmNews.length) h+='<div class="st-hint">📺 '+cmNews.map(stEsc).join('<br>📺 ')+'</div>';
-  }
+  let h='<div class="st-h">'+(commute?'🛵 上班快遲到':duel?'⚔ 手動戰鬥':gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+(commute?'　本週結算':'　結束')+'</div>';
+  // 上班快遲到：一週結算（名次、出勤天數、總通勤時間、每天的結果、獎項）
+  if(commute) h+=cmWeekHtml(end.result, stairs.meId);
   if(duel&&me){
     const op=end.result.find(r=>r.id!==me.id);
     h+='<div class="st-res"><b>'+(me.draw?'平手':me.rank===1?'你贏了！':'你輸了')+'</b>'+(op?'　vs '+stEsc(op.name):'')+'　共 '+me.rounds+' 回合'
@@ -4849,10 +4876,13 @@ function stEndPanel(end){
   }
   else if(me&&!gomoku&&!duel&&!commute) h+='<div class="st-res">這一局：<b>'+(dino?String(me.score):'B'+me.floor)+'</b>'+(end.result.length>1?'　第 '+me.rank+' 名':'')+'</div>';
   const rec=(end.records||[]).find(r=>r.id===stairs.meId);
-  if(rec) h+='<div class="st-rec">'+(rec.top1?'🏆 全服第一！':'🎉 刷新個人紀錄！')+'</div>';
-  if(!volley&&!gomoku&&!duel) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
+  if(rec&&!commute) h+='<div class="st-rec">'+(rec.top1?'🏆 全服第一！':'🎉 刷新個人紀錄！')+'</div>';
+  // 上班快遲到：一週結算已經很長，不列整張排行榜（小遊戲選單的 🏆 看得到），只說自己排第幾（跟破紀錄併成一行）
+  if(commute&&me){ const i=(end.board||[]).findIndex(b=>b.name===me.name);
+    h+='<div class="st-hint">🏆 排行榜'+(i>=0?'第 '+(i+1)+' 名':me.days?'未進前 10':'：一天都沒準時，不上榜')+(rec?'　<b style="color:#f7c631">'+(rec.top1?'全服第一！':'刷新個人紀錄！')+'</b>':'')+'</div>'; }
+  if(!volley&&!gomoku&&!duel&&!commute) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
   h+='<div class="st-btns"><button id="stback" class="pri">回到廣場</button></div>';
-  if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h;
+  if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h; if(commute) stPanelPets();
     document.getElementById('stback').addEventListener('click',()=>{ stEndSeen=end.at; stairsSync(stairs); });
   }
 }
@@ -4860,6 +4890,7 @@ function stPanel(m){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   // 等待畫面：畫布上不該留著上一局（任何小遊戲）的最後一幕
   { const cv=document.getElementById('stairscv'); if(cv.width) cv.getContext('2d').clearRect(0,0,cv.width,cv.height); }
+  el.classList.remove('cmw');   // 上班快遲到一週結算的寬版只給結算用
   const host=stairs.meId===m.host, end=stairs.end;
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku', duel=m.kind==='duel', commute=m.kind==='commute';
@@ -4920,7 +4951,7 @@ window.addEventListener('blur',()=>{ if(stKeys.size){ stKeys.clear(); stSteer();
 const CM_DAYN=['一','二','三','四','五'], CM_LEN=[12,15,23], CM_BIKE=8, CM_VIEW=55, CM_PIN=0.3, CM_LEAN=0.04, CM_DAY_S=120, CM_CLOCK0=8*3600+58*60, CM_BREAK_MS=8000;
 // 本地預測的物理（要跟 commute-sim 一樣，test-commute 會對）
 // 圓環島的判定大小（同 commute-sim 的 ISLAND_RY／ISLAND_RX，test-commute 會對）：畫面上的草地就照這個畫
-const CM_ISL={ RY:0.8, RX:0.9 };
+const CM_ISL={ RY:0.3, RX:0.9 };
 const CM_PHYS={ VMAX:52, ACC:30, DRAG:6, SOFT:30, BRAKE:55, HARD:95, HARD_V:31.2, VMOVE:3, LANES:4 };
 const CM_COLS=['#f7c631','#58a6ff','#ff7b72','#7ee787'];   // 每個人的安全帽、名牌顏色（照房間順序）
 // 機車車身：跟角色、安全帽的顏色分開（黃色亞古獸騎黃色機車會糊成一團），車頭跟車身同色
@@ -4928,7 +4959,7 @@ const CM_BIKECOL=['#e04848','#3a7bd5','#2fa36b','#9b59b6'];
 const CM_CARCOL=['#c94f4f','#4f7fc9','#e8e8e8','#3a3f4a','#d6b24a','#4caf6a','#9b59b6'];
 const CM_KEYBIT={ arrowright:1, x:1, d:1, arrowleft:2, z:2, a:2, arrowup:16, w:16, arrowdown:32, s:32 };
 let cmMap=null, cmDay=0, cmBand={}, cmDayEnd=null, cmNews=[], cmNewsAt=0, cmRaf=0, cmKeys=new Set(), cmK=0, cmPtr=0;
-let cmBub=null, cmMeDone=0, cmToday=[];   // 紅綠燈泡泡：{ i 第幾盞, at 出現的時間 }
+let cmBub=null, cmMeDone=0, cmToday=[], cmWeek={};   // cmWeek：{ id: [每天的結果] }（每日結算的打卡格）   // 紅綠燈泡泡：{ i 第幾盞, at 出現的時間 }
 let cmHelm={}, cmPet={}, cmOutAt=new Map(), cmLastHit={}, cmBtn={}, cmMe=null, cmLocal=null, cmLast=0, cmLean=0, cmCamY=null;
 function cmPlaying(){ if(comState) return comState.kind==='commute'&&!comState.done; const m=stMine(); return !!(m&&m.kind==='commute'&&m.state==='play'); }
 // 前線單機（dev）：commute-sim 在頁面跑，一樣 50ms 一拍、一週五天；畫面、按鍵照連線那套（stCur／stPrev、cmK）
@@ -4958,21 +4989,24 @@ function cmSoloDay(day){
       if(comState!==cs) return;
       if(day<CMS.DAYS-1) return cmSoloDay(day+1);
       cs.done=true; cmStop();
-      comEndPanel(null,'出勤 <b>'+row.days+'</b> 天　通勤 '+cmDur(row.total)+'　'+row.log.map(x=>x.ok?'✅':(CM_WHY[x.why]||'❔')).join(''));
+      comEndPanel(null,cmWeekHtml([{ id:'me', rank:1, name:lastPlazaMe||'我', char:stMyChar, days:row.days, total:row.total, log:row.log }],'me'));
+      stPanelPets();
     }, CM_BREAK_MS);
   }, CMS.TICK_MS);
   cmStart(null);
 }
 function cmStart(m){
   // 重新整理頁面：從房間資料補回今天的地圖、第幾天、繃帶（只在還沒收到 cday 時；房間資料不會每天更新，拿來蓋會變回舊的）
-  if(m&&m.commute&&!cmMap&&m.commute.map){ cmMap=m.commute.map; cmDay=m.commute.day; cmBand=m.commute.bandage||{}; }
+  if(m&&m.commute&&!cmMap&&m.commute.map){ cmMap=m.commute.map; cmDay=m.commute.day; cmBand=m.commute.bandage||{};
+    for(const id in (m.commute.rows||{})) cmWeek[id]=(m.commute.rows[id].log||[]).slice(); }
   if(!cmRaf) cmRaf=requestAnimationFrame(cmFrame);
 }
 function cmStop(){ if(cmRaf){ cancelAnimationFrame(cmRaf); cmRaf=0; } cmKeys.clear(); cmPtr=0; cmK=0; cmLocal=null; }
 function cmReset(){ cmMap=null; cmDayEnd=null; cmBand={}; cmOutAt.clear(); cmCamY=null; }
 function cmFrame(){ cmRaf=requestAnimationFrame(cmFrame); try{ cmDraw(); }catch(e){} }
-function cmOnDay(d){ cmNews=[]; cmToday=[]; cmMeDone=0; cmLastHit={}; cmMap=d.map; cmDay=d.day; cmBand=d.bandage||{}; cmDayEnd=null; stPrev=stCur=null; cmOutAt.clear(); cmLocal=null; cmCamY=null; }
-function cmOnDayEnd(d){ cmDayEnd=Object.assign({},d,{ at:performance.now() }); cmBand=d.bandage||cmBand; }
+function cmOnDay(d){ if(!d.day) cmWeek={}; cmNews=[]; cmToday=[]; cmMeDone=0; cmLastHit={}; cmMap=d.map; cmDay=d.day; cmBand=d.bandage||{}; cmDayEnd=null; stPrev=stCur=null; cmOutAt.clear(); cmLocal=null; cmCamY=null; }
+function cmOnDayEnd(d){ cmDayEnd=Object.assign({},d,{ at:performance.now() }); cmBand=d.bandage||cmBand;
+  for(const x of d.res||[]){ const w=cmWeek[x.id]||(cmWeek[x.id]=[]); w[d.day]={ ok:x.ok, at:x.at, why:x.why, hit:x.hit }; } }
 // 快訊：今天有人撞了就馬上上跑馬燈（只寫人數不寫名字，同 commute-sim 的 news；互撞兩人算一則）
 const CM_NEWSN=['零','一','兩','三','四'];
 function cmFlash(v){
@@ -5113,12 +5147,12 @@ function cmRider(g,c,x,y,dot,col,bcol,band,fr,alpha,sk,t){
     g.fillStyle=i%2?'#ffd84a':'#ff8c1a'; g.fillRect(x+dot-R(k*7*dot),y-R(dot*(0.5+((i*13)%5)*0.5)),R(dot*0.8),R(dot*0.8)); } }
   g.globalAlpha=1;
 }
+let cmCss={ W:0, H:0 };
 function cmDraw(){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
-  const Wpx=ST_W*CW, Hpx=ST_H*(CH/2);
-  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
+  const Wpx=ST_W*CW, Hpx=ST_H*(CH/2); cmCss={ W:Wpx, H:Hpx };
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,Wpx,Hpx);   // 照螢幕實際像素畫（放大不糊）
   const R=Math.round, nowMs=performance.now(), dt=cmLast?Math.min(0.1,(nowMs-cmLast)/1000):0; cmLast=nowMs;
   const PXU=Wpx/CM_VIEW, u=PXU/4, dot=Math.max(2,R(PXU*CM_BIKE/16));
   const HUD=26, TCK=18, VH=Hpx-HUD-TCK;
@@ -5141,11 +5175,19 @@ function cmDraw(){
   const lt0=focus===mine&&mine&&mine.st===0?((cmK&1)&&!(cmK&2)?1:(cmK&2)?-1:0):0;
   cmLean+=(lt0*CM_LEAN-cmLean)*Math.min(1,dt*4);
   const left=(focus?focus.x:0)-CM_VIEW*(CM_PIN+cmLean), X=(v)=>R((v-left)*PXU);
-  // 圓環：外側兩道往外彎成環（只是畫面，判定還是直的）。bump 在島前後 RW 點內從 0 平順升到 1
-  const RW=30, A=R(LH*0.7);
-  const bump=(x)=>{ let b=0; for(const I of cmMap.islands||[]){ const d=x<I[0]?I[0]-x:x>I[1]?x-I[1]:0; if(d<RW) b=Math.max(b,(1+Math.cos(Math.PI*d/RW))/2); } return b; };
-  const yOff=(ly,x)=>{ const b=bump(x); if(!b) return 0; return ly<1.5?-A*b*Math.min(1,(1.5-ly)/0.5):A*b*Math.min(1,(ly-1.5)/0.5); };
-  const base=(ly,x)=>RY+ly*LH+R(LH*0.62)+R(yOff(ly,x));   // 那一道車輪著地的 y（世界座標）：車道中間偏下，跟判定的島、施工對齊
+  // 圓環（2026-10-27 改版：上兩道往上繞、下兩道往下繞，島夾在中間）。畫面上的 v = 從路面上緣算幾道（車輪在 ly+0.62），
+  // 中線 vC（ly 1.5 的車輪）以上整片往上推、以下往下推，中間空出來的就是島：
+  //   G 這段：每一道都推一樣多（拋物線拱，比島長一點）→ 四道寬度不變，繞著島走
+  //   SP 這段：越外側推越多（餘弦拱，更寬）→ 外圈比內圈繞得大，像同心圓
+  const G=0.9, SP=0.35, vC=2.12, RW=45, A=R((G+1.7*SP)*LH);
+  const arch=(x)=>{ let bi=0, bw=0; for(const I of cmMap.islands||[]){ const cx=(I[0]+I[1])/2, h=(I[1]-I[0])/2;
+      const ui=(x-cx)/(h*CM_ISL.RX*1.7), uw=(x-cx)/(h+RW);
+      if(ui>-1&&ui<1) bi=Math.max(bi,1-ui*ui); if(uw>-1&&uw<1) bw=Math.max(bw,Math.cos(Math.PI/2*uw)); }
+    return [bi,bw]; };
+  const yAt=(v,x)=>{ const [bi,bw]=arch(x); if(!bi&&!bw) return RY+v*LH; const dv=v-vC;
+    return RY+v*LH+R((dv<0?-1:1)*(G*bi+Math.max(0,Math.abs(dv)-0.5)*SP*bw)*LH); };
+  const base=(ly,x)=>yAt(ly+0.62,x);   // 那一道車輪著地的 y（世界座標）
+  const bump=(x)=>{ const [bi,bw]=arch(x); return Math.max(bi,bw); };
   const camT=focus?Math.max(-A,Math.min(WH+A-VH,base(focus.ly,focus.x)-LH*0.6-VH/2)):0;
   cmCamY=cmCamY==null?camT:cmCamY+(camT-cmCamY)*Math.min(1,dt*6);
   const OY=HUD-R(cmCamY);   // 世界 y → 畫面 y 的位移
@@ -5166,34 +5208,29 @@ function cmDraw(){
   g.fillStyle='#4a4d55'; g.fillRect(0,RY,Wpx,4*LH);
   // 圓環：路面照外側車道的彎度一欄一欄往外撐（跟車子走的弧線同一條，不會騎到路面外面）＋上下支線路口
   const span=CM_VIEW;
-  for(let px=0;px<Wpx;px+=2){ const wx=left+px/PXU, b=bump(wx); if(!b) continue;
-    g.fillStyle='#4a4d55'; g.fillRect(px,RY+R(yOff(0,wx))-2,2,4*LH+R(yOff(3,wx))-R(yOff(0,wx))+4); }
+  for(let px=0;px<Wpx;px+=2){ const wx=left+px/PXU; if(!bump(wx)) continue;
+    const y0=yAt(0,wx), y1=yAt(4,wx); g.fillStyle='#4a4d55'; g.fillRect(px,y0-2,2,y1-y0+4); }
   for(const I of cmMap.islands||[]){
     if(I[1]<left-RW-30||I[0]>left+span+RW+30) continue;
     const mx=X(I[2]);
     // 支線：上下各一小段路口（不要一路通到天上）
-    g.fillStyle='#4a4d55'; g.fillRect(mx-R(5*PXU),RY-A-14,R(10*PXU),A+16); g.fillRect(mx-R(5*PXU),RB-2,R(10*PXU),A+16);
+    const ty=yAt(0,I[2]), by=yAt(4,I[2]);
+    g.fillStyle='#4a4d55'; g.fillRect(mx-R(5*PXU),ty-16,R(10*PXU),18); g.fillRect(mx-R(5*PXU),by-2,R(10*PXU),A+16);
   }
   // 路邊白線、車道虛線（跟著圓環彎）
   g.fillStyle='#d9d9d9';
   for(let px=0;px<Wpx;px+=4){ const wx=left+px/PXU;
-    g.fillRect(px,RY+R(yOff(0,wx)),4,2); g.fillRect(px,RB-2+R(yOff(3,wx)),4,2);
-    if(((px+R(camPx))%48+48)%48<24) for(let k=1;k<4;k++){ if(k===2&&bump(wx)>0.2) continue; g.fillRect(px,RY+k*LH-1+R(yOff(k===1?0.5:k===3?2.5:1.5,wx)),4,3); } }
-  // 中央島（中間兩道）：草地的邊 = 判定的橢圓，用跟車輪同一個換算（base，含圓環往外彎）畫出來，
-  // 車輪碰到草地邊才算撞（2026-10-27 試玩：以前島畫成固定橢圓、車子卻照彎道往外推，下緣看起來差很多還是撞）
+    g.fillRect(px,yAt(0,wx),4,2); g.fillRect(px,yAt(4,wx)-2,4,2);
+    if(((px+R(camPx))%48+48)%48<24) for(let k=1;k<4;k++){ if(k===2&&arch(wx)[0]>0.02) continue; g.fillRect(px,yAt(k,wx)-1,4,3); } }
+  // 中央島：夾在上下兩半中間的橢圓（前後半徑＝判定的島長，上下半徑＝判定的 ISLAND_RY 加上空出來的 G）。
+  // 判定只在中線附近（騎在兩半正中間才會撞），畫面上第 1、2 道的車輪永遠在草地外面
   for(const I of cmMap.islands||[]){
     if(I[1]<left-10||I[0]>left+span+10) continue;
-    const cx=(I[0]+I[1])/2, hx=(I[1]-I[0])/2*CM_ISL.RX, edge=(k)=>{   // k：1 = 草地邊、0.8 = 內圈深色
-      const top=[], bot=[];
-      for(let i=0;i<=32;i++){ const a2=Math.PI*i/32, wx=cx-hx*k*Math.cos(a2), dl=CM_ISL.RY*k*Math.sin(a2);
-        top.push([X(wx),base(1.5-dl,wx)]); bot.push([X(wx),base(1.5+dl,wx)]); }
-      return top.concat(bot.reverse());
-    };
-    const poly=(pts,fill,stroke)=>{ g.beginPath(); pts.forEach(([px,py],i)=>i?g.lineTo(px,py):g.moveTo(px,py)); g.closePath();
-      if(stroke){ g.strokeStyle=stroke; g.lineWidth=4; g.stroke(); g.lineWidth=1; } g.fillStyle=fill; g.fill(); };
-    poly(edge(1),'#3f8f4f','#d9d9d9');
-    poly(edge(0.75),'#2f6f3c');
-    const tx=X(cx), cy=base(1.5,cx); g.fillStyle='#6b4a2b'; g.fillRect(tx-4,cy-14,8,18); g.fillStyle='#4caf6a'; g.fillRect(tx-18,cy-40,36,26); g.fillRect(tx-10,cy-50,20,10);
+    const cx=(I[0]+I[1])/2, ex=X(cx), ey=RY+vC*LH, rx=(I[1]-I[0])/2*CM_ISL.RX*PXU, ry=(CM_ISL.RY+G)*LH;
+    g.fillStyle='#d9d9d9'; g.beginPath(); g.ellipse(ex,ey,rx+3,ry+3,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#3f8f4f'; g.beginPath(); g.ellipse(ex,ey,rx,ry,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#2f6f3c'; g.beginPath(); g.ellipse(ex,ey,rx*0.75,ry*0.72,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#6b4a2b'; g.fillRect(ex-4,ey-6,8,18); g.fillStyle='#4caf6a'; g.fillRect(ex-18,ey-32,36,26); g.fillRect(ex-10,ey-42,20,10);
   }
   // 紅綠燈：停止線＋斑馬線、上面人行道的燈桿（燈號是伺服器每拍給的）。前方紅／黃燈：停止線閃黃
   const lights=cmMap.lights||[], lt=stCur.lt||'';
@@ -5299,18 +5336,76 @@ function cmDraw(){
   // 出局／到公司的字：跳 2.5 秒就收（出局的人還要看別人騎，一直蓋著很煩，2026-10-27 試玩）
   if(mine&&mine.st===1&&!cmMeDone) cmMeDone=nowMs;
   if(mine&&mine.st&&!cmDayEnd&&nowMs-(mine.st===2?(cmOutAt.get(me)||nowMs):cmMeDone)<2500) banner([[cmWhyText({ ok:mine.st===1, at:mine.at, why:mine.why, hit:cmLastHit[me] }),16,'bold sans-serif',mine.st===1?'#3fb950':'#ff7b72']]);
-  // 一天結束：每個人的結果、下一天倒數
-  if(cmDayEnd){
-    const res=cmDayEnd.res||[], bh=48+res.length*20, by=R(Hpx/2-bh/2)-8;
-    g.fillStyle='rgba(13,17,23,.9)'; g.fillRect(24,by,Wpx-48,bh); g.strokeStyle='#444c56'; g.strokeRect(24.5,by+0.5,Wpx-49,bh-1);
-    g.fillStyle='#e6edf3'; g.font='bold 14px sans-serif'; g.textAlign='center'; g.fillText('週'+CM_DAYN[cmDayEnd.day]+'　結算',Wpx/2,by+20);
-    g.font='12px sans-serif';
-    res.forEach((x,i)=>{ const who=info.get(x.id)||{}; g.textAlign='left'; g.fillStyle=x.id===me?'#f7c631':'#e6edf3'; g.fillText(who.name||'?',36,by+42+i*20);
-      g.textAlign='right'; g.fillStyle=x.ok?'#3fb950':'#ff7b72'; g.fillText(cmWhyText(x),Wpx-36,by+42+i*20); });
-    g.fillStyle='#8b949e'; g.textAlign='center';
-    const lf=Math.max(0,Math.ceil((CM_BREAK_MS-(nowMs-cmDayEnd.at))/1000));
-    g.fillText(cmDayEnd.day>=4?'週五下班！結算中…':'週'+CM_DAYN[cmDayEnd.day+1]+' '+lf+' 秒後出門',Wpx/2,by+bh-8);
-  }
+  if(cmDayEnd) cmDayCard(g,Wpx,Hpx,HUD,TCK,me,info,nowMs);
+}
+// 一週結算（廣場的結果面板、前線單機共用）：名次（獎牌）、頭像、五天出勤點、出勤天數、總通勤時間；下面是獎項
+// 總通勤時間（準時那幾天的抵達時間加總）直接寫秒數看不懂 → 換算成「平均幾點到公司」。天數一樣時，平均越早＝總時間越少，排名意思不變
+const cmAvg=(r)=>r.days?'平均 '+cmClock(r.total/r.days)+' 到公司':'沒有準時到過';
+const CM_PIP={ ok:'#2ea043', crash:'#c93c3c', red:'#d9822b', late:'#6e7681', left:'#6e7681', lost:'#6e7681' };
+function cmWeekHtml(result, meId){
+  const medal=['🥇','🥈','🥉'];
+  let h='<div class="cm-week">'+result.map(r=>{
+    const pips=[0,1,2,3,4].map(i=>{ const x=(r.log||[])[i]; return '<i style="background:'+(x?(CM_PIP[x.ok?'ok':x.why]||'#6e7681'):'#30363d')+'" title="週'+CM_DAYN[i]+'"></i>'; }).join('');
+    return '<div class="cm-row'+(r.id===meId?' me':'')+'"><span class="rk">'+(medal[r.rank-1]||r.rank)+'</span><canvas width="64" height="64" data-c="'+stEsc(r.char||'')+'"></canvas>'
+      +'<span class="nm">'+stEsc(r.name)+'<span class="pips">'+pips+'</span></span><span class="sc"><b>'+r.days+'</b>/5 天<br><small>'+cmAvg(r)+'</small></span></div>';
+  }).join('')+'</div>';
+  // 獎項：全勤、最速一天、掛彩最多、紅燈最多、遲到最多（沒人符合就不列）
+  const aw=[], all=result.map(r=>({ r, log:r.log||[] }));
+  const full=all.filter(x=>x.r.days===5).map(x=>x.r.name); if(full.length) aw.push(['🏆','全勤獎',full.join('、')]);
+  let fast=null; for(const x of all) for(const d of x.log) if(d&&d.ok&&(!fast||d.at<fast.at)) fast={ at:d.at, name:x.r.name };
+  if(fast) aw.push(['⚡','最速通勤',fast.name+' '+cmClock(fast.at)]);
+  const most=(why,ic,t,unit)=>{ let best=0, who=[]; for(const x of all){ const n=x.log.filter(d=>d&&d.why===why).length; if(n>best){ best=n; who=[x.r.name]; } else if(n&&n===best) who.push(x.r.name); }
+    if(best) aw.push([ic,t,who.join('、')+' ×'+best]); };
+  most('crash','🩹','最常掛彩','次'); most('red','🚨','紅燈常客','次'); most('late','⏰','遲到大王','天');
+  // 獎項排成兩欄（一格：上面獎名、下面得主），整個結算一個畫面看完不用捲（2026-10-27）
+  if(aw.length) h+='<div class="cm-awards">'+aw.map(([ic,t,v])=>'<div><span>'+ic+' '+t+'</span><b>'+stEsc(v)+'</b></div>').join('')+'</div>';
+  return h;
+}
+// 每日結算：一張「出勤卡」。照抵達時間排（準時的在前），每人一列：名次、頭像、名字、繃帶、印章；
+// 下面是自己這週的打卡格（週一～週五）和到下一天的倒數條
+const CM_STAMP={ ok:['#2ea043','#d3f9d8'], crash:['#c93c3c','#ffe0e0'], red:['#d9822b','#ffe8cc'], late:['#6e7681','#eaeef2'], left:['#6e7681','#eaeef2'], lost:['#6e7681','#eaeef2'] };
+function cmStampOf(x){ return x.ok?'準時 '+cmClock(x.at):x.why==='crash'?'撞到'+(CM_HIT[x.hit]||'東西'):x.why==='red'?'闖紅燈':x.why==='late'?'遲到':x.why==='left'?'不幹了':x.why==='lost'?'斷線':'—'; }
+function cmDayCard(g,W,H,HUD,TCK,me,info,nowMs){
+  const R=Math.round, d=cmDayEnd, res=(d.res||[]).slice().sort((a,b)=>(b.ok-a.ok)||((a.at||0)-(b.at||0)));
+  const k=Math.min(1,(nowMs-d.at)/250), RH=34, cw=Math.min(W-28,380), ch=38+res.length*RH+38, cx=R((W-cw)/2), cy=R(HUD+(H-HUD-TCK-ch)/2+(1-k)*20);
+  g.save(); g.globalAlpha=k;
+  g.fillStyle='rgba(0,0,0,.35)'; g.fillRect(0,HUD,W,H-HUD-TCK);
+  // 卡片：米白紙、上緣一條深藍（打卡鐘的出勤卡）
+  g.fillStyle='#000'; g.fillRect(cx-3,cy-3,cw+6,ch+6); g.fillStyle='#f6f1e3'; g.fillRect(cx,cy,cw,ch);
+  g.fillStyle='#1d2b53'; g.fillRect(cx,cy,cw,30);
+  g.font='bold 15px sans-serif'; g.textAlign='left'; g.textBaseline='middle'; g.fillStyle='#fff'; g.fillText('週'+CM_DAYN[d.day]+'　出勤紀錄',cx+12,cy+15);
+  g.font='12px sans-serif'; g.textAlign='right'; g.fillStyle='#c9d1d9'; g.fillText('08:58 → 09:00',cx+cw-12,cy+15);
+  let rk=0;
+  res.forEach((x,i)=>{
+    const y=cy+38+i*RH, who=info.get(x.id)||{}, mine=x.id===me;
+    if(i%2) { g.fillStyle='rgba(0,0,0,.04)'; g.fillRect(cx+6,y,cw-12,RH-2); }
+    if(mine){ g.fillStyle='rgba(247,198,49,.25)'; g.fillRect(cx+6,y,cw-12,RH-2); }
+    g.font='bold 14px sans-serif'; g.textAlign='center'; g.fillStyle='#57606a'; g.fillText(x.ok?String(++rk):'—',cx+20,y+RH/2);
+    const img=cmSprite(who.char,x.ok?5:3,2); if(img) g.drawImage(img,cx+32,y+1);
+    g.font=(mine?'bold ':'')+'13px sans-serif'; g.textAlign='left'; g.fillStyle='#24292f'; g.fillText(who.name||'?',cx+70,y+RH/2,cw-230);
+    const bd=cmBand[x.id]||0; if(bd){ g.font='12px sans-serif'; g.fillStyle='#8c6d1f'; g.fillText('🩹×'+bd,cx+cw-160,y+RH/2); }
+    // 印章：斜一點的框＋字
+    const st=CM_STAMP[x.ok?'ok':x.why]||CM_STAMP.late, txt=cmStampOf(x);
+    g.save(); g.translate(cx+cw-62,y+RH/2); g.rotate(-0.06);
+    g.font='bold 12px sans-serif'; const tw=Math.max(70,g.measureText(txt).width+14);
+    g.fillStyle=st[1]; g.fillRect(-tw/2,-11,tw,22); g.strokeStyle=st[0]; g.lineWidth=2; g.strokeRect(-tw/2,-11,tw,22);
+    g.fillStyle=st[0]; g.textAlign='center'; g.fillText(txt,0,1); g.restore();
+  });
+  // 自己這週的打卡格
+  const wk=cmWeek[me]||[], gy=cy+38+res.length*RH+6, gw=36;
+  g.font='bold 11px sans-serif'; g.textAlign='left'; g.fillStyle='#57606a'; g.fillText('本週',cx+12,gy+12);
+  for(let i=0;i<5;i++){ const x0=cx+48+i*(gw+6), w=wk[i];
+    g.fillStyle=w?(CM_STAMP[w.ok?'ok':w.why]||CM_STAMP.late)[1]:'#fff'; g.fillRect(x0,gy,gw,24);
+    g.strokeStyle=i===d.day?'#1d2b53':'#c9c3b0'; g.lineWidth=i===d.day?2:1; g.strokeRect(x0+0.5,gy+0.5,gw-1,23);
+    g.textAlign='center'; g.fillStyle=w?(CM_STAMP[w.ok?'ok':w.why]||CM_STAMP.late)[0]:'#b0a98f'; g.font='bold 12px sans-serif';
+    g.fillText(w?(w.ok?'✔':w.why==='crash'?'✖':w.why==='red'?'!':'…'):CM_DAYN[i],x0+gw/2,gy+12); }
+  // 到下一天的倒數條
+  // 倒數：字和條都靠右，條在字的正下方、寬度跟字一樣（不伸到打卡格那邊）
+  const left=Math.max(0,CM_BREAK_MS-(nowMs-d.at)), cdt=d.day>=4?'週五下班！結算中…':'週'+CM_DAYN[d.day+1]+' '+Math.ceil(left/1000)+' 秒後出門';
+  g.textAlign='right'; g.font='11px sans-serif'; g.fillStyle='#57606a'; g.fillText(cdt,cx+cw-12,gy+7);
+  const bw=Math.min(R(g.measureText(cdt).width),cw-12-(cx+48+5*(gw+6)+10-cx)), bx0=cx+cw-12-bw;
+  g.fillStyle='#e1dccb'; g.fillRect(bx0,gy+16,bw,5); g.fillStyle='#1d2b53'; g.fillRect(bx0,gy+16,R(bw*(1-left/CM_BREAK_MS)),5);
+  g.restore(); g.textBaseline='alphabetic';
 }
 // 按鍵：→ 油門、← 煞車（X／Z、D／A 同）、↑ ↓（W／S）上下。按著哪些鍵合成位元，狀態變了才送
 function cmSend(){
@@ -5334,16 +5429,16 @@ window.addEventListener('blur',()=>{ if(cmKeys.size||cmPtr){ cmKeys.clear(); cmP
 const cmIn=(b,x,y)=>b&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3];
 function cmPtrAt(e){
   const cv=document.getElementById('stairscv'), r=cv.getBoundingClientRect();
-  const x=(e.clientX-r.left)*cv.width/r.width, y=(e.clientY-r.top)*cv.height/r.height;
+  const x=(e.clientX-r.left)*cmCss.W/r.width, y=(e.clientY-r.top)*cmCss.H/r.height;
   if(!cmMe) return 0;
-  const PXU=cv.width/CM_VIEW, LH=PXU*8;
+  const PXU=cmCss.W/CM_VIEW, LH=PXU*8;
   let k=0; if(x>cmMe[0]+PXU*5) k|=1; else if(x<cmMe[0]-PXU*5) k|=2;
   if(y>cmMe[1]+LH*0.4) k|=32; else if(y<cmMe[1]-LH*0.4) k|=16;
   return k;
 }
 document.getElementById('stairscv').addEventListener('pointerdown',e=>{
   if(!cmPlaying()) return;
-  const cv=e.currentTarget, r=cv.getBoundingClientRect(), x=(e.clientX-r.left)*cv.width/r.width, y=(e.clientY-r.top)*cv.height/r.height;
+  const cv=e.currentTarget, r=cv.getBoundingClientRect(), x=(e.clientX-r.left)*cmCss.W/r.width, y=(e.clientY-r.top)*cmCss.H/r.height;
   e.preventDefault();
   if(cmIn(cmBtn.quit,x,y)&&comState){ comStop(); return; }
   if(cmIn(cmBtn.quit,x,y)){ sendCmd('stairsLeave').then(()=>{ flashCmdMsg('不幹了，已回到廣場','#3fb950'); poll(); }); return; }
@@ -5404,9 +5499,8 @@ function dnBird(g,X,Y,w,h,DW,DH,up){
 function dnDraw(now){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   const DW=CW, DH=CH/2, Wpx=DN.W*DW, Hpx=DN.H*DH, g0=dnGame;
-  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,Wpx,Hpx);
   g.fillStyle='#f4f4f2'; g.fillRect(0,0,Wpx,Hpx);
   const gy=DN.GROUND*DH;
   // 地面：一條線＋往左捲的小碎石
@@ -5599,7 +5693,7 @@ function comStart(kind){
 function comStop(){ if(comState&&comState.timer) clearInterval(comState.timer); comState=null; cmStop(); cmReset(); vbStop(); gmStop(); mbStop(); dnStop(); stStop(); stPrev=stCur=null; miniFrontOff(); document.getElementById('stairsbox').style.display='none'; poll(); }
 // 結束面板（本地）：勝負、比分／手數，再來一局或回廣場
 function comEndPanel(won, text){
-  const el=document.getElementById('stairspanel'); el.style.display='block';
+  const el=document.getElementById('stairspanel'); el.style.display='block'; el.classList.toggle('cmw',comState.kind==='commute');
   const k0=comState.kind, solo=k0==='stairs'||k0==='dino'||k0==='commute';
   const title={ commute:'🛵 上班快遲到', volley:'🏐 打排球', duel:comState.devTest?'⚔ 手動戰鬥（dev 測試）':'⚔ 手動戰鬥　vs 電腦', stairs:'🪜 下樓梯', dino:'🦖 小恐龍' }[k0]||'⚫ 五子棋';
   // 單機（下樓梯、小恐龍）沒有勝負：won 不用，text 是成績那一行
@@ -5692,9 +5786,8 @@ function gmDraw(){
   const gm=gmData(); if(!gm) return;
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   const Wpx=69*CW, Hpx=54*(CH/2);
-  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,Wpx,Hpx);
   g.fillStyle='#2b2118'; g.fillRect(0,0,Wpx,Hpx);
   const n=gm.n||15, G=gmGeom(Wpx,Hpx,n);
   // 棋盤：木頭色、格線、星位
@@ -5752,9 +5845,8 @@ function gmFit(g,t,w){ if(g.measureText(t).width<=w) return t; while(t.length>1&
 // 點棋盤：換算成最近的交叉點，輪到我、那裡沒子就下
 function gmCell(e){
   const gm=gmData(); if(!gm) return null;
-  const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect();
-  const sx=(e.clientX-rc.left)*cv.width/rc.width, sy=(e.clientY-rc.top)*cv.height/rc.height;
-  const n=gm.n||15, G=gmGeom(cv.width,cv.height,n);
+  const cv=document.getElementById('stairscv'), [sx,sy]=miniXY(e);
+  const n=gm.n||15, G=gmGeom(+cv.dataset.lw,+cv.dataset.lh,n);
   const x=Math.round((sx-G.x0)/G.cell), y=Math.round((sy-G.y0)/G.cell);
   return x>=0&&y>=0&&x<n&&y<n?{ x, y }:null;
 }
@@ -5865,9 +5957,8 @@ function peekFrame(){
   const box=document.getElementById('peekbox'), pet=document.getElementById('pet'), cv=document.getElementById('peekcv');
   const W=69*CW, H=54*(CH/2);
   box.style.left=pet.offsetLeft+'px'; box.style.top=pet.offsetTop+'px'; box.style.width=W+'px'; box.style.height=H+'px';
-  if(cv.width!==W||cv.height!==H){ cv.width=W; cv.height=H; peekBgCache=null; }
-  if(!peekBgCache) peekBgCache=peekBg(W,H);
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  if(!peekBgCache||peekBgCache.lw!==W||peekBgCache.lh!==H){ peekBgCache=peekBg(W,H); peekBgCache.lw=W; peekBgCache.lh=H; }
+  const g=miniCanvas(cv,W,H);   // 照螢幕實際像素畫（同小遊戲）：背景本來就是點陣風，主要是斜斜探頭的 vpet 不會鋸齒變粗
   g.drawImage(peekBgCache,0,0,peekBgCache.width*PEEK_L,peekBgCache.height*PEEK_L);
   // vpet：從左下角斜斜探進來，抬頭看手機（一半在畫面外）；兩幀待機慢慢換
   const img=peekArt&&peekArt[Math.floor(performance.now()/700)%2];
@@ -6110,7 +6201,7 @@ function mbKey(k){
   if(ok){ mbSend(mbBarVal()); return true; }
   return false;
 }
-function mbCanvasXY(e){ const cv=document.getElementById('stairscv'), rc=cv.getBoundingClientRect(); return [(e.clientX-rc.left)*cv.width/rc.width,(e.clientY-rc.top)*cv.height/rc.height]; }
+function mbCanvasXY(e){ return miniXY(e); }
 function mbCellAt(x,y){ const c=Math.floor((x-MB.GX)/MB.GW), r=Math.floor((y-MB.GY)/MB.GH); return c>=0&&c<3&&r>=0&&r<3?[c,r]:null; }
 // ── 認輸：右下角的白旗小方塊（長按，共用的 rsDraw）──
 const MB_RF={ w:40 };
@@ -6225,10 +6316,8 @@ function mbDraw(d,now){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   // 畫在固定的 552×432（版面照這個排），顯示大小跟其他小遊戲一樣（69×54 格，格子大小會變）
   const W=MB.W, H=MB.H;
-  if(cv.width!==W||cv.height!==H){ cv.width=W; cv.height=H; }
-  cv.style.width=(69*CW)+'px'; cv.style.height=(54*(CH/2))+'px';
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,W,H,69*CW,54*(CH/2));
   const mi=mbMe(d), oi=1-mi, side=[0,1].map(s=>s===mi?0:2);
   g.drawImage(mbBg(d.bg,W,H),0,0);
   // 演出中用這回合的時間軸；其他時候站在現在的位置
@@ -6574,9 +6663,8 @@ function vbHelpCard(g, cx, top){
 function vbDraw(now){
   const cv=document.getElementById('stairscv'), pet=document.getElementById('pet');
   const DW=CW, DH=CH/2, U=VB.SUB, Wpx=VB.W/U*DW, Hpx=VB.H/U*DH, g0=vbGame;
-  if(cv.width!==Wpx||cv.height!==Hpx){ cv.width=Wpx; cv.height=Hpx; }
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
-  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const g=miniCanvas(cv,Wpx,Hpx);
   const X=(v)=>v/U*DW, Y=(v)=>v/U*DH;
   const sky=g.createLinearGradient(0,0,0,Y(VB.GROUND)); sky.addColorStop(0,'#7cc4f4'); sky.addColorStop(1,'#cfeefc');
   g.fillStyle=sky; g.fillRect(0,0,Wpx,Y(VB.GROUND));

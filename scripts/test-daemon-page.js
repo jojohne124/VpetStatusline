@@ -1555,7 +1555,16 @@ setTimeout(async () => {
     // 進化凍結、自動戰鬥：撥動鈕，狀態跟著 /state 的 force（2026-10-27：兩顆鈕看不出現在的狀態）
     ok(/toggle: \{ key: 'freezeEvolve', on: 'freeze', off: 'unfreeze' \}/.test(src) && /toggle: \{ key: 'autoBattleOff', on: 'battleOn', off: 'battleOff', invert: true \}/.test(src)
        && /syncToggles\(s\.force\);/.test(src) && /force = \{ freezeEvolve: !!f\.freezeEvolve, autoBattleOff: !!f\.autoBattleOff \}/.test(src), '進化凍結／自動戰鬥不是撥動鈕（或沒跟著狀態）');
-    ok(/cv\.style\.width=\(69\*CW\)\+'px'; cv\.style\.height=\(54\*\(CH\/2\)\)\+'px';/.test(src) && /mbStop\(\); mbUnstyle\(\);/.test(src), '手動戰鬥的畫布沒縮到跟其他小遊戲一樣大（或換遊戲時沒還原）');
+    ok(/const g=miniCanvas\(cv,W,H,69\*CW,54\*\(CH\/2\)\);/.test(src) && /mbStop\(\); mbUnstyle\(\);/.test(src), '手動戰鬥的畫布沒縮到跟其他小遊戲一樣大（或換遊戲時沒還原）');
+    // 小遊戲畫布照螢幕實際像素畫（2026-10-27：小視窗放大、高解析螢幕字會糊）：每個遊戲都走 miniCanvas，滑鼠位置走 miniXY
+    {
+        const fnBody = (name) => { const i = src.indexOf('function ' + name + '('); return i < 0 ? '' : src.slice(i, src.indexOf('\n}\n', i)); };
+        const draws = ['stDraw', 'dnDraw', 'gmDraw', 'vbDraw', 'mbDraw', 'cmDraw'];
+        const bad = draws.filter(n => !/miniCanvas\(cv,/.test(fnBody(n)) || /cv\.width=/.test(fnBody(n)));
+        ok(!bad.length, '這幾個小遊戲還是 1 倍畫布（放大會糊）：' + bad.join(','));
+        ok(/BW=Math\.round\(dispW\*dpr\)/.test(src) && /g\.setTransform\(BW\/W,0,0,BH\/H,0,0\)/.test(src), 'miniCanvas 沒照 devicePixelRatio 放大');
+        ok(/function mbCanvasXY\(e\)\{ return miniXY\(e\); \}/.test(src) && /\[sx,sy\]=miniXY\(e\)/.test(src), '點擊位置沒換算成版面座標（高解析時會點歪）');
+    }
     // 前線小遊戲（單機）：按鈕只在前線、下樓梯模擬內嵌、玩的時候報 frontMini、daemon 收到就不觸發自動戰鬥也不排隊、個人最佳只記本機
     ok(/\$\{IS_RELEASE \? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly"/.test(src)
        && /'duelDev', 'frontMini', 'miniBest'\]\);/.test(src), '前線的「🎮 小遊戲」沒有擋在開發版（或 release 也有這顆鈕）');

@@ -63,7 +63,6 @@ console.log('— 模擬：基本 —');
         ok(d === 0 ? g.map.works.length === 0 : g.map.works.length >= 1, `第 ${d + 1} 天施工數不對：` + g.map.works.length);
         ok(g.players[0].x === 0 && g.players[0].v === 0, '開局不是停在起點');
         // 中間兩道的車開局不會放在圓環島上；最下面那道不會放在施工上
-        ok(!g.cars.some(c => (c.lane === 1 || c.lane === 2) && g.map.islands.some(I => c.x + c.len > I.x0 && c.x < I.x1)), '中間兩道開局就有車停在圓環島上');
         ok(!g.cars.some(c => c.lane === 3 && g.map.works.some(w => c.x + c.len > w.x0 && c.x < w.x1)), '最下面那道開局就有車停在施工上');
         // 施工不跟紅綠燈、圓環擠在一起
         ok(g.map.works.every(w => !g.map.lights.some(L => L.x > w.x0 - 60 && L.x < w.x1 + 60)), '施工擺在紅綠燈旁邊');
@@ -217,23 +216,29 @@ console.log('— 模擬：撞車、圓環、施工、互撞 —');
     g.cars.push({ id: 900, type: 'car', len: 9, lane: 0, ly: 0, x: 40, v0: 26, v: 26 });
     run(g, 200);
     ok(P(g).state === 'ride' && g.cars[0].x + g.cars[0].len < 100, '車子從後面撞上停著的玩家');
-    // 圓環中央島：中間兩道騎進去 → 撞到；外側兩道沒事
+    // 圓環（2026-10-27 改版：上兩道往上繞、下兩道往下繞）：四道照車道騎都過得去；壓著中線騎才撞島
     g = lab(4);
     g.map.islands = [{ x0: 60, x1: 150, mergeX: 100 }]; g.mergeNext = [[999, 999]];
     for (const p of g.players) CM.setInput(g, p.id, K.thr);
     run(g, 120);
-    ok(P(g, 1).state === 'out' && P(g, 1).hit === 'island' && P(g, 2).hit === 'island', '中間兩道騎進圓環島沒有出局');
-    ok(P(g, 0).state === 'ride' && P(g, 3).state === 'ride', '外側兩道繞圓環也出局');
+    ok(g.players.every(p => p.state === 'ride' && p.x > 150), '照車道騎繞圓環也出局（四道都該過得去）：' + g.players.map(p => p.state + '/' + p.hit));
+    g = lab(2);
+    g.map.islands = [{ x0: 60, x1: 150, mergeX: 100 }]; g.mergeNext = [[999, 999]];
+    P(g, 0).ly = 1.5; P(g, 1).ly = 3;
+    for (const p of g.players) CM.setInput(g, p.id, K.thr);
+    run(g, 120);
+    ok(P(g, 0).hit === 'island' && P(g, 1).state === 'ride', '壓著中線騎進圓環沒有撞島');
     ok(pe0(g).every(e => typeof e.x === 'number' && typeof e.ly === 'number' && typeof e.t === 'number'), '出局事件沒有帶位置（伺服器 log 查不了在哪撞的）');
-    // 島是橢圓（2026-10-27 試玩：一般轉彎就被判撞到）：島頭、島尾的邊邊（畫面上是空的）不算撞；正中間才撞
+    // 島是中線上的扁橢圓：島頭、島尾的邊邊不算撞；正中間、靠中線才撞
     const I = { x0: 100, x1: 190 };
     const isl = { islands: [I] };
     ok(!CM.hitIsland(isl, I.x0 - 2, I.x0 + 6, 0.9) && !CM.hitIsland(isl, I.x1 - 6, I.x1 + 2, 2.1), '島頭島尾的邊邊（畫面上是空的）也算撞到');
-    ok(CM.hitIsland(isl, 141, 149, 0.9) && CM.hitIsland(isl, 141, 149, 2.1), '島的正中間騎上去沒撞到');
+    ok(CM.hitIsland(isl, 141, 149, 1.5) && CM.hitIsland(isl, 141, 149, 1.3) && CM.hitIsland(isl, 141, 149, 1.7), '島的正中間（中線附近）騎上去沒撞到');
+    ok(!CM.hitIsland(isl, 141, 149, 1) && !CM.hitIsland(isl, 141, 149, 2), '騎在第 1、2 道（繞圓環）也算撞島');
     // 試玩 log 那兩次（島 613～703）：ly 0.75 擦島頭、ly 1.05 擦島尾，畫面上幾乎沒碰到 → 不算
     const isl2 = { islands: [{ x0: 613, x1: 703 }] }, isl3 = { islands: [{ x0: 703, x1: 793 }] };
     ok(!CM.hitIsland(isl2, 626, 632, 0.75) && !CM.hitIsland(isl3, 787, 793, 1.05), '試玩時擦到島頭／島尾那兩次還是算撞到（太敏感）');
-    ok(!CM.hitIsland(isl, 141, 149, 0.5) && !CM.hitIsland(isl, 141, 149, 2.5), '騎在外側那道的中線就算撞到島（太嚴）');
+    ok(!CM.hitIsland(isl, 141, 149, 0.5) && !CM.hitIsland(isl, 141, 149, 2.5), '騎在兩道中間（離中線 1 道）就算撞到島（太嚴）');
     // 碰撞放寬：跟車子差 0.6 道（兩道中間偏一點）不算撞；前後擦到 1 點以內不算撞
     g = lab();
     g.cars.push({ id: 900, type: 'car', len: 12, lane: 1, ly: 1, x: 30, v0: 0, v: 0 });
@@ -245,14 +250,14 @@ console.log('— 模擬：撞車、圓環、施工、互撞 —');
     put(P(g), 20 - CM.BIKE_LEN + 0.8, 0);
     run(g, 2);
     ok(P(g).state === 'ride', '車頭跟前車只差不到 1 點（擦到邊）也算撞到');
-    // 中間兩道的車快到圓環會換到外側
+    // 中間兩道的車照常繞圓環（不用換到外側）
     g = lab();
     g.map.islands = [{ x0: 300, x1: 390, mergeX: 340 }]; g.mergeNext = [[999, 999]];
     put(P(g), -999);
     g.cars.push({ id: 900, type: 'car', len: 9, lane: 1, ly: 1, x: 200, v0: 20, v: 20 });
     g.cars.push({ id: 901, type: 'car', len: 9, lane: 2, ly: 2, x: 200, v0: 20, v: 20 });
     run(g, 200);
-    ok(g.cars[0].ly === 0 && g.cars[1].ly === 3, '中間兩道的車沒有繞到圓環外側：' + g.cars.map(c => c.ly));
+    ok(g.cars[0].ly === 1 && g.cars[1].ly === 2 && g.cars.every(c => c.x > 390), '中間兩道的車繞圓環時換道或卡住了：' + g.cars.map(c => c.ly + '@' + Math.round(c.x)));
     // 施工：最下面那道騎進去 → 撞到工程車；上一道沒事；最下面那道的車會提前往上換
     g = lab(2);
     P(g, 0).ly = 3; P(g, 1).ly = 2;
@@ -310,6 +315,9 @@ console.log('— 頁面的本地預測 —');
        '頁面本地預測的物理常數跟 commute-sim 不一樣（自己的車會先動到別的地方再被拉回來）：' + (m ? m[1] : '找不到 CM_PHYS'));
     // 中途離開再開一間：等待面板要重畫（不然留著上一場停用的「出發」鈕，2026-10-27 試玩）
     ok(/else \{ box\.style\.display='none'; document\.getElementById\('stairspanel'\)\.dataset\.h=''; \}/.test(src), '離開房間時沒清掉面板的快取（再開一間按出發沒反應）');
+    // 結算畫面（2026-10-27 改版）：每日結算是出勤卡（cmDayCard），一週結算有五天出勤點與獎項（cmWeekHtml，廣場、前線共用）
+    ok(/if\(cmDayEnd\) cmDayCard\(/.test(src) && /if\(commute\) h\+=cmWeekHtml\(end\.result, stairs\.meId\);/.test(src)
+       && /comEndPanel\(null,cmWeekHtml\(/.test(src) && /'全勤獎'/.test(src) && /'最常掛彩'/.test(src), '上班快遲到的每日／一週結算不是新版（出勤卡、獎項）');
     const mi = src.match(/const CM_ISL=\{ RY:([\d.]+), RX:([\d.]+) \};/);
     ok(mi && Number(mi[1]) === CM.ISLAND_RY && Number(mi[2]) === CM.ISLAND_RX, '畫面上圓環島的大小跟判定不一樣（看起來沒碰到卻撞了）');
     const ml = src.match(/CM_LEN=\[(\d+),(\d+),(\d+)\]/);

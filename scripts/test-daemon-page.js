@@ -1550,6 +1550,8 @@ setTimeout(async () => {
     ok(/const FRONT_GAMES=\[[^]*?\{ id:'commute'[^]*?\{ id:'duel'[^]*?\];/.test(src) && /if\(b\.dataset\.s==='duel'\)\{ miniClose\(\); mbDevStart\('com'\); return; \}/.test(src)
        && /else if\(kind==='commute'\) cmSoloDay\(0\);/.test(src), '前線的小遊戲沒有手動戰鬥、上班快遲到');
     ok(/const CMS=\$\{COMMUTE_SRC \? /.test(src), '頁面沒有內嵌上班快遲到的模擬（前線單機跑不了）');
+    // 前線小遊戲的舞台照畫布「顯示」的大小撐（手動戰鬥內部 552×432、顯示 69×54 格），跟廣場一樣大
+    ok(/const w=parseFloat\(cv\.style\.width\)\|\|cv\.width, h=parseFloat\(cv\.style\.height\)\|\|cv\.height;/.test(src), '前線小遊戲的舞台照畫布內部大小撐（手動戰鬥會比廣場大一圈）');
     // 進化凍結、自動戰鬥：撥動鈕，狀態跟著 /state 的 force（2026-10-27：兩顆鈕看不出現在的狀態）
     ok(/toggle: \{ key: 'freezeEvolve', on: 'freeze', off: 'unfreeze' \}/.test(src) && /toggle: \{ key: 'autoBattleOff', on: 'battleOn', off: 'battleOff', invert: true \}/.test(src)
        && /syncToggles\(s\.force\);/.test(src) && /force = \{ freezeEvolve: !!f\.freezeEvolve, autoBattleOff: !!f\.autoBattleOff \}/.test(src), '進化凍結／自動戰鬥不是撥動鈕（或沒跟著狀態）');
@@ -1580,7 +1582,9 @@ setTimeout(async () => {
        && src.indexOf("cv.addEventListener('pointerdown',e=>{ if(!rsAt(e)) return;") < src.indexOf("cv.addEventListener('pointerdown',e=>{ if(!vbPlaying()) return;"), '按住白旗時打排球會順便殺球（認輸的按下要比殺球先攔）');
     // 打排球：下樓梯的方向鍵只在下樓梯的房裡攔（原本連線打排球的 ← → 被吃掉）
     ok(/const sm=stMine\(\), stOn=\(stPlaying\(\)&&\(sm\.kind\|\|'stairs'\)==='stairs'\)\|\|\(comState&&comState\.kind==='stairs'\);/.test(src), '下樓梯的方向鍵在別的小遊戲（打排球）裡也被攔下');
-    ok(/g\.fillText\('×1',x\+w\*DS\.ZONE_15\/2,y0\+10\)/.test(src), '力度條的 ×1 沒寫在上方'); 
+    ok(/g\.fillText\('×1',x\+w\*DS\.ZONE_15\/2,y1\)/.test(src), '力度條的 ×1 沒寫在上方');
+    // 下方資訊欄：步驟字量過寬度、限制在左欄（2026-10-27：力度條上方的倍率跟步驟字疊在一起）
+    ok(/const MB_PX=200, MB_BACK=410;/.test(src) && /g\.fillText\(t,x,y1,Math\.max\(10,12\+room-x\)\)/.test(src), '手動戰鬥下方的步驟字沒有限制在左欄（會跟力度條的倍率疊在一起）'); 
     // 營地右鍵：顯示「獲得於」（這一隻變成現在這個角色的時間），不是「收於」（每次交換都重設，被誤會成獲得時間）
     ok(/gotAt: st\.lastEvolveAt \|\| st\.birthAt \|\| null,/.test(src) && /'<br>獲得於 '\+\s*\(hit\.gotAt\?new Date\(hit\.gotAt\)\.toLocaleString\(\):'—'\)/.test(src) && !/'<br>收於 '/.test(src),
        '營地右鍵選單顯示的不是這一隻的獲得時間');

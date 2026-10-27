@@ -78,6 +78,62 @@ console.log('— 判定 —');
     }
 }
 
+console.log('— 動作：攻擊／集氣／防禦（docs/plaza-duel-actions-spec.md）—');
+{
+    const P = (d, i, pk) => DS.normPick(d, i, pk);
+    // 預設是攻擊；集氣不能動、不發射
+    let d = DS.createDuel([40, 40]);
+    ok(P(d, 0, {}).act === 'atk' && P(d, 0, { act: 'x' }).act === 'atk', '沒選／亂選動作沒有預設成攻擊');
+    const pc = P(d, 0, { act: 'chg', mv: 1, aim: 0, p: 1 });
+    ok(pc.mv === 0 && pc.aim === null, '集氣還能移動或發射：' + JSON.stringify(pc));
+    ok(P(d, 0, { act: 'def', mv: 1 }).mv === 1 && P(d, 0, { act: 'def', aim: 0 }).aim === null, '防禦不能動（或還會發射）');
+    // 集氣成功 → 下一發 ×1.5，用掉
+    d = DS.createDuel([40, 40]);   // 攻擊 10
+    let L = DS.resolve(d, [P(d, 0, { act: 'chg' }), P(d, 1, { act: 'atk', mv: 0, aim: 0 })]);   // B 打歪（A 在 1 列）
+    ok(!L.hit[0] && d.charged[0] && !L.chgFail[0], '集氣沒被打中卻沒集好');
+    L = DS.resolve(d, [P(d, 0, { act: 'atk', mv: 0, aim: 1, p: 0 }), P(d, 1, { act: 'atk', mv: 0, aim: 0 })]);
+    ok(L.hit[1] && L.dmg[0] === 15 && L.cshot[0] && d.hp[1] === 25 && !d.charged[0], '集氣後的攻擊不是 ×1.5（或沒用掉）：' + JSON.stringify(L));
+    // 集氣打歪也用掉
+    d = DS.createDuel([40, 40]); d.charged = [true, false];
+    DS.resolve(d, [P(d, 0, { act: 'atk', mv: 0, aim: 0 }), P(d, 1, { act: 'def' })]);
+    ok(!d.charged[0], '集氣打歪了還留著');
+    // 集氣被打中 → 失敗、照樣扣血
+    d = DS.createDuel([40, 40]);
+    L = DS.resolve(d, [P(d, 0, { act: 'chg' }), P(d, 1, { act: 'atk', mv: 0, aim: 1, p: 0 })]);
+    ok(L.hit[0] && L.chgFail[0] && !d.charged[0] && d.hp[0] === 30, '集氣被打中沒有失敗（或沒扣血）');
+    // 防禦擋下：不扣血、回 1/3（不超過上限）
+    d = DS.createDuel([40, 40]); d.hp = [20, 40];
+    L = DS.resolve(d, [P(d, 0, { act: 'def', mv: 0 }), P(d, 1, { act: 'atk', mv: 0, aim: 1, p: 1 })]);
+    ok(L.block[0] && L.heal[0] === 14 && d.hp[0] === 34 && !L.broke[0], '防禦擋下沒有回 1/3 血（或還扣血）：' + JSON.stringify(L));
+    d = DS.createDuel([40, 40]); d.hp = [35, 40];
+    L = DS.resolve(d, [P(d, 0, { act: 'def', mv: 0 }), P(d, 1, { act: 'atk', mv: 0, aim: 1 })]);
+    ok(d.hp[0] === 40 && L.heal[0] === 5, '回血超過最大血量');
+    // 防禦沒被打中：什麼都不發生
+    d = DS.createDuel([40, 40]); d.hp = [20, 40];
+    DS.resolve(d, [P(d, 0, { act: 'def', mv: 1 }), P(d, 1, { act: 'atk', mv: 0, aim: 1 })]);
+    ok(d.hp[0] === 20, '防禦沒被打中也回血');
+    // 集氣過的子彈破防：照樣扣（×1.5）、不回
+    d = DS.createDuel([40, 40]); d.charged = [false, true];
+    L = DS.resolve(d, [P(d, 0, { act: 'def', mv: 0 }), P(d, 1, { act: 'atk', mv: 0, aim: 1, p: 0 })]);
+    ok(L.broke[0] && !L.block[0] && d.hp[0] === 25 && L.heal[0] === 0, '集氣的攻擊沒有破防：' + JSON.stringify(L));
+    // 防禦不能連續兩回合
+    ok(!DS.okAct(d, 0, 'def') && DS.okAct(d, 0, 'atk') && DS.okAct(d, 0, 'chg') && DS.okAct(d, 1, 'def'), '防禦可以連續用');
+    ok(P(d, 0, { act: 'def' }).act === 'atk', '連續防禦沒有換成預設（攻擊）');
+    DS.resolve(d, [P(d, 0, { act: 'chg' }), P(d, 1, { act: 'chg' })]);
+    ok(DS.okAct(d, 0, 'def'), '隔一回合還不能防禦');
+    // 只有一邊攻擊：不會對波
+    d = DS.createDuel([40, 40]);
+    L = DS.resolve(d, [P(d, 0, { act: 'def', mv: 0 }), P(d, 1, { act: 'atk', mv: 0, aim: 1 })]);
+    ok(!L.clash, '防禦的人沒發射也算對波');
+    // 電腦：動作合法（不連續防禦、集氣不動），集氣好了一定攻擊
+    d = DS.createDuel([40, 40]); d.lastAct = [null, 'def'];
+    let badA = 0; const acts = new Set();
+    for (let i = 0; i < 300; i++) { const p = DS.randomPick(d, 1); acts.add(p.act); if (p.act === 'def' || (p.act === 'chg' && p.mv !== 0)) badA++; }
+    ok(badA === 0 && acts.has('atk') && acts.has('chg'), '電腦剛防禦過還防禦（或集氣時移動）');
+    d.lastAct = [null, null]; d.charged = [false, true];
+    ok([...Array(100)].every(() => DS.randomPick(d, 1).act === 'atk'), '電腦集氣好了沒有攻擊');
+}
+
 (async () => {
     console.log('— 伺服器 —');
     const T = { duelOpenMs: 60, duelPickMs: 500, duelAnimMs: 60, duelEndMs: 60 };
@@ -141,6 +197,8 @@ console.log('— 判定 —');
         ok(!(await b.stairs('dpick', { mv: 2 })).ok && !(await b.stairs('dpick', { aim: 3 })).ok && !(await b.stairs('dpick', { p: 1.5 })).ok,
            '不合法的選擇也收');
         ok(!(await c.stairs('dpick', { mv: 0 })).ok, '不在對戰裡的人也能選');
+        ok(!(await b.stairs('dpick', { act: 'jump' })).ok, '不合法的動作也收');
+        ok('charged' in duelOf(b) && 'lastAct' in duelOf(b), '房間資料沒有集氣狀態／上回合動作（畫氣焰、灰掉防禦用）');
         // 兩邊都選好 → 馬上結算：A 往下打 0 列、B 往上移到 0 列 → A 打中 B（25）
         ok((await b.stairs('dpick', { mv: -1, aim: 2, p: 0 })).ok, '第二個人選不了');
         ok(await until(() => seen.a.some(([k, d]) => k === 'duel' && d.last && d.last.round === 1)), '結算沒有推 duel:round');

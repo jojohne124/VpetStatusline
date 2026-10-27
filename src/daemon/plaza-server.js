@@ -594,7 +594,8 @@ function createPlazaServer(opts = {}) {
                               // 手動戰鬥：雙方選了什麼不公開（只給「選好了沒」），回合結算後才在 last 裡
                               duel: r.duel ? { sides: r.duel.sides, str: r.duel.str, hp: r.duel.hp, max: r.duel.max, row: r.duel.row,
                                                round: r.duel.round, bg: r.duel.bg, startAt: r.duel.startAt, deadline: r.duel.deadline,
-                                               picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner } : null,
+                                               picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner,
+                                               charged: r.duel.charged, lastAct: r.duel.lastAct } : null,   // 集氣好了沒（有氣焰，看得到）、上回合動作（防禦不能連續）
                               gomoku: r.gomoku ? { board: r.gomoku.board.join(''), turn: r.gomoku.turn, sides: r.gomoku.sides,
                                                    last: r.gomoku.last, expr: r.gomoku.expr, exprAt: r.gomoku.exprAt,
                                                    winner: r.gomoku.winner, n: GOMOKU_N,
@@ -1020,10 +1021,11 @@ function createPlazaServer(opts = {}) {
         if (t < open || t >= d.deadline) return { status: 409, body: { ok: false, error: '還不能選' } };
         if (d.picks[i]) return { status: 409, body: { ok: false, error: '這回合已經選好了' } };
         const has = (k) => body[k] !== undefined && body[k] !== null;
-        const mv = Number(body.mv), aim = Number(body.aim), p = Number(body.p);
+        const mv = Number(body.mv), aim = Number(body.aim), p = Number(body.p), act = has('act') ? String(body.act) : undefined;
         if ((has('mv') && !DS.okMove(d, i, mv)) || (has('aim') && ![0, 1, 2].includes(aim))
-            || (has('p') && !(p >= 0 && p <= 1))) return { status: 400, body: { ok: false, error: '選擇不合法' } };
-        d.picks[i] = { mv: has('mv') ? mv : undefined, aim: has('aim') ? aim : undefined, p: has('p') ? p : undefined };
+            || (has('p') && !(p >= 0 && p <= 1)) || (act !== undefined && !DS.ACTS.includes(act))) return { status: 400, body: { ok: false, error: '選擇不合法' } };
+        if (act !== undefined && !DS.okAct(d, i, act)) return { status: 409, body: { ok: false, error: '不能連續兩回合防禦' } };
+        d.picks[i] = { act, mv: has('mv') ? mv : undefined, aim: has('aim') ? aim : undefined, p: has('p') ? p : undefined };
         if (d.picks[0] && d.picks[1]) duelResolve(r);
         else roomsChanged();   // 讓對手看到「已選好」
         return { status: 200, body: { ok: true } };

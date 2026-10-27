@@ -62,14 +62,18 @@ function rng(seed) {
 // 一週一個 seed，每天從它推出當天的 seed（五天路況都不同，但大家一樣）
 const daySeed = (seed, day) => (Math.imul((seed >>> 0) ^ 0x9E3779B9, day + 1) + day * 7919) >>> 0;
 
-/** 一天的難度（day：0 = 週一 … 4 = 週五）：越後面越塞、紅燈越長 */
-function difficulty(day) {
-    const d = Math.max(0, Math.min(DAYS - 1, day | 0));
+// 人多車少（2026-10-27）：玩家自己就是障礙物（車子讓玩家、玩家互撞兩個都出局），每多一個人，車距、圓環匯入間隔各多 CROWD。
+// 只動車流，紅綠燈、圓環、施工（地形）不變；同一房大家人數一樣，路況照樣一模一樣
+const CROWD = 0.15;
+const crowdOf = (n) => 1 + CROWD * (Math.max(1, Math.min(LANES, n | 0 || 1)) - 1);
+/** 一天的難度（day：0 = 週一 … 4 = 週五）：越後面越塞、紅燈越長。n：房裡幾個人（人多車少） */
+function difficulty(day, n = 1) {
+    const d = Math.max(0, Math.min(DAYS - 1, day | 0)), k = crowdOf(n);
     return {
-        gap: [120 - 10 * d, 210 - 18 * d],   // 同一道相鄰兩台車的間距（2026-10-27 試玩：太密，放寬）
+        gap: [(120 - 10 * d) * k, (210 - 18 * d) * k],   // 同一道相鄰兩台車的間距（2026-10-27 試玩：太密，放寬）
         truck: 0.12 + 0.05 * d, van: 0.22,   // 卡車、貨車的比例（其餘汽車）
         red: 3 + 0.75 * d,                   // 紅燈秒數
-        merge: 7 - 0.8 * d,                  // 圓環支線每幾秒匯入一台
+        merge: (7 - 0.8 * d) * k,            // 圓環支線每幾秒匯入一台
         len: 2500 + 100 * d,                 // 路多長
         works: d === 0 ? 0 : d < 3 ? 1 : 2,  // 施工幾處（週一沒有）
     };
@@ -137,8 +141,8 @@ function addCar(g, type, lane, x, v, extra) {
  */
 function createDay({ seed = 1, day = 0, players = [] } = {}) {
     const s = daySeed(seed, day), r = rng(s ^ 0xA5A5A5A5);
-    const df = difficulty(day), map = makeMap(s, day);
-    const g = { seed: s, day, rand: r, map, tick: 0, t: -COUNTDOWN_S, nextId: 0, cars: [], players: [], over: false,
+    const n = players.length || 1, df = difficulty(day, n), map = makeMap(s, day);
+    const g = { seed: s, day, n, rand: r, map, tick: 0, t: -COUNTDOWN_S, nextId: 0, cars: [], players: [], over: false,
                 mergeNext: map.islands.map(() => [df.merge * r(), df.merge * r()]), events: [] };
     // 開局的車流：每一道從前面一點開始往後鋪到終點
     for (let lane = 0; lane < LANES; lane++) {
@@ -212,7 +216,7 @@ function stepCars(g) {
         c.x = nf - c.len;
     }
     // 圓環支線：上下兩路各自定時匯入一台（從馬路外面擠進外側車道）
-    const df = difficulty(g.day);
+    const df = difficulty(g.day, g.n);
     map.islands.forEach((I, k) => {
         for (const side of [0, 1]) {
             if (g.t < g.mergeNext[k][side]) continue;
@@ -347,5 +351,5 @@ const mapPub = (g) => ({ day: g.day, len: g.map.len, lights: g.map.lights.map(L 
 
 module.exports = {
     DT, TICK_MS, LANES, DAYS, COUNTDOWN_S, DAY_S, CLOCK0, BIKE_LEN, VMAX, ACC, DRAG, SOFT, BRAKE, HARD, HARD_V, VMOVE, LANE_V, HIT_LY, HIT_PAD, FOLLOW_LY, ISLAND_RY, ISLAND_RX, VEH, VEH_NAME, LIGHT, ISLAND_LEN, WORK_LEN, KEY,
-    hitIsland, rng, daySeed, difficulty, makeMap, lightAt, createDay, setInput, step, news, clock, rankWeek, snapshot, mapPub,
+    CROWD, hitIsland, rng, daySeed, difficulty, makeMap, lightAt, createDay, setInput, step, news, clock, rankWeek, snapshot, mapPub,
 };

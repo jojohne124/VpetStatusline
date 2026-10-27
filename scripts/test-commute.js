@@ -85,6 +85,25 @@ console.log('— 模擬：基本 —');
     ok(maxB < 2500, '每拍的狀態太大：' + maxB + ' bytes');
 }
 
+console.log('— 模擬：人多車少 —');
+{
+    // 每多一個人，車距、圓環匯入間隔各多 CROWD；一個人照舊
+    const d1 = CM.difficulty(2, 1), d4 = CM.difficulty(2, 4);
+    ok(CM.difficulty(2).gap.join() === d1.gap.join() && Math.abs(d4.gap[0] / d1.gap[0] - (1 + 3 * CM.CROWD)) < 1e-9
+       && Math.abs(d4.merge / d1.merge - (1 + 3 * CM.CROWD)) < 1e-9, '車距／匯入間隔沒有照人數放寬');
+    ok(d4.red === d1.red && d4.len === d1.len && d4.works === d1.works, '人數改到地形（紅燈、路長、施工）');
+    // 同一個 seed：四個人的車比一個人的少，地圖一樣
+    let c1 = 0, c4 = 0, same = true;
+    for (let seed = 1; seed <= 10; seed++) {
+        const g1 = CM.createDay({ seed, day: 3, players: [{ id: 'a' }] });
+        const g4 = CM.createDay({ seed, day: 3, players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] });
+        c1 += g1.cars.length; c4 += g4.cars.length;
+        if (JSON.stringify(CM.mapPub(g1)) !== JSON.stringify(CM.mapPub(g4))) same = false;
+    }
+    ok(c4 < c1 * 0.8, `四個人的車沒有變少（1 人 ${c1} 台、4 人 ${c4} 台）`);
+    ok(same, '人數不同，地圖（紅綠燈、圓環、施工）也跟著變了');
+}
+
 console.log('— 模擬：油門、煞車、上下移動 —');
 {
     // X 油門：加到最快；放掉：引擎煞車慢慢掉

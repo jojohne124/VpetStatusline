@@ -33,6 +33,8 @@ function makeUpdateBundle(version) {
     const B = require('../src/shared/update-bundle.js');
     const buf = B.pack(DIST, version);
     const manifest = B.sign(buf, version, fs.readFileSync(KEY_FILE, 'utf8'));
+    // 發布時間（不在簽章範圍內，只拿來比新舊）：裝了搶先版的人，要正式版比搶先版新才換回來（scripts/pack-prerelease.js）
+    manifest.builtAt = Date.now();
     fs.mkdirSync(UPDATE_DIR, { recursive: true });
     fs.writeFileSync(path.join(UPDATE_DIR, 'bundle.bin.tmp'), buf);
     fs.renameSync(path.join(UPDATE_DIR, 'bundle.bin.tmp'), path.join(UPDATE_DIR, 'bundle.bin'));

@@ -89,6 +89,22 @@ const put = (dir, rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel))
     ok(fs.readFileSync(path.join(t, 'src/daemon/daemon.js'), 'utf8') === '// old daemon\n', '簽章不對還是寫了檔案');
     ok(U.localVersion(t) === 'v1', '簽章不對，VERSION 卻被改了');
 
+    // 搶先版（pack-prerelease 的 zip）：正式版沒比它新就不換回去；比它新才換，而且拿掉 PRERELEASE
+    {
+        const preTree = (builtAt) => { const d = mkTree('abc-pre'); put(d, 'PRERELEASE', JSON.stringify({ builtAt }) + '\n'); return d; };
+        const pub = (builtAt) => { const mm = B.sign(buf, 'v2', K.priv); if (builtAt != null) mm.builtAt = builtAt;
+            fs.writeFileSync(path.join(updDir, 'bundle.bin'), buf); fs.writeFileSync(path.join(updDir, 'manifest.json'), JSON.stringify(mm)); };
+        pub(null); t = preTree(1000);
+        r = await U.run(opts(t));
+        ok(r.code === U.EXIT_NONE && U.localVersion(t) === 'abc-pre', '搶先版被沒有發布時間的（舊的）正式版蓋回去了');
+        pub(500); r = await U.run(opts(t));
+        ok(r.code === U.EXIT_NONE && U.localVersion(t) === 'abc-pre', '搶先版被比它舊的正式版蓋回去了');
+        pub(2000); r = await U.run(opts(t));
+        ok(r.code === U.EXIT_UPDATED && U.localVersion(t) === 'v2' && !fs.existsSync(path.join(t, 'PRERELEASE')),
+           '正式版比搶先版新卻沒換回正式版（或沒拿掉 PRERELEASE）：' + JSON.stringify(r));
+        pub(null);
+    }
+
     // 開發樹（沒有 RELEASE）絕對不能自己更新
     t = mkTree('v1'); fs.unlinkSync(path.join(t, 'RELEASE'));
     r = await U.run(opts(t));

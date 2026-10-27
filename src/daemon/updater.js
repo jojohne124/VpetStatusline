@@ -56,6 +56,9 @@ async function fetchManifest(base, timeoutMs = MANIFEST_TIMEOUT_MS) {
 
 const localVersion = (root) => { try { return fs.readFileSync(path.join(root, 'VERSION'), 'utf8').trim(); } catch (e) { return ''; } };
 const isRelease = (root) => fs.existsSync(path.join(root, 'RELEASE'));
+// 搶先版（scripts/pack-prerelease.js 打的 zip，給特定同事手動裝）：PRERELEASE 記打包時間。
+// 正式版的 manifest 帶發布時間（builtAt），比搶先版新才換回正式版；不然一開 vpet 就被更新回舊的正式版
+const preInfo = (root) => { try { const j = JSON.parse(fs.readFileSync(path.join(root, 'PRERELEASE'), 'utf8')); return { builtAt: Number(j.builtAt) || 0 }; } catch (e) { return null; } };
 // 檔案被別的程式占用（Windows 上載入中的 dll）時 rename 會丟的錯
 const LOCKED = ['EPERM', 'EBUSY', 'EACCES'];
 const OLD_SUFFIX = '.vpet-old';
@@ -82,6 +85,8 @@ async function run(opts = {}) {
     const m = await fetchManifest(base);
     if (!m) return { code: EXIT_NONE, from, why: '連不上更新來源' };
     if (m.version === from) return { code: EXIT_NONE, from, why: '已是最新' };
+    const pre = preInfo(root);
+    if (pre && !(Number(m.builtAt) > pre.builtAt)) return { code: EXIT_NONE, from, why: '搶先版（正式版還沒比這版新）' };
 
     const fail = (error) => record({ ok: false, code: EXIT_FAILED, from, to: m.version, error });
     let buf;
@@ -131,6 +136,7 @@ async function run(opts = {}) {
     const r = spawnSync(opts.node || process.execPath, args, { cwd: root, encoding: 'utf8', timeout: 120000 });
     if (r.status !== 0) return fail('install 失敗：' + ((r.stderr || r.stdout || '').trim().split('\n').pop() || r.status));
 
+    try { fs.unlinkSync(path.join(root, 'PRERELEASE')); } catch (e) {}   // 換回正式版了：搶先版的標記拿掉
     return record({ ok: true, code: EXIT_UPDATED, from, to: m.version });
 }
 

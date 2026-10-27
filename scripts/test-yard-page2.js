@@ -70,18 +70,27 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         console.log('— 出戰（贏）—');
         ok(!(await cmd('page2Fight', { which: 'nobody' })).ok, '指定不存在的那隻也能出戰');
         await cmd('page2Dev', { act: 'win' });
+        edit(r => { r.page2Losses = 3; });   // 之前輸過三場：這場 +15%，打贏要清掉
         ok((await cmd('page2Fight', { which: 'p1' })).ok, '出戰失敗');
+        ok(ranch().page2Fight.bonus === 0.15, '輸過三場，勝率沒有 +15%');
         ok(!(await cmd('page2Fight', { which: 'p2' })).ok, '已經在打了還能再派一隻');
         ok(ranch().page2Fight && ranch().page2Fight.id === 'p1' && ranch().page2Fight.win === true, '出戰沒記下是誰、勝負');
         await wait(900);
         y = await yard();
         ok(y.event && y.event.stage === 'fight' && Array.isArray(y.event.battle.lines) && y.event.battle.lines.length, '戰鬥中沒有蓋版的戰鬥畫面');
         ok(y.event.fighter && y.event.fighter.id === 'p1', '戰鬥畫面不知道派的是誰');
+        ok(/[^\x00-\x7f]/.test(y.event.fighter.name || ''), '戰鬥畫面派出去那隻的名字不是繁中名：' + y.event.fighter.name);
         edit(r => { r.page2Fight.startStep -= 1000; });   // 快轉到打完
         y = await yard();
         ok(y.event && y.event.stage === 'result' && y.event.win === true, '打完沒有結算成「贏」');
         const r1 = ranch();
         ok(!!r1.page2At && !r1.page2Quest && !r1.page2Fight, '贏了沒解鎖／事件沒清乾淨');
+        // 送的哈哈獸要進圖鑑（2026-10-27 回報：得到了、圖鑑沒有）；這隻的 albumKey 先記好，之後換到前線不會再多算一次
+        const alb = JSON.parse(fs.readFileSync(path.join(SD, 'album.json'), 'utf8'));
+        const gift = r1.pets.find(p => p.id === r1.page2RewardId);
+        ok(alb.chars.keramon && alb.counts && alb.counts.keramon === 1, '解鎖送的哈哈獸沒有進圖鑑：' + JSON.stringify(alb));
+        ok(gift && gift.state.albumKey === 'keramon@' + gift.state.lastEvolveAt, '送的哈哈獸沒記 albumKey（換到前線會再算一次）');
+        ok(!r1.page2Losses, '打贏了，輸的場數沒清掉');
         ok(r1.pets.length === 5 && r1.pets[4].state.characterId === 'keramon', '贏了營地第 5 格沒有 Keramon');
         ok(y.event.keramonId === r1.pets[4].id && y.event.keramonPage === 1, '結果沒告訴前端 Keramon 在第二頁（鏡頭要帶過去）');
         // 還沒演完（page2Ack 前）Keramon 不能露面：兩頁都不畫牠，前端沒帶 ?drop= 也一樣
@@ -130,6 +139,7 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         y = await yard();
         ok(y.event && y.event.stage === 'result' && y.event.win === false && !y.event.exiting, '輸了沒結算、或還沒講完就開始退場');
         ok(!ranch().page2Quest, '輸了要從打 Diablomon 重來（事件要清掉）');
+        ok(ranch().page2Losses === 1, '輸了沒記下輸的場數（越挫越勇 +5% 用）');
         ok(y.enemy && y.pets.length === 4, '輸了的畫面要停在對峙（Armagemon 還在）');
         ok(ranch().pets.length === 5, '輸了不該動到營地成員');
         await cmd('page2Ack');
@@ -146,6 +156,15 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         y = await yard();
         ok(y.event && y.event.stage === 'result' && y.event.win === false && y.event.gaveUp, '放棄要視同戰敗');
         ok(!ranch().page2Quest, '放棄後事件沒清掉（要從 Diablomon 重來）');
+        ok(ranch().page2Losses === 1, '放棄也算進輸的場數了（沒有真的打）');
+        // 越挫越勇：輸過一場 → 這場勝率 +5%；再輸 → 記成 2
+        await cmd('page2Dev', { act: 'quest' }); await cmd('page2Dev', { act: 'lose' });
+        ok((await cmd('page2Fight', { which: 'p0' })).ok, '輸過之後再出戰失敗');
+        const f2 = ranch().page2Fight;
+        ok(f2 && f2.bonus === 0.05 && f2.prob >= 0.1 && f2.prob <= 0.95, '輸過一場，這場勝率沒有 +5%：' + JSON.stringify(f2));
+        edit(r => { r.page2Fight.startStep -= 1000; });
+        await yard();
+        ok(ranch().page2Losses === 2, '再輸一場沒有累加');
 
         console.log('— dev 重置：可以反覆測 —');
         edit(r => { r.pets.push({ id: 'mine', keptAt: 9, state: { characterId: 'keramon' } }); });   // 玩家自己養的
@@ -153,19 +172,47 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         ok(rid && ranch().pets.some(p => p.id === rid), '前提不成立：解鎖送的 Keramon 不在營地');
         ok((await cmd('page2Dev', { act: 'reset' })).ok, 'dev 重置失敗');
         const rr = ranch();
-        ok(!rr.page2At && !rr.page2Quest && !rr.page2Result && !rr.page2RewardId, '重置後事件旗標沒清乾淨');
+        ok(!rr.page2At && !rr.page2Quest && !rr.page2Result && !rr.page2RewardId && !rr.page2Losses, '重置後事件旗標沒清乾淨');
         ok(!rr.pets.some(p => p.id === rid), '重置後解鎖送的 Keramon 還在（重測時營地會超過 4 隻）');
         ok(rr.pets.some(p => p.id === 'mine'), '重置把玩家自己養的 Keramon 也收走了');
         ok(rr.pets.length === 5, '重置動到了其他營地成員');
 
-        console.log('— dev 只在開發版 —');
+        console.log('— 台詞、mini 的選角 —');
+        const T = require('../src/daemon/page2-talk.js');
+        ok(!/Diablomon|Armagemon|Keramon/i.test(JSON.stringify(T)), '事件台詞還有英文角色名（要用繁中名）');
         const src = fs.readFileSync(path.join(REPO, 'src/daemon/daemon.js'), 'utf8');
+        // 原則：事件演出一律放舞台下方，永遠不蓋住上面的畫面（2026-10-27 定）。不能有「置中」的退路；小視窗撐高 body 下內距、關掉縮回
+        const sp = (src.match(/function storyPlace\(\)\{[^]*?\n\}/) || [''])[0];
+        ok(sp && !/\(H-ph\)\/2/.test(sp) && /p\.style\.top=Math\.round\(st\.bottom\+10\)\+'px'/.test(sp) && /st\.bottom\+window\.scrollY\+10/.test(sp),
+           '助手對話框不是一律放在舞台下方（會蓋住營地／廣場）');
+        ok(/document\.body\.style\.paddingBottom=\(IN_MINI\|\|!fits\)\?/.test(sp) && /document\.body\.style\.paddingBottom='';/.test(src), '小視窗沒有撐高（或關掉沒縮回）');
+
+        console.log('— dev 只在開發版 —');
         ok(/const DEV_ONLY\s*=\s*new Set\(\[[^\]]*'page2Dev'/.test(src), 'page2Dev 沒列在 DEV_ONLY（release 版也能強制解鎖）');
     } catch (e) {
         fail++; console.log('  ✗ 例外：' + e.stack);
     } finally {
         d.kill(); await wait(400);
         try { fs.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
+    }
+    console.log('— 修正前就解鎖的人：圖鑑補登哈哈獸 —');
+    {
+        const SD2 = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-page2b-'));
+        fs.writeFileSync(path.join(SD2, 'ranch.json'), JSON.stringify({ v: 1, page2At: 1, page2RewardId: 'k',
+            pets: [{ id: 'k', keptAt: 1, state: { characterId: 'keramon', birthAt: 1, lastEvolveAt: 1 } }] }));
+        fs.writeFileSync(path.join(SD2, 'color-state.json'), JSON.stringify({ characterId: 'greymon' }));
+        fs.writeFileSync(path.join(SD2, 'hook.json'), JSON.stringify({ ts: 1 }));
+        const P2 = 3192;
+        const d2 = spawn(process.execPath, [path.join(REPO, 'src/daemon/daemon.js'), '--isolated'],
+            { env: { ...process.env, AGUMON_DAEMON_PORT: String(P2), AGUMON_STATE_DIR: SD2, AGUMON_YARD_LAYOUTS: path.join(SD2, 'none.json') }, stdio: 'ignore' });
+        const get2 = (p) => new Promise((res, rej) => http.get({ host: '127.0.0.1', port: P2, path: p }, s => { let d = ''; s.on('data', c => d += c); s.on('end', () => res(d)); }).on('error', rej));
+        try {
+            let up = false;
+            for (let i = 0; i < 150 && !up; i++) { try { await get2('/state'); up = true; } catch (e) { await wait(100); } }
+            await get2('/yard');
+            let alb = {}; try { alb = JSON.parse(fs.readFileSync(path.join(SD2, 'album.json'), 'utf8')); } catch (e) {}
+            ok(alb.chars && alb.chars.keramon, '已經解鎖、營地有哈哈獸，圖鑑卻沒補登');
+        } finally { d2.kill(); await wait(400); try { fs.rmSync(SD2, { recursive: true, force: true }); } catch (e) {} }
     }
     console.log(`\n結果：${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);

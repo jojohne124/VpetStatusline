@@ -674,20 +674,20 @@ console.log('— 營地第二頁（核心）—');
     for (let s = 1; s <= 400 && !met; s++) if (core.chooseBattleEnemy('wargreymon', s * 7919, null, { total: 0, wins: 0 }) === 'diablomon') met = true;
     const inRoster = core.characterExists('diablomon') && JSON.parse(fs.readFileSync(path.join(path.dirname(INSTALLED), 'assets', 'roster.json'), 'utf8')).roster.includes('diablomon');
     ok(met === inRoster, inRoster ? 'Diablomon 在 roster，Ultimate 卻遇不到' : '開關關著，Ultimate 卻遇到 Diablomon');
-    // 營地滿 4 隻在等解鎖 → Diablomon 找上門（每場先擲 10%）；其他時候照平均抽
+    // 營地滿 4 隻在等解鎖 → Diablomon 找上門（每場先擲 20%）；其他時候照平均抽
     if (inRoster) {
         const N = 3000, rate = (ranch, opt = {}, me = 'wargreymon', bs = { total: 0, wins: 0 }) => {
             let k = 0;
             for (let s = 1; s <= N; s++) if (core.chooseBattleEnemy(me, s * 7919, null, bs, { ranch, enabled: true, ...opt }) === 'diablomon') k++;
             return k / N;
         };
-        ok(core.PAGE2_BOSS_CHANCE === 0.1, '找上門的機率不是 10%');
+        ok(core.PAGE2_BOSS_CHANCE === 0.2, '找上門的機率不是 20%');
         const full = four();
         ok(core.page2BossWanted(full) && !core.page2BossWanted(r) && !core.page2BossWanted({ pets: [{}, {}, {}] }),
            '「營地滿了在等解鎖」判斷錯（沒滿、或已解鎖也算）');
         ok(!core.page2BossWanted({ ...full, page2Quest: { at: 1 } }), '已經打贏在等第二階段，還在加成 Diablomon');
         const hi = rate(full), lo = rate(r), off = rate(full, { enabled: false }), none = rate(null);
-        ok(hi > 0.09 && hi < 0.15, `營地滿了遇到 Diablomon 的機率 ${(hi * 100).toFixed(1)}%，不是約 10%＋平均抽的那份`);
+        ok(hi > 0.18 && hi < 0.25, `營地滿了遇到 Diablomon 的機率 ${(hi * 100).toFixed(1)}%，不是約 20%＋平均抽的那份`);
         ok(lo < 0.04, `已解鎖還在加成 Diablomon（${(lo * 100).toFixed(1)}%）`);
         ok(off < 0.04 && none < 0.04, '開關關著、或沒給營地時也在加成 Diablomon');
         ok(rate(full, {}, 'agumon') === 0, 'Child 也被 Diablomon 找上門（只有 Ultimate 以上遇得到）');

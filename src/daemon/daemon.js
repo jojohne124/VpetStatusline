@@ -1027,7 +1027,35 @@ function yardFeastNow(festQ) {
 //   page2Fight  挑好一隻、開打（勝負在開打那一刻就決定，跟一般戰鬥一樣）
 //   page2Result 打完／放棄的結果，前端演完結果那段（對話、鏡頭、空降）再 page2Ack 清掉
 let page2ForceWin = null;   // dev：下一場強制勝／敗（null = 照機率）
+// 越挫越勇（2026-10-27：同事打 Armagemon 一直輸）：每輸一場，之後打牠的勝率 +5%（上限照一般戰鬥的 95%）。
+// 輸的場數記在 ranch.page2Losses，從 Diablomon 重來也留著；打贏（解鎖）才清掉。放棄不算（沒有真的打）
+const PAGE2_LOSS_BONUS = 0.05;
 
+// 送哈哈獸：營地裡直接多一隻，從沒當過現役 → 走 recordAlbumIfChanged 那條永遠不會進圖鑑（2026-10-27 回報）。
+// 送的當下就登錄；這隻的 albumKey 也先記好，之後換到前線不會再多算一次
+function page2GrantAlbum(ranch) {
+    const id = core.page2Grant(ranch);
+    page2AlbumFixed = true;
+    try {
+        core.recordAlbumChar(core.PAGE2_REWARD);
+        const p = ranch.pets.find(x => x.id === id);
+        if (p && core.albumKeyOf) p.state.albumKey = core.albumKeyOf(p.state);
+    } catch (e) {}
+    return id;
+}
+// 修正前就解鎖的人：哈哈獸在營地、圖鑑卻沒有 → 補登（每次 daemon 啟動檢查一次）
+let page2AlbumFixed = false;
+function page2AlbumFix(ranch) {
+    if (page2AlbumFixed) return;
+    page2AlbumFixed = true;
+    try {
+        if (!core.page2Unlocked(ranch) || core.loadAlbum().chars[core.PAGE2_REWARD]) return;
+        if ((ranch.pets || []).some(p => p.state && p.state.characterId === core.PAGE2_REWARD) || ranch.page2RewardId) {
+            core.recordAlbumChar(core.PAGE2_REWARD);
+            console.log('   📖 圖鑑補登：' + zhName(core.PAGE2_REWARD) + '（解鎖時送的，之前沒登錄）');
+        }
+    } catch (e) {}
+}
 function page2StartFight(which) {
     const ranch = core.loadRanch();
     if (!ranch.page2Quest) return { ok: false, error: '現在沒有挑戰' };
@@ -1036,12 +1064,13 @@ function page2StartFight(which) {
     const cid = pet && pet.state && pet.state.characterId;
     if (!cid) return { ok: false, error: '這隻不在營地裡' };
     const F = core.PAGE2_FINAL, seed = Date.now();
-    // 營地裡的桌寵以收進去時的戰力（凍結的 state）算勝率，跟一般戰鬥同一條公式
-    const win = page2ForceWin != null ? page2ForceWin
-              : core.seedRand01(seed) < core.computeWinProb(cid, pet.state, F);
+    // 營地裡的桌寵以收進去時的戰力（凍結的 state）算勝率，跟一般戰鬥同一條公式；再加上越挫越勇
+    const bonus = PAGE2_LOSS_BONUS * (ranch.page2Losses || 0);
+    const prob = Math.min(0.95, core.computeWinProb(cid, pet.state, F) + bonus);
+    const win = page2ForceWin != null ? page2ForceWin : core.seedRand01(seed) < prob;
     page2ForceWin = null;
     ranch.page2Fight = { id: which, char: cid, win, version: core.pickBattleVersion(cid, F),
-                         startStep: plazaStep() + 1 };
+                         startStep: plazaStep() + 1, prob: Math.round(prob * 100) / 100, bonus: Math.round(bonus * 100) / 100 };
     ranch.page2Quest.seen = true;
     core.saveRanch(ranch);
     return { ok: true, action: 'page2Fight' };
@@ -1061,8 +1090,8 @@ function page2Settle(ranch, step) {
     if (!f || step - f.startStep < core.battleLength(f.version)) return false;
     delete ranch.page2Fight;
     let keramonId = null;
-    if (f.win) keramonId = core.page2Grant(ranch);
-    else delete ranch.page2Quest;          // 輸了：從打 Diablomon 重來
+    if (f.win) { keramonId = page2GrantAlbum(ranch); delete ranch.page2Losses; }
+    else { delete ranch.page2Quest; ranch.page2Losses = (ranch.page2Losses || 0) + 1; }   // 輸了：從打 Diablomon 重來，下次 +5%
     ranch.page2Result = { win: !!f.win, keramonId, step, at: Date.now() };
     core.saveRanch(ranch);
     return true;
@@ -1096,7 +1125,7 @@ function page2Event(ranch, step) {
     }
     const f = ranch.page2Fight;
     if (f) return { stage: 'fight', standoff: true, battle: { lines: page2FightLines(f, step) },
-                    fighter: { id: f.id, name: core.getDisplayName(f.char) } };
+                    fighter: { id: f.id, name: zhName(f.char) } };
     // 營地空了就沒人能出戰 → 先不觸發，等有桌寵再說
     if (ranch.page2Quest && (ranch.pets || []).length) return { stage: 'standoff', standoff: true };
     return null;
@@ -1130,9 +1159,9 @@ function page2Dev(act) {
         ranch.page2Quest = { at: Date.now(), seen: false };
     } else if (act === 'unlock') {
         if (core.page2Unlocked(ranch)) return { ok: false, error: '已經解鎖了' };
-        core.page2Grant(ranch);
+        page2GrantAlbum(ranch);
     } else if (act === 'reset') {
-        delete ranch.page2Quest; delete ranch.page2Fight; delete ranch.page2Result; delete ranch.page2At;
+        delete ranch.page2Quest; delete ranch.page2Fight; delete ranch.page2Result; delete ranch.page2At; delete ranch.page2Losses;
         // 反覆測試：解鎖送的那隻 Keramon 還在營地就一起收走（認 id，不認角色 ——
         // 牠可能已經進化了，玩家自己另外養的 Keramon 也不能被誤刪）
         if (ranch.page2RewardId) ranch.pets = (ranch.pets || []).filter(p => p.id !== ranch.page2RewardId);
@@ -4330,16 +4359,29 @@ function storyFxDraw(){
   for(let x=0;x<W;x++){ px(x,0); px(x,H-1); }
   for(let y=1;y<H-1;y++){ px(0,y); px(W-1,y); }
 }
-// 對話框放在舞台下方；放不下（vpet mini 小視窗）就放在視窗正中間（2026-10-22：原本往上頂到視窗頂、助手頭像被切掉）。
-// 上緣至少留 STORY_TOP_MIN：助手外框比 CutIn 大一圈、往上凸 12px。左右夾在視窗內
-const STORY_TOP_MIN=16;
+// ⚠️ 原則（2026-10-27 定，很重要）：事件演出、助手對話一律放在舞台「下方」，永遠不能蓋住上面的畫面（營地、廣場、前線）——
+// 演出常常要玩家看著畫面做事（例如營地事件要點一隻出戰），蓋住就選不到。以前放不下就置中，小視窗會整個蓋住營地。
+//   ・視窗放得下：直接放舞台下方
+//   ・vpet mini（WebView2 小視窗，視窗只有舞台那麼高）：把 body 的下內距撐到放得下，殼（vpet-mini-web.ps1）照
+//     「內容底＋body 下內距」把視窗拉長，對話框就出現在舞台下面；關掉時縮回
+//   ・網頁視窗太矮：整層改成跟著頁面捲（absolute），頁面多出空間、捲到看得到對話框
+// 之後新增的演出也走 storyOpen／storyPlace，不要自己另外置中或疊在舞台上
+const IN_MINI=!!(window.chrome&&window.chrome.webview);
 function storyPlace(){
-  const p=document.getElementById('storypanel'), st=document.getElementById('stage').getBoundingClientRect();
+  const o=document.getElementById('story'), p=document.getElementById('storypanel'), st=document.getElementById('stage').getBoundingClientRect();
   const W=document.documentElement.clientWidth, H=document.documentElement.clientHeight;
   const pw=p.offsetWidth, ph=p.offsetHeight;
   const left=Math.max(12, Math.min(W-pw-12, st.left+(st.width-pw)/2));
-  let top=st.bottom+10; if(top+ph>H-8) top=Math.max(STORY_TOP_MIN, Math.round((H-ph)/2));
-  p.style.left=left+'px'; p.style.top=top+'px';
+  const fits=st.bottom+10+ph<=H-8;
+  document.body.style.paddingBottom=(IN_MINI||!fits)?Math.ceil(ph+24)+'px':'';
+  if(IN_MINI||fits){
+    o.style.position=''; o.style.height=''; p.style.position='';
+    p.style.left=left+'px'; p.style.top=Math.round(st.bottom+10)+'px';
+    return;
+  }
+  o.style.position='absolute'; o.style.height=document.documentElement.scrollHeight+'px'; p.style.position='absolute';
+  p.style.left=left+'px'; p.style.top=Math.round(st.bottom+window.scrollY+10)+'px';
+  p.scrollIntoView({ block:'nearest' });
 }
 function storyLine(){
   const L=story.lines[story.i], bd=document.querySelector('#storybubble .bd'), bt=document.querySelector('#storybubble .btns');
@@ -4377,7 +4419,9 @@ function storyOpen(lines, done, opts){
 }
 function storyClose(){
   if(story) clearInterval(story.typing);
-  story=null; document.getElementById('story').style.display='none';
+  story=null; const o=document.getElementById('story'); o.style.display='none'; o.style.position=''; o.style.height='';
+  document.getElementById('storypanel').style.position='';
+  document.body.style.paddingBottom='';   // 小視窗縮回原本的大小、網頁拿掉多出來的空間
 }
 // 點一下：還在打字 → 一次顯示完；打完 → 下一句；最後一句 → 關掉再呼叫 done。有按鈕的那句只能按按鈕
 function storyAdvance(){
@@ -7052,6 +7096,7 @@ const server = http.createServer((req, res) => {
             const yq    = new URL(req.url, 'http://x').searchParams;
             // 營地第二頁：打完的 Armagemon 戰鬥先結算（關掉分頁、中途切走也照結果處理）
             page2Settle(ranch, step);
+            page2AlbumFix(ranch);
             const ev    = page2Event(ranch, step);
             // 分頁：事件進行中只有一頁（對峙畫面）；圍爐大家坐同一桌也不分頁。
             // 兩頁 = 兩頁寬的場地大家一起走（跨頁走動），page 只決定鏡頭看哪一半。

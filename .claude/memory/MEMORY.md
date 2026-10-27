@@ -26,3 +26,4 @@
 - [Super-Ultimate 階段](todo_super_ultimate_stage.md) — ✅敵方+我方均已實裝並push(27850cb)；正規線Godzilla_1994→BurningGodzilla(繼承戰力)、彩蛋線Agumon/Gabumon→Kizuna(Child直跳SU,power_at_least 50+win76%,**必須先freeze**)；config.evolvePower=固定戰力不繼承；tree格數=血緣長度;card一律顯Ultimate；⚠️僅剩「encounter前多2幀/強敵提示」規格有歧義未做
 - [戰鬥系統分鏡](project_fight_system.md) — 戰鬥分鏡、尺寸常數、子彈軌跡、自動觸發 TODO（原本沒列進索引）
 - [狀態列 vpet 暫停、重心 daemon](project_statusline_paused.md) — 2026-10-15 起 statusline 照常、只擋右側 vpet（core 的 STATUSLINE_PET_PAUSED，只擋不刪）；之後移植到 mod
+- [事件演出不能蓋住上方畫面](feedback_event_dialog_below_stage.md) — 助手對話／事件演出一律放舞台下方（storyPlace）；mini 撐高視窗、網頁太矮改跟著捲；使用者強調很重要（2026-10-27）

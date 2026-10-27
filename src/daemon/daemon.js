@@ -147,6 +147,8 @@ const UI_FORMS = [
     { label: '🖼 舞台底圖', action: 'bg',        fields: [] },
     { label: '⛺ 走動範圍', action: 'zoneedit',  fields: [], scope: 'both', dev: true },
     { label: '🩺 doctor',   action: 'doctor',    fields: [], scope: 'both' },
+    // 更新紀錄（2026-10-27）：玩家看的，內容在 repo 根目錄的 changelog.json（跟著 release 出貨）
+    { label: '📜 更新紀錄', action: 'changelog', fields: [], scope: 'both' },
     // 幽靈對戰（vpet pvp / pvp-setup）的兩列拿掉了：對戰改在廣場裡做（規格 §十）。
     // CLI 打 vpet pvp 仍可用（開發者用），只是不再擺入口。
     // 名牌（廣場用）在廣場下方那列改；這裡改放綽號（2026-10-22 使用者要的）
@@ -522,6 +524,18 @@ function currentEvent(ranch) {
 }
 // 玩家看到的角色名（繁中名，2026-10-27）。安裝版的 core 還沒有 getDisplayNameZh（剛熱更、還沒 install）就退回英文名
 const zhName = (id) => core.getDisplayNameZh ? core.getDisplayNameZh(id) : core.getDisplayName(id);
+// 更新紀錄：讀這棵樹（repo／release）根目錄的 changelog.json，列最近 CHANGELOG_SHOW 版。每次按都重讀（熱更後就是新的）
+const CHANGELOG_SHOW = 5;
+function changelogText() {
+    let j; try { j = JSON.parse(fs.readFileSync(path.join(TREE_ROOT, 'changelog.json'), 'utf8')); } catch (e) { return '（還沒有更新紀錄）'; }
+    const list = (Array.isArray(j.entries) ? j.entries : []).slice(0, CHANGELOG_SHOW);
+    if (!list.length) return '（還沒有更新紀錄）';
+    return list.map(e => {
+        const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(e.date || ''));
+        const head = (m ? Number(m[1]) + '/' + Number(m[2]) : String(e.date || '')) + ' 更新';
+        return head + '\n' + (Array.isArray(e.items) ? e.items : []).map(t => '・' + t).join('\n');
+    }).join('\n\n');
+}
 function lastUpdateResult() {
     try {
         const j = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'update.json'), 'utf8'));
@@ -1351,6 +1365,7 @@ function applyCommand(action, args = {}) {
     if (action === 'duelDev') return duelDev();
     if (action === 'duelCom') return duelDev({ com: true });   // 跟電腦打：同一套對手挑法，名字標「電腦」
     // 前線小遊戲：開著（每幾秒報一次）／關了；個人最佳（kind + val = 記一筆，沒給 val = 只讀）
+    if (action === 'changelog') return { ok: true, action, output: changelogText() };
     if (action === 'frontMini') { frontMiniUntil = args.on === '1' ? Date.now() + FRONT_MINI_TTL : 0; return { ok: true, action }; }
     if (action === 'miniBest') {
         const st = loadState(STATE_FILE);

@@ -144,7 +144,7 @@ console.log('— 根目錄乾淨、預設安裝是純 daemon —');
     // 一般使用者打開資料夾只該看到三件事：安裝、打開桌寵、解除安裝。
     const rootFiles = fs.readdirSync(OUT, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name);
     // VERSION：publish-release 才寫（自動更新比對版本用），build 本身不產生；出現也合法
-    const allowed = /^(README\.md|RELEASE|VERSION|package\.json|(install|uninstall)\.(bat|command|sh)|vpet-standalone\.(bat|command|sh|vbs))$/;
+    const allowed = /^(README\.md|RELEASE|VERSION|package\.json|changelog\.json|(install|uninstall)\.(bat|command|sh)|vpet-standalone\.(bat|command|sh|vbs))$/;
     const extra = rootFiles.filter(f => !allowed.test(f));
     ok(extra.length === 0, 'release 根目錄多了這些檔（不在「安裝／打開／解除安裝」裡）：' + extra.join(', '));
 
@@ -209,6 +209,11 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
        'tray 沒接住被遺棄的 Mutex（或沒掛「會自己換新版」的記號）');
     // 熱更後換掉不會自己換新版的舊 tray：daemon 子行程跑 tray-refresh.ps1，只動外殼的父行程（命令列是 vpet-tray.ps1）
     ok(has('tools/tray-refresh.ps1'), 'release 少了 tools/tray-refresh.ps1');
+    // 更新紀錄（2026-10-27）：跟著出貨；發版前檢查最上面那筆是新的（忘了寫就不發）
+    ok(has('changelog.json'), 'release 少了 changelog.json（玩家的更新紀錄）');
+    const pub = read('scripts/publish-release.js');
+    ok(/function main\(\) \{\s*checkChangelog\(\);/.test(pub) && /if \(shipped && shipped === mine\) \{/.test(pub) && /process\.argv\.includes\('--no-changelog'\)/.test(pub),
+       'publish-release 沒有檢查更新紀錄（忘了寫也會發出去）');
     const refresh = read('tools/tray-refresh.ps1');
     ok(refresh.charCodeAt(0) === 0xFEFF && /^param\(\[int\]\$ShellPid = 0\)/m.test(refresh)
        && /TryOpenExisting\('Local\\vpet-tray-selfupdate', \[ref\]\$mark\)\) \{ \$mark\.Dispose\(\); exit 0 \}/.test(refresh)

@@ -56,6 +56,7 @@ for (const f of fs.readdirSync(path.join(REPO, 'bin'))) copyRel(path.join('bin',
 
 // package.json（npm link 的 bin 欄位需要）
 copyRel('package.json');
+copyRel('changelog.json');   // 玩家看的更新紀錄（進階指令「📜 更新紀錄」）
 
 // runtime js
 for (const f of fs.readdirSync(path.join(REPO, 'src', 'runtime')))

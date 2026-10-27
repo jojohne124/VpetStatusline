@@ -1626,6 +1626,20 @@ setTimeout(async () => {
     // 系統匣的進化通知「咦！？ ○○的樣子……」讀 /state 的 jogress.frontName → 要是繁中名
     ok(/const name = \(id\) => \{ try \{ return zhName\(id\); \} catch \(e\) \{ return id; \} \};\s*const pets = ranch\.pets \|\| \[\];\s*return \{\s*front: real\.characterId, frontName: name\(real\.characterId\),/.test(src),
        '進化通知／合體介面的名字（jogress.frontName）沒有用繁中名');
+    // 更新紀錄（2026-10-27）：進階指令一列、讀根目錄 changelog.json、最近 5 版
+    {
+        ok(/\{ label: '📜 更新紀錄', action: 'changelog', fields: \[\], scope: 'both' \}/.test(src) && /if \(action === 'changelog'\) return \{ ok: true, action, output: changelogText\(\) \};/.test(src),
+           '進階指令沒有「📜 更新紀錄」');
+        const m = src.match(/const CHANGELOG_SHOW[\s\S]*?\n\}\n/);
+        const changelogText = m ? new Function('fs', 'path', 'TREE_ROOT', m[0] + 'return changelogText;')(fs, path, path.join(__dirname, '..')) : () => '';
+        const out = changelogText();
+        ok(/^\d{1,2}\/\d{1,2} 更新\n・/.test(out), '更新紀錄的格式不對：' + JSON.stringify(out.slice(0, 40)));
+        // 資料本身：日期格式、每條是字串、不能太長（給玩家看的白話）
+        const cl = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'changelog.json'), 'utf8'));
+        const bad = (cl.entries || []).filter(e => !/^\d{4}-\d{2}-\d{2}$/.test(e.date) || !Array.isArray(e.items) || !e.items.length
+            || e.items.some(t => typeof t !== 'string' || !t.trim() || t.length > 40));
+        ok(Array.isArray(cl.entries) && cl.entries.length && !bad.length, 'changelog.json 有格式不對的紀錄：' + JSON.stringify(bad).slice(0, 200));
+    }
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

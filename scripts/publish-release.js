@@ -53,7 +53,24 @@ function cleanup() {
     }
 }
 
+// 更新紀錄要先寫（2026-10-27）：最上面那一筆要跟上一次發出去的（origin/release 的 changelog.json）不同，
+// 不然就是忘了寫 → 不發。真的沒有玩家看得到的改動，加 --no-changelog
+function checkChangelog() {
+    if (process.argv.includes('--no-changelog')) return;
+    const top = (s) => { try { const e = (JSON.parse(s).entries || [])[0]; return e ? JSON.stringify(e) : null; } catch (_) { return null; } };
+    const mine = top(fs.readFileSync(path.join(REPO, 'changelog.json'), 'utf8'));
+    if (!mine) { console.error('✗ changelog.json 沒有任何更新紀錄。先在 entries 最上面加一筆再發。'); process.exit(1); }
+    tryGit(['fetch', 'origin', BRANCH]);
+    const shipped = top(tryGit(['show', `origin/${BRANCH}:changelog.json`]) || '');
+    if (shipped && shipped === mine) {
+        console.error('✗ changelog.json 最上面那筆跟上一次發的一樣 —— 這次的更新紀錄還沒寫。');
+        console.error('  在 entries 最上面加一筆（給玩家看的 3～5 條白話）；真的沒有玩家看得到的改動就加 --no-changelog。');
+        process.exit(1);
+    }
+}
+
 function main() {
+    checkChangelog();
     // 提醒：build 讀「工作區」，未提交的 shipped 變動也會進 release
     if (git(['status', '--porcelain']).trim()) {
         console.warn('⚠ 工作區有未提交變動 → release 會反映工作區內容（非最後 commit）。建議先 commit main。\n');

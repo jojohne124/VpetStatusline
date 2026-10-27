@@ -67,7 +67,8 @@ $ni.Text = "vpet (port $port)"        # 滑鼠移上去的提示
 $ni.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$open = $menu.Items.Add('開啟 vpet 視窗')
+# 選單結構跟小視窗 ☰ 的一樣（同事 vpet mini v16，2026-10-27 併進來：玩家說兩邊不一樣很困惑、同功能要同名）
+$open = $menu.Items.Add('開啟 vpet 網頁視窗')
 $open.add_Click({ Start-Process $url })
 # 桌面小視窗：只有面板大小、永遠最上層、可拖、可縮放（tools\vpet-mini，WebView2）
 if (Test-Path $miniVbs) {
@@ -84,34 +85,94 @@ public static class VpetTrayNative {
 }
 '@
 # ── 提醒（同事 vpet mini v13 的功能，2026-10-22 併進來）：進化／戰鬥開始時跳 Windows 通知氣泡＋提示音，
-#    進化時順便把小視窗叫出來。各項可在選單「提醒」開關，存 tools\vpet-tray.json（自動產生，不進 git）──
+#    進化時順便把小視窗叫出來。各項可在選單「提醒」開關，存 tools\vpet-tray.json（自動產生，不進 git）。
+#    小視窗的 ☰ 選單也會改這個檔（v16）→ 每 2 秒看檔案時間，不是自己寫的就重讀（Reload-PrefIfChanged）──
 $prefPath = Join-Path $PSScriptRoot 'vpet-tray.json'
-# dblClick：雙擊圖示開 'mini'（小視窗）或 'web'（網頁）；hintShown：第一次啟動的常駐教學跳過了沒（v15）
-$PREF = @{ notifyEvo = $true; notifyBattle = $true; sound = $true; autoOpenMini = $true; hintShown = $false; dblClick = 'mini' }
-try { if (Test-Path $prefPath) { $j = Get-Content $prefPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($k in 'notifyEvo','notifyBattle','sound','autoOpenMini','hintShown') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } }
-        if ($j.dblClick -eq 'web' -or $j.dblClick -eq 'mini') { $PREF.dblClick = [string]$j.dblClick } } } catch {}
-function Save-Pref { try { ($PREF | ConvertTo-Json -Compress) | Set-Content $prefPath -Encoding UTF8 } catch {} }
+# dblClick：雙擊圖示開 'mini'（小視窗）、'web'（網頁）或 'pet'（桌面）；hintShown：第一次啟動的常駐教學跳過了沒（v15）
+$PREF = @{ notifyEvo = $true; notifyBattle = $true; notifyEvent = $true; sound = $true; autoOpenMini = $true; hintShown = $false; dblClick = 'mini' }
+function Read-Pref {
+    try { if (Test-Path $prefPath) { $j = Get-Content $prefPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($k in 'notifyEvo','notifyBattle','notifyEvent','sound','autoOpenMini','hintShown') { if ($null -ne $j.$k) { $PREF[$k] = [bool]$j.$k } }
+            if ($j.dblClick -eq 'web' -or $j.dblClick -eq 'mini' -or $j.dblClick -eq 'pet') { $PREF.dblClick = [string]$j.dblClick } }
+          $script:prefStamp = $(if (Test-Path $prefPath) { (Get-Item $prefPath).LastWriteTimeUtc } else { [DateTime]::MinValue }) } catch {}
+}
+Read-Pref
+function Save-Pref { try { ($PREF | ConvertTo-Json -Compress) | Set-Content $prefPath -Encoding UTF8; $script:prefStamp = (Get-Item $prefPath).LastWriteTimeUtc } catch {} }
 $mNotify = New-Object System.Windows.Forms.ToolStripMenuItem('提醒')
-$mNE = $mNotify.DropDownItems.Add('進化：跳通知'); $mNE.Checked = $PREF.notifyEvo;    $mNE.add_Click({ $PREF.notifyEvo = -not $PREF.notifyEvo; $mNE.Checked = $PREF.notifyEvo; Save-Pref })
-$mNB = $mNotify.DropDownItems.Add('戰鬥：跳通知'); $mNB.Checked = $PREF.notifyBattle; $mNB.add_Click({ $PREF.notifyBattle = -not $PREF.notifyBattle; $mNB.Checked = $PREF.notifyBattle; Save-Pref })
-$mNS = $mNotify.DropDownItems.Add('提示音');       $mNS.Checked = $PREF.sound;        $mNS.add_Click({ $PREF.sound = -not $PREF.sound; $mNS.Checked = $PREF.sound; Save-Pref })
+$mNE = $mNotify.DropDownItems.Add('進化：跳通知'); $mNE.add_Click({ $PREF.notifyEvo = -not $PREF.notifyEvo; Save-Pref; Sync-Pref })
+$mNB = $mNotify.DropDownItems.Add('戰鬥：跳通知'); $mNB.add_Click({ $PREF.notifyBattle = -not $PREF.notifyBattle; Save-Pref; Sync-Pref })
+$mNV = $mNotify.DropDownItems.Add('事件：跳通知'); $mNV.add_Click({ $PREF.notifyEvent = -not $PREF.notifyEvent; Save-Pref; Sync-Pref })
+$mNS = $mNotify.DropDownItems.Add('提示音');       $mNS.add_Click({ $PREF.sound = -not $PREF.sound; Save-Pref; Sync-Pref })
+$mNO = $null
 if (Test-Path $miniVbs) {
-    $mNO = $mNotify.DropDownItems.Add('進化時自動開小視窗'); $mNO.Checked = $PREF.autoOpenMini; $mNO.add_Click({ $PREF.autoOpenMini = -not $PREF.autoOpenMini; $mNO.Checked = $PREF.autoOpenMini; Save-Pref })
+    $mNO = $mNotify.DropDownItems.Add('進化時自動開小視窗'); $mNO.add_Click({ $PREF.autoOpenMini = -not $PREF.autoOpenMini; Save-Pref; Sync-Pref })
+}
+# ── 小視窗、小寵物（v16）：這裡改的是小視窗自己的 tools\vpet-mini\mini-web.json（畫面縮放／閱讀縮放／最上層／跟隨滑鼠），
+#    小視窗每 2 秒看檔案變了就套用；「桌面」是寫 request 欄位叫它縮成小寵物（沒開就先開，它現身後會照做）──
+$miniCfg = Join-Path (Split-Path $miniVbs -Parent) 'mini-web.json'
+function Get-MiniCfg { try { if (Test-Path $miniCfg) { return (Get-Content $miniCfg -Raw -Encoding UTF8 | ConvertFrom-Json) } } catch {}; return $null }
+function Set-MiniCfg([string]$k, $v) {
+    # 只改這一格、其他欄位原樣保留（位置、petScale 這些是小視窗自己的）
+    try { $j = Get-MiniCfg; if ($null -eq $j) { $j = New-Object PSObject }
+          if ($null -eq $j.PSObject.Properties[$k]) { $j | Add-Member -NotePropertyName $k -NotePropertyValue $v } else { $j.$k = $v }
+          ($j | ConvertTo-Json -Compress) | Set-Content $miniCfg -Encoding UTF8 } catch {}
+}
+function Request-Pet {
+    Set-MiniCfg 'request' 'pet'
+    if ([VpetTrayNative]::FindWindow([NullString]::Value, 'vpet mini') -eq [IntPtr]::Zero) { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $miniVbs + '"') }
+}
+if (Test-Path $miniVbs) {
+    $mWin = New-Object System.Windows.Forms.ToolStripMenuItem('小視窗')
+    $mZoom = New-Object System.Windows.Forms.ToolStripMenuItem('畫面縮放')
+    foreach ($z in 50, 75, 100, 125, 150) { $it = $mZoom.DropDownItems.Add("$z%"); $it.Tag = $z; $it.add_Click({ param($s, $e) Set-MiniCfg 'zoom' ([double]$s.Tag / 100.0) }) }
+    [void]$mWin.DropDownItems.Add($mZoom)
+    $mRead = New-Object System.Windows.Forms.ToolStripMenuItem('閱讀縮放（卡片、進化樹暫時放大到）')
+    foreach ($z in 0, 80, 90, 100, 125) { $it = $mRead.DropDownItems.Add($(if ($z -eq 0) { '關' } else { "$z%" })); $it.Tag = $z; $it.add_Click({ param($s, $e) Set-MiniCfg 'readZoom' ([double]$s.Tag / 100.0) }) }
+    [void]$mWin.DropDownItems.Add($mRead)
+    $mTop = $mWin.DropDownItems.Add('永遠最上層'); $mTop.add_Click({ $j = Get-MiniCfg; $cur = $(if ($j -and $null -ne $j.topmost) { [bool]$j.topmost } else { $true }); Set-MiniCfg 'topmost' (-not $cur) })
+    [void]$menu.Items.Add($mWin)
+    $mPetMenu = New-Object System.Windows.Forms.ToolStripMenuItem('小寵物')
+    $mPet = $mPetMenu.DropDownItems.Add('桌面（點牠就回來）'); $mPet.add_Click({ Request-Pet })
+    $mFollow = $mPetMenu.DropDownItems.Add('跟隨滑鼠'); $mFollow.add_Click({ $j = Get-MiniCfg; $cur = $(if ($j -and $null -ne $j.petFollow) { [bool]$j.petFollow } else { $false }); Set-MiniCfg 'petFollow' (-not $cur) })
+    [void]$menu.Items.Add($mPetMenu)
 }
 [void]$menu.Items.Add($mNotify)
-# ── 雙擊圖示開什麼、圖示常駐教學（同事 vpet mini v15 的功能，2026-10-22 併進來）──
-#    雙擊照設定開小視窗或網頁（預設小視窗；小視窗檔不在就退回網頁）
+# ── 雙擊圖示開什麼、圖示常駐教學（同事 vpet mini v15 的功能，2026-10-22 併進來；v16 多「桌面」）──
+#    雙擊照設定開小視窗、網頁或桌面（預設小視窗；小視窗檔不在就退回網頁）
 function Open-Default {
-    if ($PREF.dblClick -ne 'web' -and (Test-Path $miniVbs)) { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $miniVbs + '"') } else { Start-Process $url }
+    if ($PREF.dblClick -eq 'web' -or -not (Test-Path $miniVbs)) { Start-Process $url }
+    elseif ($PREF.dblClick -eq 'pet') { Request-Pet }
+    else { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $miniVbs + '"') }
 }
+$mDbl = $null
 if (Test-Path $miniVbs) {
     $mDbl = New-Object System.Windows.Forms.ToolStripMenuItem('雙擊圖示開啟')
-    $mDblMini = $mDbl.DropDownItems.Add('小視窗'); $mDblWeb = $mDbl.DropDownItems.Add('網頁（完整版）')
-    function Sync-Dbl { $mDblMini.Checked = ($PREF.dblClick -ne 'web'); $mDblWeb.Checked = ($PREF.dblClick -eq 'web') }
-    $mDblMini.add_Click({ $PREF.dblClick = 'mini'; Sync-Dbl; Save-Pref }); $mDblWeb.add_Click({ $PREF.dblClick = 'web'; Sync-Dbl; Save-Pref }); Sync-Dbl
+    $mDblMini = $mDbl.DropDownItems.Add('小視窗'); $mDblWeb = $mDbl.DropDownItems.Add('網頁（完整版）'); $mDblPet = $mDbl.DropDownItems.Add('桌面')
+    $mDblMini.add_Click({ $PREF.dblClick = 'mini'; Save-Pref; Sync-Pref }); $mDblWeb.add_Click({ $PREF.dblClick = 'web'; Save-Pref; Sync-Pref }); $mDblPet.add_Click({ $PREF.dblClick = 'pet'; Save-Pref; Sync-Pref })
     [void]$menu.Items.Add($mDbl)
 }
+# 勾勾對上現在的設定（提醒、雙擊）
+function Sync-Pref {
+    $mNE.Checked = $PREF.notifyEvo; $mNB.Checked = $PREF.notifyBattle; $mNV.Checked = $PREF.notifyEvent; $mNS.Checked = $PREF.sound
+    if ($mNO) { $mNO.Checked = $PREF.autoOpenMini }
+    if ($mDbl) { $mDblMini.Checked = ($PREF.dblClick -eq 'mini'); $mDblWeb.Checked = ($PREF.dblClick -eq 'web'); $mDblPet.Checked = ($PREF.dblClick -eq 'pet') }
+}
+Sync-Pref
+# 小視窗改了 vpet-tray.json（不是我們寫的）→ 重讀
+function Reload-PrefIfChanged {
+    try { if ((Test-Path $prefPath) -and (Get-Item $prefPath).LastWriteTimeUtc -ne $script:prefStamp) { Read-Pref; Sync-Pref } } catch {}
+}
+# 每次打開選單：重讀兩邊的設定檔，勾勾才是現況（小視窗那邊可能改過）
+$menu.add_Opening({
+    Reload-PrefIfChanged
+    if (Test-Path $miniVbs) {
+        $j = Get-MiniCfg
+        $z = $(if ($j -and $null -ne $j.zoom) { [int]([double]$j.zoom * 100) } else { 100 }); foreach ($q in $mZoom.DropDownItems) { $q.Checked = ([int]$q.Tag -eq $z) }
+        $r = $(if ($j -and $null -ne $j.readZoom) { [int]([double]$j.readZoom * 100) } else { 0 }); foreach ($q in $mRead.DropDownItems) { $q.Checked = ([int]$q.Tag -eq $r) }
+        $mTop.Checked = $(if ($j -and $null -ne $j.topmost) { [bool]$j.topmost } else { $true })
+        $mFollow.Checked = $(if ($j -and $null -ne $j.petFollow) { [bool]$j.petFollow } else { $false })
+    }
+})
 #    圖示常駐顯示：Windows 不讓程式自己決定，只能教玩家拖一次（第一次啟動跳一次、選單隨時可再看）
 $PIN_HINT = "vpet 圖示在右下角的「^」裡。想讓它一直看得到：點「^」，把 vpet 圖示拖到旁邊那排放開，Windows 會記住。"
 function Show-PinHint([string]$title = '怎麼讓圖示常駐顯示？') { $ni.ShowBalloonTip(8000, $title, $PIN_HINT, 'Info') }
@@ -119,7 +180,7 @@ $mPin = $menu.Items.Add('怎麼讓圖示常駐顯示？'); $mPin.add_Click({ Sho
 $menu.Items.Add('-') | Out-Null
 # 結束時小視窗一起關（送 WM_CLOSE，讓它自己存位置）
 function Close-Mini { try { $h = [VpetTrayNative]::FindWindow([NullString]::Value, 'vpet mini'); if ($h -ne [IntPtr]::Zero) { [void][VpetTrayNative]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) } } catch {} }
-$quit = $menu.Items.Add('結束 vpet')
+$quit = $menu.Items.Add('結束 vpet（關小視窗與 daemon）')
 $quit.add_Click({
     Close-Mini
     try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
@@ -162,6 +223,7 @@ function Check-SelfUpdate {
     } catch {}
 }
 $script:selfTicks = 0
+$script:prefTicks = 0
 
 # ── 提醒：每秒讀 /state 的 kind（頁面自己也每秒讀它），從別的場景變成 evo（進化）／battle（戰鬥）那一刻提醒一次 ──
 #    啟動那一拍不提醒（不然一開 vpet 剛好在打就跳）。名字用 /state 的 jogress.frontName（顯示名），拿不到退回 character
@@ -171,7 +233,17 @@ function Get-VpetState {
           $res = $req.GetResponse(); $sr = New-Object System.IO.StreamReader($res.GetResponseStream(), [System.Text.Encoding]::UTF8); $txt = $sr.ReadToEnd(); $sr.Close(); $res.Close()
           $s = $txt | ConvertFrom-Json
           $n = ''; try { $n = [string]$s.jogress.frontName } catch {}; if (-not $n) { $n = [string]$s.character }
-          return @{ kind = [string]$s.kind; name = $n } } catch { return $null }
+          $ev = $null; try { if ($s.event) { $ev = @{ id = [string]$s.event.id; title = [string]$s.event.title } } } catch {}
+          return @{ kind = [string]$s.kind; name = $n; event = $ev } } catch { return $null }
+}
+# 事件（/state 的 event，2026-10-22）：新的一個出現（id 變了）那一刻跳「事件發生!!」。啟動那一拍不跳（跟進化／戰鬥一樣）
+$script:lastEventId = $null
+function On-Event($ev) {
+    $id = if ($ev) { $ev.id } else { '' }
+    $prev = $script:lastEventId; $script:lastEventId = $id
+    if ($null -eq $prev -or -not $id -or $id -eq $prev) { return }
+    if ($PREF.notifyEvent) { $ni.ShowBalloonTip(5000, '事件發生!!', $(if ($ev.title) { $ev.title } else { '回 vpet 看看' }), 'Info') }
+    if ($PREF.sound) { [System.Media.SystemSounds]::Exclamation.Play() }
 }
 function On-Kind([string]$kind, [string]$name) {
     $prev = $script:lastKind; $script:lastKind = $kind
@@ -200,7 +272,8 @@ $timer.add_Tick({
         [System.Windows.Forms.Application]::Exit()
         return
     }
-    $st = Get-VpetState; if ($st) { On-Kind $st.kind $st.name }
+    $st = Get-VpetState; if ($st) { On-Kind $st.kind $st.name; On-Event $st.event }
+    $script:prefTicks++; if ($script:prefTicks -ge 2) { $script:prefTicks = 0; Reload-PrefIfChanged }   # 小視窗改了提醒／雙擊設定
     $script:selfTicks++; if ($script:selfTicks -ge 30) { $script:selfTicks = 0; Check-SelfUpdate }
 })
 $timer.Start()

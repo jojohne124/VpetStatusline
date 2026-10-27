@@ -83,7 +83,9 @@ function loadAll() {
         if (!cfg) continue;
         out[id] = {
             id,
-            name: cfg.name && cfg.name.toLowerCase() === id ? cfg.name : (id.charAt(0).toUpperCase() + id.slice(1)),
+            // 繁中名（2026-10-27，route-editor 名稱總表維護）優先；沒填就英文名
+            name: typeof cfg.nameZh === 'string' && cfg.nameZh.trim() ? cfg.nameZh.trim()
+                : cfg.name && cfg.name.toLowerCase() === id ? cfg.name : (id.charAt(0).toUpperCase() + id.slice(1)),
             stage: cfg.stage || 'UnStage',
             next: (cfg.evolvesTo || []).map(e => e.character).filter(Boolean),
         };

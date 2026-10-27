@@ -79,6 +79,7 @@ const GOMOKU_TURN_MS = 30000;
 const GMAI = require('../shared/gomoku-ai.js');      // 連成五子之後，留幾毫秒讓大家看清楚最後一手，再結算
 // 打排球（docs/plaza-volley-spec.md）：1 對 1、輸入同步。伺服器只轉送每一格的按鍵、收結果
 const VOLLEY_COUNTDOWN_MS = 2000;
+const VSTAT_MAX_BYTES = 5 * 1024 * 1024;   // 排球卡頓統計檔的上限（診斷用）
 const capOf = (r) => (r.kind === 'volley' || r.kind === 'gomoku' || r.kind === 'duel' ? 2 : STAIRS_CAP);
 /** 五子棋：(x,y) 這一子往四個方向連了幾顆（取最長） */
 function gomokuLine(board, x, y) {
@@ -133,6 +134,11 @@ function createPlazaServer(opts = {}) {
     const pingMs  = opts.pingMs  ?? PING_MS;
     const now     = opts.now     || Date.now;
     const log     = opts.log     || (() => {});
+    // 排球卡頓統計存哪（null = 不存；測試用 opts 指到暫存檔）
+    const volleyStatFile = opts.volleyStatFile !== undefined ? opts.volleyStatFile
+        : (require.main === module ? path.join(os.homedir(), '.vpet', 'volley-stats.jsonl') : null);
+    const updateFailFile = opts.updateFailFile !== undefined ? opts.updateFailFile
+        : (require.main === module ? path.join(os.homedir(), '.vpet', 'update-fails.jsonl') : null);
     const inviteMs = opts.inviteMs ?? INVITE_MS;
     const battleMs = opts.battleMs ?? BATTLE_MS;
     const rand     = opts.rand     || Math.random;   // 測試可以固定勝負
@@ -843,6 +849,34 @@ function createPlazaServer(opts = {}) {
         volleyEnd(r, r.volley.sides.find(x => x !== id), 'resign');
         return { status: 200, body: { ok: true } };
     }
+    // 排球卡頓統計（2026-10-22）：每個人結束時報一筆自己這邊的數字，附在主機的 jsonl 檔（玩家看不到）。
+    // 檔案超過 VSTAT_MAX_BYTES 就不再寫（只是診斷用，別讓它長到吃硬碟）
+    function volleyStat(body) {
+        const id = body && body.id, m = members.get(id);
+        if (!m || !volleyStatFile) return { status: 200, body: { ok: true } };
+        const n = (k) => { const v = Number(body[k]); return Number.isFinite(v) ? Math.max(0, Math.min(1e7, Math.round(v))) : 0; };
+        const opp = members.get(String(body.opp || ''));
+        const line = JSON.stringify({ t: new Date(now()).toISOString(), name: m.name, opp: opp ? opp.name : null,
+            dur: n('dur'), frames: n('frames'), stalls: n('stalls'), stallMs: n('stallMs'), stallMax: n('stallMax'),
+            gapMax: n('gapMax'), hidden: n('hidden') });
+        try {
+            let size = 0; try { size = fs.statSync(volleyStatFile).size; } catch (e) {}
+            if (size < VSTAT_MAX_BYTES) fs.appendFile(volleyStatFile, line + '\n', () => {});
+        } catch (e) {}
+        return { status: 200, body: { ok: true } };
+    }
+    // 更新失敗回報（2026-10-22）：各台 daemon 報上來的 state/update.json，附在主機的 jsonl（只給我們看）
+    function updateReport(body) {
+        if (!updateFailFile || !body || typeof body !== 'object') return { status: 200, body: { ok: true } };
+        const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+        const line = JSON.stringify({ t: new Date(now()).toISOString(), name: str(body.name, 40) || null, host: str(body.host, 64),
+            from: str(body.from, 40), to: str(body.to, 40), error: str(body.error, 500), at: Number(body.at) || 0 });
+        try {
+            let size = 0; try { size = fs.statSync(updateFailFile).size; } catch (e) {}
+            if (size < VSTAT_MAX_BYTES) fs.appendFile(updateFailFile, line + '\n', () => {});
+        } catch (e) {}
+        return { status: 200, body: { ok: true } };
+    }
     function volleyEnd(r, winner, why, score) {
         if (!r.volley) return;
         const sides = r.volley.sides;
@@ -1123,6 +1157,9 @@ function createPlazaServer(opts = {}) {
         if (req.method === 'POST' && u.pathname === '/admin/kick') {
             return readBody(req, (j) => { const r = adminKick(j); reply(res, r.status, r.body); });
         }
+        if (req.method === 'POST' && u.pathname === '/update/report') {
+            return readBody(req, (j) => { const r = updateReport(j); reply(res, r.status, r.body); });
+        }
         if (req.method === 'POST' && u.pathname === '/admin/chat') {
             return readBody(req, (j) => { const r = adminChat(j); reply(res, r.status, r.body); });
         }
@@ -1131,7 +1168,7 @@ function createPlazaServer(opts = {}) {
         }
         const SR = { '/stairs/open': stairsOpen, '/stairs/start': stairsStart, '/stairs/input': stairsInput,
                      '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j),
-                     '/stairs/vin': volleyInput, '/stairs/vend': volleyReport, '/stairs/vresign': volleyResign,
+                     '/stairs/vin': volleyInput, '/stairs/vend': volleyReport, '/stairs/vresign': volleyResign, '/stairs/vstat': volleyStat,
                      '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign,
                      '/stairs/dpick': duelPick, '/stairs/dresign': duelResign };
         if (req.method === 'POST' && SR[u.pathname]) {

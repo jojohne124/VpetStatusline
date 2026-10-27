@@ -52,7 +52,7 @@ const args = process.argv.slice(2);
 
 // 指令前綴：vpet pvp == vpet --pvp（可省略 --）。把裸關鍵字補回 --，下方既有邏輯一律不動，
 // 舊的 --xxx 寫法也仍相容。角色名稱不在此清單 → 落到角色切換邏輯。
-const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','camp','keep','swap','release','jogress'];
+const SUBCMDS = ['pvp-setup','pvp-server','pvp','code','battle','card','sleep','wake','evolve','reset','freeze','unfreeze','tree','pin','unpin','doctor','hide','show','stats','album','bg','ranch','camp','keep','swap','release','jogress','nick'];
 if (args[0] && !args[0].startsWith('--') && SUBCMDS.includes(args[0])) args[0] = '--' + args[0];
 // 顯示文字叫「營地」，指令沿用 ranch（狀態檔 ranch.json 也是），camp 是等價別名。
 // 在這裡就折成 --ranch，下面所有分支都不用知道有兩個名字。
@@ -679,7 +679,7 @@ if (args[0] === '--evolve') {
 // 這裡**只驗參數並寫 force**，實際的狀態搬移由「當家」那一端在下一拍做
 // （core.applyRanchOp）。原因是 color-state.json 是單一寫入者制，CLI 直接改會把
 // 那個保證破壞掉。與 battle / evolve / reset 同一條路。
-const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release', '--jogress'];
+const RANCH_CMDS = ['--ranch', '--keep', '--swap', '--release', '--jogress', '--nick'];
 if (RANCH_CMDS.includes(args[0])) {
     const ranch = core.loadRanch();
     const cap   = core.ranchCap(ranch);
@@ -759,6 +759,24 @@ if (RANCH_CMDS.includes(args[0])) {
         writeForce(force);
         rerollMark();
         console.log(`✓ 已排入：現役收進營地（${pets.length + 1}/${cap}），新夥伴 🎲 ${core.getDisplayName(next)}（下次 refresh 生效）`);
+        process.exit(0);
+    }
+
+    // 取綽號（2026-10-22）：一樣只寫 force，下一拍由當家端套用（core.applyRanchOp 的 nick）
+    if (args[0] === '--nick') {
+        let id = null, rest = args.slice(1);
+        if (rest[0] === '--pet') {
+            const { pet, err } = resolve(rest[1]);
+            if (err) { console.log(err); process.exit(1); }
+            id = pet.id; rest = rest.slice(2);
+        }
+        const nick = core.normalizeNickname(rest.join(' '));
+        if (nick === null) { console.log(`綽號太長了：最多中文 ${core.NICK_MAX_W / 2} 字或英文 ${core.NICK_MAX_W} 字。`); process.exit(1); }
+        const force = readForce();
+        force.ranchTriggerTs = Date.now();
+        force.ranchOp        = { op: 'nick', id, name: nick };
+        writeForce(force);
+        console.log(nick ? `✓ 綽號改成「${nick}」` : '✓ 綽號清掉了');
         process.exit(0);
     }
 

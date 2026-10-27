@@ -1066,7 +1066,9 @@ setTimeout(async () => {
             ok(/data-cmd="plazaLeave"(?: data-help="[^"]*")? data-scope="plaza"[^>]*style="display:none"/.test(html),
                '「離開廣場」一開頁就露出來了（應該只在廣場裡出現）');
             ok(!/data-cmd="pvp"|data-cmd="pvp-setup"/.test(html), '幽靈對戰的入口還在網頁上');
-            ok(/data-cmd="code"/.test(html), '名牌設定被一起拿掉了（它現在是廣場的名牌）');
+            // 前線的名牌那列換成取綽號（2026-10-22）；名牌改在廣場下方那列（plazaname／plazarename）
+            ok(/data-cmd="nick"/.test(html) && !/data-cmd="code"/.test(html) && /id="plazaname"/.test(html) && /id="plazarename"/.test(html),
+               '前線沒有「取綽號」（或名牌在廣場那邊也不能改了）');
 
             // 真的起一個廣場伺服器 + 一個指向它的 daemon（隔離的 state 目錄）
             const fs2 = require('fs'), os2 = require('os');
@@ -1606,6 +1608,24 @@ setTimeout(async () => {
     }
     ok(/<div id="plazacount"><\/div>/.test(src) && /document\.getElementById\('plazacount'\)\.textContent='👥 '\+\(p\.names\|\|\[\]\)\.length;/.test(src)
        && /body\.plaza #plazacount\{display:block\}/.test(src), '廣場沒有顯示人數');
+    // 綽號（2026-10-22）：前線進階指令的「名牌」換成「取綽號」；營地右鍵表頭顯示綽號（玩家打的字一定要跳脫）、選單有「取綽號」
+    ok(/\{ label: '✏️ 取綽號',\s+action: 'nick',/.test(src) && !/\{ label: '🏷 名牌',\s+action: 'code'/.test(src)
+       && /nick:\s+\(a\) => a\.which \? \['nick', '--pet', a\.which, a\.name \|\| ''\] : \['nick', a\.name \|\| ''\],/.test(src),
+       '前線進階指令沒有換成「取綽號」（或還留著名牌那列）');
+    ok(/'<b>'\+escN\(hit\.nick\)\+'<\/b>/.test(src) && !/'<b>'\+hit\.nick\+/.test(src) && /add\('✏️ 取綽號',/.test(src)
+       && /nick: typeof st\.nickname === 'string' && st\.nickname \? st\.nickname : null/.test(src),
+       '營地右鍵沒有顯示綽號／沒有跳脫／沒有「取綽號」');
+    // 格子裡的字只縮不拉（中文一字兩格、字比兩格窄，拉滿會又胖又寬 —— 2026-10-27 綽號回報）
+    ok(/if\(w>target\)ctx\.scale\(target\/w,1\);/.test(src) && !/if\(w>0\)ctx\.scale\(target\/w,1\);/.test(src), '格子裡的中文又被橫向拉寬了');
+    // 繁中名：營地右鍵／對峙的名字、「原：」都走 zhName
+    ok(/const zhName = \(id\) => core\.getDisplayNameZh \? core\.getDisplayNameZh\(id\) : core\.getDisplayName\(id\);/.test(src)
+       && /wasName: p\.evolvedFrom \? zhName\(p\.evolvedFrom\) : null,/.test(src)
+       && /core\.getDisplayNameZh \? core\.getDisplayNameZh\(id\)/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'plaza.js'), 'utf8'))
+       && /name: typeof cfg\.nameZh === 'string' && cfg\.nameZh\.trim\(\) \? cfg\.nameZh\.trim\(\)/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'album', 'album_server.js'), 'utf8')),
+       '營地／圖鑑沒有改用繁中名');
+    // 系統匣的進化通知「咦！？ ○○的樣子……」讀 /state 的 jogress.frontName → 要是繁中名
+    ok(/const name = \(id\) => \{ try \{ return zhName\(id\); \} catch \(e\) \{ return id; \} \};\s*const pets = ranch\.pets \|\| \[\];\s*return \{\s*front: real\.characterId, frontName: name\(real\.characterId\),/.test(src),
+       '進化通知／合體介面的名字（jogress.frontName）沒有用繁中名');
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）
     ok(/const fr=!alive\?3:\(y>0\?5:/.test(src), '小恐龍跳的時候不是開心幀（或撞到不是難過）');
     // 打排球：點畫面也是殺球鍵

@@ -241,9 +241,26 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
         ok(/\n\s*event,\s+\/\/ 「事件」/.test(page) && /event = currentEvent\(ranchNow\);/.test(page), '/state 沒有帶 event');
     }
     // 小視窗收到新事件：小寵物沒跟隨 → 比照進化回小視窗；跟隨滑鼠 → 頭上冒「❗」停下來等點；事件沒了收掉「❗」
-    ok(/if \(\$evId -and \$null -ne \$script:lastEventId -and \$evId -ne \$script:lastEventId\) \{\s*if \(\$script:petMode\) \{\s*if \(\$script:Cfg\.petFollow\) \{ \$script:petAlert = \$true; Refresh-Pet \$st \} else \{ Leave-Pet \}/.test(mini)
-       && /if \(\$script:petAlert\) \{ return \}/.test(mini) && /function Leave-Pet \{\s*if \(-not \$script:petMode\) \{ return \}\s*\$script:petAlert = \$false/.test(mini)
+    ok(/if \(\$evId -and \$null -ne \$script:lastEventId -and \$evId -ne \$script:lastEventId\) \{\s*if \(\$script:petMode\) \{\s*if \(\$script:Cfg\.petFollow\) \{ \$script:petAlert = \$true; Refresh-Pet \$st \} else \{ Leave-Pet; \$script:eventPulled = \$true \}/.test(mini)
+       && /if \(\$script:petAlert\) \{ return \}/.test(mini)
+       && /function Leave-Pet \{\s*if \(-not \$script:petMode\) \{ return \}\s*if \(\$script:petAlert\) \{ \$script:eventPulled = \$true \}[^\n]*\n\s*\$script:petAlert = \$false/.test(mini)
        && /if \(\$script:petAlert\) \{ \$pbox\.Image = Add-PetAlert/.test(mini), '小視窗收到事件的反應不對（小寵物沒回來／跟隨時沒冒驚嘆號、沒停下）');
+    // v16（2026-10-27）：事件看完自動縮回桌面 —— 只限「被事件從桌面叫回來」的（自己手動縮的會清掉記號）
+    ok(/if \(-not \$evId -and \$script:eventPulled -and -not \$script:petMode\) \{ \$script:eventPulled = \$false; Enter-Pet \}/.test(mini)
+       && /function Enter-Pet \{\s*if \(\$script:petMode\) \{ return \}\s*\$script:eventPulled = \$false/.test(mini), '事件看完沒有自動縮回桌面（或手動縮的也會被縮）');
+    // 小視窗改提醒設定：只改那一格（不能把 tray 的其他設定洗回預設）；提醒選單有「事件：跳通知」
+    ok(/function Set-TrayPref\(\[string\]\$k, \$v\) \{\s*try \{ \$j = \$null; if \(Test-Path \$script:TrayPrefPath\) \{ \$j = Get-Content/.test(mini)
+       && !/\$p = Get-TrayPref; \$p\[\$k\] = \$v; \(\$p \| ConvertTo-Json/.test(mini) && /@\('notifyEvent','事件：跳通知'\)/.test(mini),
+       '小視窗改提醒時會把整份 vpet-tray.json 重寫（洗掉 tray 的設定），或沒有「事件：跳通知」');
+    // tray 選單（v16 結構）：網頁視窗同名、小視窗／小寵物子選單寫 mini-web.json、雙擊可設「桌面」、每 2 秒重讀小視窗改過的設定
+    ok(/\$menu\.Items\.Add\('開啟 vpet 網頁視窗'\)/.test(tray) && /ToolStripMenuItem\('小視窗'\)/.test(tray) && /ToolStripMenuItem\('小寵物'\)/.test(tray)
+       && /function Request-Pet \{\s*Set-MiniCfg 'request' 'pet'/.test(tray) && /elseif \(\$PREF\.dblClick -eq 'pet'\) \{ Request-Pet \}/.test(tray)
+       && /\$script:prefTicks\+\+; if \(\$script:prefTicks -ge 2\) \{ \$script:prefTicks = 0; Reload-PrefIfChanged \}/.test(tray)
+       && /DropDownItems\.Add\('事件：跳通知'\)/.test(tray), 'tray 選單沒有 v16 的結構（或小視窗改的設定 tray 讀不到）');
+    // 事件欄位帶上 v16 提案的 name／active／wantsFront
+    ok(/kind: 'camp', title: '牠跑到營地了！', name: '牠跑到營地了！', active: true, wantsFront: true \}/.test(page), '/state 的 event 沒帶 name／active／wantsFront');
+    // 角色 id 檢查不能在合併時被拿掉（v16 沒有這行）
+    ok((mini.match(/\$charId -notmatch '\^\[A-Za-z0-9_-\]\+\$'/g) || []).length === 1, '小視窗讀角色圖的 id 檢查不見了');
     // 驚嘆號：棋盤格的「半透明」黑底（色鍵視窗做不出真的半透明）＋紅色驚嘆號
     ok(/\(\(\$x \+ \$y\) % 2\) -eq 0\) \{ \$out\.SetPixel\(\(\$bx \+ \$x\), \$y, \[System\.Drawing\.Color\]::Black\)/.test(mini) && /FromArgb\(255, 255, 77, 79\)/.test(mini),
        '小寵物的驚嘆號不是棋盤格黑底＋紅色');

@@ -709,6 +709,44 @@ console.log('— 營地第二頁（核心）—');
     ok(!/weightedPickStarter\([^)]*:\s*starters\)/.test(cheatSrc), '重抽的備案直接用 starters（池子空掉時會抽到還沒解鎖的 Keramon）');
 }
 
+console.log('— 綽號（跟著這一隻走）—');
+{
+    // 長度：中文 6 字／英文 12 字；控制字元、零寬字元拿掉；空字串 = 清掉；太長 = null（不收）
+    ok(core.normalizeNickname('小黃') === '小黃' && core.normalizeNickname('一二三四五六') === '一二三四五六'
+       && core.normalizeNickname('一二三四五六七') === null && core.normalizeNickname('abcdefghijkl') === 'abcdefghijkl'
+       && core.normalizeNickname('abcdefghijklm') === null, '綽號長度上限不對（中文 6 字／英文 12 字）');
+    ok(core.normalizeNickname('  阿  呆 ') === '阿 呆' && core.normalizeNickname('\u0007x​y') === 'xy' && core.normalizeNickname('   ') === '',
+       '綽號沒整理掉空白／控制字元');
+    const nick = (st, id, name, busy) => {
+        if (busy) st.battleStartStep = 3;
+        return core.applyRanchOp(st, { ranchTriggerTs: Date.now() + Math.random(), ranchOp: { op: 'nick', id, name } }, RANCH);
+    };
+    fs.writeFileSync(RANCH, JSON.stringify({ v: 1, pets: [{ id: 'n1', keptAt: 1, state: { characterId: 'agumon' } }] }));
+    // 現役：表演中也照做（只改一個欄位，不碰別的）
+    const st = { characterId: 'greymon' };
+    ok(nick(st, null, '小黃', true).ok && st.nickname === '小黃', '現役取綽號失敗（或戰鬥中被擋）');
+    ok(nick(st, null, '', true).ok && !('nickname' in st), '綽號留空沒有清掉');
+    ok(!nick(st, null, '一二三四五六七', true).ok && !('nickname' in st), '太長的綽號也收了');
+    // 營地那一隻
+    ok(nick(st, 'n1', '阿呆').ok && core.loadRanch(RANCH).pets[0].state.nickname === '阿呆', '營地那隻取綽號失敗');
+    ok(!nick(st, 'nope', '阿呆').ok, '營地沒有的那隻也說成功');
+    // 收進營地：綽號跟著快照走；抽新的那一隻（換角色）沒有綽號
+    const st2 = { characterId: 'greymon', nickname: '小黃', battleStartStep: -1 };
+    fs.writeFileSync(RANCH, JSON.stringify({ v: 1, pets: [] }));
+    fs.writeFileSync(FORCE, JSON.stringify({ ranchTriggerTs: Date.now(), ranchOp: { op: 'keep' }, character: 'gabumon' }));
+    core.applyForceFlags(st2, FORCE, RANCH);
+    ok(core.loadRanch(RANCH).pets[0].state.nickname === '小黃', '收進營地時綽號沒跟著那一隻');
+    ok(st2.characterId === 'gabumon' && !('nickname' in st2), '新抽的那一隻繼承了上一隻的綽號');
+    // 前線卡片：有綽號才多一列；全形字補零寬字元（頁面一個字元一格，中文才不會被擠扁）
+    const card = (s) => core.composeStatusCard({ charId: 'agumon', st: s }).map(core.stripAnsi || (x => x)).join('\n');
+    const withNick = card({ characterId: 'agumon', nickname: '小黃' }), noNick = card({ characterId: 'agumon' });
+    ok(withNick.includes('Nick: 小​黃​') && !noNick.includes('Nick:'), '前線卡片的綽號列不對（沒綽號也顯示，或中文沒補寬度）');
+    // 繁中名（2026-10-27）：卡片用 config.json 的 nameZh（安裝版 assets），沒填退回英文名
+    ok(core.getDisplayNameZh('gatomon') === '迪路獸' && core.composeStatusCard({ charId: 'gatomon', st: { characterId: 'gatomon' } }).join('\n').includes('Name: 迪\u200b路\u200b獸\u200b'),
+       '前線卡片沒顯示繁中名（安裝版 assets 的 config.json 要有 nameZh：先 npm run install-runtime）');
+    ok(core.getDisplayNameZh('no_such_char_x') === core.getDisplayName('no_such_char_x'), '沒有繁中名時沒退回英文名');
+}
+
 cleanup();
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

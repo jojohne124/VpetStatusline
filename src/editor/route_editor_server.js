@@ -146,6 +146,8 @@ function buildGraph() {
         nodes.push({
             id, dir,
             name: cfg.name || id,
+            // 繁中名（2026-10-27）：玩家看到的名字之後會改用它；沒填就照舊顯示英文名
+            nameZh: typeof cfg.nameZh === 'string' ? cfg.nameZh : '',
             // 沒 stage 欄位的特殊角色（boss）保留為 UnStage，不推導成真階段，
             // 否則存檔會替它們套上 tier cap / 被當該階敵人配對。
             stage: cfg.stage || 'UnStage',
@@ -236,6 +238,11 @@ function save(graph) {
         // tags：去重 + 去空白，空陣列就整個移除（避免 120+ 個 config 多出無意義的 "tags": []）
         const tags = [...new Set((n.tags || []).map(t => String(t).trim()).filter(Boolean))];
         if (tags.length) cfg.tags = tags; else delete cfg.tags;
+        // 繁中名：去頭尾空白，空的就整個拿掉。payload 沒帶這個欄位（舊頁面）就不動原值
+        if (typeof n.nameZh === 'string') {
+            const z = n.nameZh.trim();
+            if (z) cfg.nameZh = z; else delete cfg.nameZh;
+        }
         const kids = (byParent[n.id] || []).slice()
             .sort((a, b) => ((nodeById[a.to] || {}).power ?? 0) - ((nodeById[b.to] || {}).power ?? 0));
         cfg.evolvesTo = kids.map(e => {

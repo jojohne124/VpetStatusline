@@ -804,7 +804,7 @@ function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts, 
         list.push({
             key:      'ranch:' + p.id,
             ranchId:  p.id,
-            name:     core.getDisplayName ? core.getDisplayName(id) : id,
+            name:     core.getDisplayNameZh ? core.getDisplayNameZh(id) : core.getDisplayName ? core.getDisplayName(id) : id,   // 繁中名（右鍵選單用）
             char:     id,
             seed:     W.hash2(hashStr(p.id), 0),
             // 開心的時候會原地跳，停走那幾拍要從時間軸扣掉，落地才不會瞬移

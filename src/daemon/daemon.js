@@ -148,8 +148,9 @@ const UI_FORMS = [
     { label: '⛺ 走動範圍', action: 'zoneedit',  fields: [], scope: 'both', dev: true },
     { label: '🩺 doctor',   action: 'doctor',    fields: [], scope: 'both' },
     // 幽靈對戰（vpet pvp / pvp-setup）的兩列拿掉了：對戰改在廣場裡做（規格 §十）。
-    // CLI 打 vpet pvp 仍可用（開發者用），只是不再擺入口。名牌留著 —— 它現在是廣場的名牌。
-    { label: '🏷 名牌',     action: 'code',      fields: [['name', '新名牌（留空＝查看目前）']] },
+    // CLI 打 vpet pvp 仍可用（開發者用），只是不再擺入口。
+    // 名牌（廣場用）在廣場下方那列改；這裡改放綽號（2026-10-22 使用者要的）
+    { label: '✏️ 取綽號',   action: 'nick',      fields: [['name', '綽號（中文 6 字／英文 12 字，留空＝清掉）']] },
     { label: '🔀 切換角色', action: 'switch',    fields: [['name', '角色名或編號']], dev: true },
     { label: '✨ 立即進化', action: 'evolve',    fields: [['name', '進化目標角色名']], dev: true },
     { label: '⚔ 指定戰鬥', action: 'battle',    fields: [['enemy', '敵人（留空＝隨機）'], ['result', 'win / lose（留空＝依機率）']], dev: true },
@@ -514,9 +515,13 @@ if (require.main === module && process.env.VPET_CHILD && TREE_IS_RELEASE && proc
 // 現在只有營地事件：「牠逃到營地了」還沒看過（page2Quest.seen）
 function currentEvent(ranch) {
     const q = ranch && ranch.page2Quest;
-    if (q && !q.seen) return { id: 'camp:' + (q.at || 0), kind: 'camp', title: '牠跑到營地了！' };
+    // name／active／wantsFront：同事 vpet mini v16 提案的欄位，一起帶（2026-10-27）—— 他們照提案寫也讀得到。
+    // wantsFront = 要玩家看小視窗（要操作／要看畫面）；只是背景演出的事件填 false
+    if (q && !q.seen) return { id: 'camp:' + (q.at || 0), kind: 'camp', title: '牠跑到營地了！', name: '牠跑到營地了！', active: true, wantsFront: true };
     return null;
 }
+// 玩家看到的角色名（繁中名，2026-10-27）。安裝版的 core 還沒有 getDisplayNameZh（剛熱更、還沒 install）就退回英文名
+const zhName = (id) => core.getDisplayNameZh ? core.getDisplayNameZh(id) : core.getDisplayName(id);
 function lastUpdateResult() {
     try {
         const j = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'update.json'), 'utf8'));
@@ -671,7 +676,7 @@ async function plazaJoin() {
     const why = plazaBlocked();
     if (why) return { ok: false, error: why };
     const name = plazaName();
-    if (!name) return { ok: false, error: '還沒有名牌，先在進階區設定「🏷 名牌」。' };
+    if (!name) return { ok: false, error: '名牌產生失敗，請稍後再試一次。' };
     const st = loadState(STATE_FILE);
     const char = st.characterId || 'agumon';
     let stage = 'Child', power = 0;
@@ -818,7 +823,8 @@ function jogressInfo(ranch, st) {
         try { frozen = !!JSON.parse(fs.readFileSync(FORCE_FILE, 'utf8')).freezeEvolve; } catch (e) {}
         const held = heldYardIds();
         const list = core.jogressCandidates(real, ranch, { frozen, heldIds: held || undefined });
-        const name = (id) => { try { return core.getDisplayName(id); } catch (e) { return id; } };
+        // 玩家看到的名字（繁中名，2026-10-27）：系統匣的進化通知「咦！？ ○○的樣子……」、合體介面都用這裡的名字
+        const name = (id) => { try { return zhName(id); } catch (e) { return id; } };
         const pets = ranch.pets || [];
         return {
             front: real.characterId, frontName: name(real.characterId),
@@ -1213,6 +1219,8 @@ const CLI_ACTIONS = {
     ranch:       ()  => ['ranch'],
     keep:        ()  => ['keep'],
     swap:        (a) => a.which ? ['swap', a.which] : null,
+    // 綽號：which = 營地那一隻的 id（右鍵選單）；沒給 = 現役（進階指令那列）
+    nick:        (a) => a.which ? ['nick', '--pet', a.which, a.name || ''] : ['nick', a.name || ''],
     release:     (a) => a.which ? ['release', a.which, 'yes'] : null,
     // 合體進化：which 是營地 id（營地可能有兩隻同角色，名稱不唯一）。補 yes 的理由同上。
     jogress:     (a) => a.which ? ['jogress', a.which, 'yes'] : null,
@@ -2168,7 +2176,9 @@ function draw(petLines, target){
       const w=ctx.measureText(txt).width;
       ctx.save();
       ctx.translate(start*CW, r*CH+1);
-      if(w>0)ctx.scale(target/w,1);        // 精準塞進格子寬度
+      // 只縮不拉：太長才壓進格子；比格子窄（中文一字兩格、字寬比兩格窄）就照原比例畫，
+      // 不然中文會被橫向拉寬、又胖又寬（2026-10-27 綽號回報）
+      if(w>target)ctx.scale(target/w,1);
       ctx.fillStyle=style;
       // 深色 halo：卡片欄位與進化樹名字都沒帶 ANSI 顏色，走的是預設淺灰 —— 那是為
       // 深色底盤挑的，一旦鋪了灰白底圖就等於隱形。描邊讓文字在任何亮度的底圖上都讀得到。
@@ -3394,7 +3404,9 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   // 所以不再給一顆「名片」鈕—— 那顆鈕是把同一份資料倒到畫布下方的 #cmdout，
   // 而營地畫面的畫布是滿尺寸、外層會捲動，輸出區常常落在看不到的位置，
   // 看起來就像「按了沒反應」。
-  el.innerHTML='<div class="hd"><b>'+hit.name+'</b>'+
+  // 綽號是玩家打的字：一定要跳脫（innerHTML）
+  const escN=(s)=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  el.innerHTML='<div class="hd">'+(hit.nick?'<b>'+escN(hit.nick)+'</b> <span class="k2">（'+hit.name+'）</span>':'<b>'+hit.name+'</b>')+
                (hit.wasName?' <span class="k2">（原：'+hit.wasName+'）</span>':'')+
                '<br><span class="k2">'+
                hit.stage+'　戰力 '+hit.power+'　'+wr+'<br>獲得於 '+
@@ -3402,6 +3414,8 @@ document.getElementById('pet').addEventListener('contextmenu',ev=>{
   const add=(txt,fn,cls)=>{const b=document.createElement('button');b.textContent=txt;
     if(cls)b.className=cls;b.onclick=e=>{e.stopPropagation();closeCtx();fn();};el.appendChild(b);};
   add('🔄 換出來（與現役交換）',()=>sendCmd('swap',{which:hit.id}));
+  add('✏️ 取綽號',()=>{ const v=prompt('「'+(hit.nick||hit.name)+'」的綽號（中文 6 字／英文 12 字，留空＝清掉）', hit.nick||'');
+    if(v!==null) sendCmd('nick',{which:hit.id,name:v}); });
   add('🗑 放生（永久刪除）',()=>{ if(confirm('放生「'+hit.name+'」？永久刪除，救不回來。'))
       sendCmd('release',{which:hit.id}); },'danger');
   el.style.display='block';
@@ -6373,7 +6387,8 @@ const server = http.createServer((req, res) => {
                          // 原本顯示的「收於」是收進營地的時間，每次交換都重設，被當成獲得時間誤會（2026-10-21）
                          gotAt: st.lastEvolveAt || st.birthAt || null,
                          // 在營地裡自己變掉的（大便獸彩蛋）：右鍵選單要顯示原本是誰
-                         wasName: p.evolvedFrom ? core.getDisplayName(p.evolvedFrom) : null };
+                         wasName: p.evolvedFrom ? zhName(p.evolvedFrom) : null,
+                         nick: typeof st.nickname === 'string' && st.nickname ? st.nickname : null };
             };
             // 分區資訊：dev 的「走動範圍」開關要把框與定位點畫出來。
             // 一律回傳（不看 release）—— 它只是幾個數字，藏起來反而讓前端要多一條分支。
@@ -6425,7 +6440,7 @@ const server = http.createServer((req, res) => {
                      enemy: sto ? sto.enemy : null,
                      // y 回傳**畫出來**的位置（含跳躍位移），不是地面的 y ——
                      // 前端拿這個做命中判定，用地面 y 的話跳到最高點時點身體會落空。
-                     pets: sto ? sto.pets.map(p => ({ ...p, name: core.getDisplayName(p.char), ...info(p.id) }))
+                     pets: sto ? sto.pets.map(p => ({ ...p, name: zhName(p.char), ...info(p.id) }))
                          // 跨頁：只交出這一頁看得到的（有任何一塊身體在畫面裡就算，走到交界的兩頁都點得到）
                          : out ? out.placed.filter(p => p.dx + (p.size || plaza.SPRITE) > 0 && p.dx < R.w).map(p => ({
                          id: p.ranchId, name: p.name, char: p.char, zoneIdx: p.zoneIdx,

@@ -52,6 +52,24 @@ const SEP     = ` ${DIM}│${R} `;
 const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 const visLen    = s => [...stripAnsi(s)].length;
 
+// ── 綽號（2026-10-22）：跟著「這一隻」走（存在 st.nickname；收進營地、換出來、進化都帶著；換成新的一隻才清）──
+// 寬度：中日韓全形字算 2、其他算 1，上限 NICK_MAX_W（中文 6 字／英文 12 字 —— 前線卡片一列 18 格扣掉「Nick: 」剛好）
+const NICK_MAX_W = 12;
+const isWideCp = (cp) => (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3)
+    || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE30 && cp <= 0xFE4F) || (cp >= 0xFF00 && cp <= 0xFF60) || (cp >= 0xFFE0 && cp <= 0xFFE6)
+    || cp >= 0x1F000;
+const nickWidth = (s) => [...s].reduce((w, ch) => w + (isWideCp(ch.codePointAt(0)) ? 2 : 1), 0);
+// 要畫進格子的字：全形字後面補一個零寬字元 —— 頁面是「一個字元一格」排字，不補的話中文只拿到一格寬、被擠扁；
+// 補了就是兩格（跟它實際的寬度一樣），visLen 量出來也剛好等於顯示寬度
+const cellWide = (s) => [...String(s)].map(ch => isWideCp(ch.codePointAt(0)) ? ch + '\u200b' : ch).join('');
+/** 整理綽號：去掉控制字元、頭尾空白、連續空白折成一個。'' = 清掉綽號；null = 太長（不收） */
+function normalizeNickname(s) {
+    const t = String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, '')
+        .replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    return nickWidth(t) > NICK_MAX_W ? null : t;
+}
+
 // 終端顯示寬度（東亞全形/CJK 算 2 格），用於把文字對齊到指定 cell 欄位
 function isWideChar(ch) {
     const c = ch.codePointAt(0);
@@ -424,7 +442,7 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
     //    改成保留指令，動畫播完的下一拍自然就成功了。
     // 放生例外：只從營地刪一筆，完全不碰現役（st），沒有理由等前線演完。
     //    等的話，前線一直在自動戰鬥時，營地裡按了放生卻遲遲不見（2026-10-16 實測回報）。
-    if (op.op !== 'release'
+    if (op.op !== 'release' && op.op !== 'nick'
         && (st.battleStartStep >= 0 || st.evoStartStep >= 0 || st.dropStartStep >= 0)) {
         return { op: op.op, ok: false, retry: true, reason: 'busy' };
     }
@@ -441,6 +459,21 @@ function applyRanchOp(st, force, ranchFile, forceFile, opts = {}) {
     }
 
     const ranch = loadRanch(ranchFile);
+
+    // 取綽號：op.id = 營地那一隻（沒給 = 現役）。'' = 清掉。只改一個欄位，表演中也照做
+    if (op.op === 'nick') {
+        const nick = normalizeNickname(op.name);
+        if (nick === null) return { op: 'nick', ok: false, reason: 'toolong' };
+        if (op.id) {
+            const p = ranch.pets.find(x => x.id === op.id);
+            if (!p || !p.state) return { op: 'nick', ok: false, reason: 'notfound' };
+            if (nick) p.state.nickname = nick; else delete p.state.nickname;
+            saveRanch(ranch, ranchFile);
+        } else {
+            if (nick) st.nickname = nick; else delete st.nickname;   // st 由呼叫端存
+        }
+        return { op: 'nick', ok: true };
+    }
 
     if (op.op === 'release') {
         const i = ranch.pets.findIndex(p => p.id === op.id);
@@ -549,6 +582,7 @@ function applyForceFlags(st, forceFile = FORCE_FILE_DEFAULT, ranchFile, opts = {
             delete st.battleTotalCount; delete st.battleWinCount; delete st.lastBattleCountedStartStep; delete st.tagStats;  // 勝率歸零
             delete st.stats; delete st.lifeStats;   // 隱藏統計：換角色＝新的一輪，兩種範圍都歸零
             delete st.mood;                         // 心情歸 0
+            delete st.nickname;                     // 綽號是上一隻的（收進營地時已跟著快照走了）
             st.birthAt = Date.now(); st.lastEvolveAt = Date.now();
             st._evoSpendBySession = {};   // 新角色 → 累積花費歸零，下一拍以當前 session cost 為新基準
             delete st._evoCostBase; delete st._evoCheatStickyUntilMs; delete st._evoCostBasePending;  // 清舊制殘留
@@ -1292,6 +1326,15 @@ function getTierCap(stage) { return TIER_CAP[stage] ?? Infinity; }
 // 長度不變（一個字元換一個字元），所以卡片那邊「補滿或截斷到 TEXT_W」的排版不受影響。
 const prettyName = (s) => String(s).replace(/_/g, ' ');
 
+/** 玩家看到的名字（2026-10-27）：config.json 的 nameZh（route-editor 的名稱總表維護）；沒填就退回英文名 */
+function getDisplayNameZh(name) {
+    if (!name) return '';
+    try {
+        const config = readCharConfig(name);
+        if (typeof config.nameZh === 'string' && config.nameZh.trim()) return config.nameZh.trim();
+    } catch (e) {}
+    return getDisplayName(name);
+}
 function getDisplayName(name) {
     if (!name) return '';
     try {
@@ -2477,7 +2520,13 @@ function composeTreeScene(st, opts = {}) {
     }
 
     const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-    const center16 = s => { s = String(s).slice(0, 16); const l = Math.floor((16 - s.length) / 2); return ' '.repeat(l) + s + ' '.repeat(16 - s.length - l); };
+    // 照顯示寬度（中文算 2 格）置中、超過 16 格截斷；中文補零寬字元（見 cellWide）
+    const center16 = s => {
+        let t = '', w = 0;
+        for (const ch of String(s)) { const cw = isWideCp(ch.codePointAt(0)) ? 2 : 1; if (w + cw > 16) break; t += ch; w += cw; }
+        const l = Math.floor((16 - w) / 2);
+        return ' '.repeat(l) + cellWide(t) + ' '.repeat(16 - w - l);
+    };
     const blocks = slots.map(sl => renderCells(dim ? dimCellRows(sl.cells || qCells, 0.5) : (sl.cells || qCells)));
 
     // 指向 Super-Ultimate 的那一段用橘紅箭頭標示強度差（其餘維持一般白箭頭）。
@@ -2493,7 +2542,7 @@ function composeTreeScene(st, opts = {}) {
         }
         lines.push(parts.join(''));
     }
-    lines.push(slots.map(sl => center16(sl.name === '???' ? '???' : getDisplayName(sl.name))).join('   '));
+    lines.push(slots.map(sl => center16(sl.name === '???' ? '???' : getDisplayNameZh(sl.name))).join('   '));
     return lines;
 }
 
@@ -2519,7 +2568,7 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     if (dim) cutInRows = dimCellRows(cutInRows);
     const cutInLines = renderCells(cutInRows);
 
-    const displayName = getDisplayName(charId);
+    const displayName = cellWide(getDisplayNameZh(charId));   // 繁中名（2026-10-27）；沒填就是英文名
     // 勝率：勝場 / 總戰鬥場數；0 場顯示 0%（不顯示 NaN）
     // ⚠️ 一律無條件捨去，不要用 Math.round —— win_rate 進化條件比的是原始浮點值，
     //    四捨五入會讓 74.5% 顯示成 75%，卡片說到了但引擎不給進化（所見即所得破功）。
@@ -2536,9 +2585,14 @@ function composeStatusCard({ charId, st, cutInArt, dim = false }) {
     // 名字放不下「Name: 」標籤時就捨棄標籤（第一列本來就是名字，不會誤解），
     // 讓 18 格全給名字 —— BurningGodzilla(15) 因此能完整顯示而不必截斷。
     const nameLine = visLen(`Name: ${displayName}`) <= TEXT_W ? `Name: ${displayName}` : displayName;
+    // 綽號：有才顯示。全形字後面補一個零寬字元 —— 頁面是「一個字元一格」把整段字縮放塞進格子，
+    // 不補的話中文只拿到一格寬、被擠扁；補了就是兩格（跟它實際的寬度一樣）
+    const nick = st && typeof st.nickname === 'string' && st.nickname ? st.nickname : '';
+    const nickLine = nick ? 'Nick: ' + cellWide(nick) : null;
     const textRaw = [
         '',
         nameLine,
+        ...(nickLine ? [nickLine] : []),
         `Power: ${displayPower}`,
         `Stage: ${stage}`,
         `Win Rate: ${winRate}%`,
@@ -2648,6 +2702,7 @@ module.exports = {
     buildStatusLines,
     composeOutput,
     visLen,
+    normalizeNickname, NICK_MAX_W, getDisplayNameZh, cellWide,
     loadCharacter,
     getCharacterStage,
     getBasePower, computeInheritedPower,

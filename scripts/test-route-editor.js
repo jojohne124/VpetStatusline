@@ -405,5 +405,38 @@ console.log('— 圖鑑的蒐集程度 —');
     }
 }
 
+console.log('— 繁中名（nameZh）—');
+{
+    // 編輯器：讀得到、存得回去（payload 是白名單，漏了會「讀得到但存檔後消失」）、空的就拿掉
+    const SV = fs.readFileSync(path.join(__dirname, '..', 'src', 'editor', 'route_editor_server.js'), 'utf8');
+    ok(/nameZh: typeof cfg\.nameZh === 'string' \? cfg\.nameZh : '',/.test(SV), '編輯器沒讀 config.json 的 nameZh');
+    ok(/if \(typeof n\.nameZh === 'string'\) \{\s*const z = n\.nameZh\.trim\(\);\s*if \(z\) cfg\.nameZh = z; else delete cfg\.nameZh;/.test(SV),
+       '存檔沒寫回 nameZh（或空的沒拿掉、舊頁面沒帶這欄時會被洗掉）');
+    ok(/tags:n\.tags\|\|\[\], nameZh:n\.nameZh\|\|'',/.test(m[1]), 'payload 白名單沒有 nameZh（改了存檔後會消失）');
+    ok(/onclick="openNameTable\(\)"/.test(HTML) && /function renderNameTable\(\)/.test(m[1]) && /value="\$\{escA\(n\.nameZh \|\| ''\)\}"/.test(m[1])
+       && /\(n\.nameZh \|\| ''\)\.includes\(q\)/.test(m[1]), '名稱總表／搜尋中文／跳脫不見了');
+    // 匯入工具：引號欄位、「你的修改」優先、找不到的不寫、只多一行（沿用原檔換行）
+    const IM = require('./import-names-zh.js');
+    const rows = IM.parseCsv('﻿id,英文名,繁中譯名,你的修改（留空＝照用）\r\nagumon,Agumon,亞古獸,\r\ngreymon,Greymon,"暴龍獸, 測試",大暴龍\r\nx,X,（找不到）,\r\n');
+    const names = IM.pick(rows);
+    ok(names.get('agumon') === '亞古獸' && names.get('greymon') === '大暴龍' && !names.has('x'), '匯入對照表解析不對：' + JSON.stringify([...names]));
+    ok(IM.pick(IM.parseCsv('id,繁中譯名\nb,"a ""q"" b"\n')).get('b') === 'a "q" b', 'CSV 引號欄位沒解開');
+    const os = require('os'), tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vpet-namezh-'));
+    fs.mkdirSync(path.join(tmp, 'agumon'));
+    fs.writeFileSync(path.join(tmp, 'agumon', 'config.json'), '{\r\n  "name": "Agumon",\r\n  "power": 10\r\n}\r\n');
+    const r = IM.apply(names, { charsDir: tmp });
+    const after = fs.readFileSync(path.join(tmp, 'agumon', 'config.json'), 'utf8');
+    ok(r.written.includes('agumon') && r.missing.includes('greymon') && after === '{\r\n  "name": "Agumon",\r\n  "power": 10,\r\n  "nameZh": "亞古獸"\r\n}\r\n',
+       '匯入寫出來的 config.json 不對（換行沒沿用／動到別的欄位）：' + JSON.stringify(after));
+    ok(IM.apply(names, { charsDir: tmp }).same.includes('agumon'), '沒變的也重寫了');
+    fs.rmSync(tmp, { recursive: true, force: true });
+    // 資料本身：有填的都是正常的名字（不能把「（找不到）」灌進去）
+    const bad = fs.readdirSync(path.join(__dirname, '..', 'characters'), { withFileTypes: true }).filter(d => d.isDirectory()).map(d => {
+        try { const c = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'characters', d.name, 'config.json'), 'utf8'));
+              return c.nameZh !== undefined && (typeof c.nameZh !== 'string' || !c.nameZh.trim() || /找不到/.test(c.nameZh)) ? d.name : null; } catch (e) { return null; }
+    }).filter(Boolean);
+    ok(!bad.length, '有角色的 nameZh 不是正常名字：' + bad.join(', '));
+}
+
 console.log(`\n結果：${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

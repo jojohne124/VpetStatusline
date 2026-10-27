@@ -54,6 +54,12 @@
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; align-items: center; justify-content: center; }
   .modalBox { background: #23272e; border: 1px solid #4a515a; border-radius: 9px; padding: 16px; width: 460px; max-height: 78vh; overflow-y: auto; box-shadow: 0 10px 40px #000a; }
   .modalBox h3 { margin: 0 0 6px; font-size: 15px; }
+  .nameTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .nameTable th { text-align: left; color: #9aa0a8; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #3a4048; position: sticky; top: 0; background: #23272e; }
+  .nameTable td { padding: 3px 6px; border-bottom: 1px solid #2c3138; }
+  .nameTable td input { width: 100%; box-sizing: border-box; background: #1a1d21; border: 1px solid #4a515a; color: #e6e6e6; border-radius: 4px; padding: 4px 7px; font-size: 13px; }
+  .nameTable tr.nozh td input { border-color: #b88a2d; }
+  .nameTable tr.unimpl td:not(:last-child) { opacity: .5; }
   .modalBox input[type=text] { flex: 1; background: #1a1d21; border: 1px solid #4a515a; color: #e6e6e6; border-radius: 4px; padding: 5px 8px; font-size: 13px; }
   .modalBox button { background: #3a4048; color: #e6e6e6; border: 1px solid #4a515a; border-radius: 5px; padding: 5px 11px; cursor: pointer; font-size: 13px; }
   .modalBox button:hover:not(:disabled) { background: #464d57; }
@@ -90,6 +96,7 @@
       <div id="starterMenu" class="menu" style="display:none"></div>
     </div>
     <button onclick="openTagManager()">🏷 標籤管理</button>
+    <button onclick="openNameTable()">🈶 名稱總表</button>
     <input type="text" id="search" placeholder="搜尋角色…" oninput="render()">
     <span id="deadBadge"></span>
     <span id="status">載入中…</span>
@@ -105,6 +112,20 @@
       </div>
     </div>
     <div id="panel"><div class="empty">點選節點以編輯<br>或用「連線模式」新增進化邊</div></div>
+  </div>
+</div>
+<div id="nameModal" class="modal" style="display:none">
+  <div class="modalBox" style="width:760px">
+    <h3>🈶 名稱總表</h3>
+    <div class="hint" style="margin:0 0 10px">直接在格子裡改繁中名（離開格子就記下），改完按「💾 儲存」才會寫進各角色的 config.json。留空＝顯示英文名。</div>
+    <div class="row" style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+      <input type="text" id="nameFilter" placeholder="搜尋（id／英文／繁中）" oninput="renderNameTable()">
+      <label style="white-space:nowrap"><input type="checkbox" id="nameEmptyOnly" onchange="renderNameTable()"> 只看還沒填的</label>
+      <label style="white-space:nowrap"><input type="checkbox" id="nameImplOnly" checked onchange="renderNameTable()"> 只看已實裝</label>
+      <span id="nameCount" style="white-space:nowrap;color:#9aa0a8"></span>
+    </div>
+    <table class="nameTable"><thead><tr><th>id</th><th>英文名</th><th>階段</th><th>實裝</th><th>繁中名</th></tr></thead><tbody id="nameRows"></tbody></table>
+    <div style="text-align:right;margin-top:12px"><button onclick="closeNameTable()">關閉</button></div>
   </div>
 </div>
 <div id="tagModal" class="modal" style="display:none">
@@ -203,7 +224,7 @@ function spriteDataURL(sp) {
 // ⚠️ 這裡是「白名單」：沒列到的欄位存檔時會被靜默丟掉。新增節點屬性時務必同步加進來。
 function payload() {
   return {
-    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, weight:n.weight, highTier:n.highTier, tags:n.tags||[], x:n.x, y:n.y })),
+    nodes: G.nodes.map(n => ({ id:n.id, dir:n.dir, name:n.name, stage:n.stage, power:n.power, starter:n.starter, implanted:n.implanted, weight:n.weight, highTier:n.highTier, tags:n.tags||[], nameZh:n.nameZh||'', x:n.x, y:n.y })),
     edges: G.edges,
     tagOrder: G.tagOrder || [],
   };
@@ -435,7 +456,7 @@ function render() {
     rect.setAttribute('rx',7);
     rect.setAttribute('fill', STAGE_COLOR[n.stage] || '#666');
     rect.setAttribute('fill-opacity', n.implanted ? 0.92 : 0.28);
-    const hit = q && n.id.includes(q);
+    const hit = q && (n.id.includes(q) || (n.nameZh || '').includes(q));
     rect.setAttribute('stroke', selected===n.id ? '#fff' : (hit ? '#ffd54a' : (n.implanted ? '#0006' : '#888')));
     rect.setAttribute('stroke-width', selected===n.id ? 3 : (hit ? 3 : 1.5));
     if (!n.implanted) rect.setAttribute('stroke-dasharray','4,3');
@@ -455,8 +476,11 @@ function render() {
     const t = document.createElementNS('http://www.w3.org/2000/svg','text');
     t.setAttribute('x', tx); t.setAttribute('y', NODE_H/2 - 2);
     t.setAttribute('font-size','13'); t.setAttribute('fill','#fff'); t.setAttribute('font-weight','600');
-    t.textContent = (n.starter?'★ ':'') + n.dir;
+    t.textContent = (n.starter?'★ ':'') + (n.nameZh || n.dir);
     g.appendChild(t);
+    const tip = document.createElementNS('http://www.w3.org/2000/svg','title');
+    tip.textContent = n.dir + (n.nameZh ? '（' + n.nameZh + '）' : '　（還沒有繁中名）');
+    g.appendChild(tip);
     const p = document.createElementNS('http://www.w3.org/2000/svg','text');
     p.setAttribute('x', tx); p.setAttribute('y', NODE_H/2 + 13);
     p.setAttribute('font-size','10'); p.setAttribute('fill','#ffffffcc');
@@ -560,8 +584,10 @@ function openPanel(id) {
     .sort((a,b)=>a.power-b.power);
   const p = document.getElementById('panel');
   p.innerHTML = `
-    <h3>${n.dir}</h3>
+    <h3>${n.dir}${n.nameZh ? '　' + escA(n.nameZh) : ''}</h3>
     <div class="sub">id: ${n.id}　被進化來源: ${inEdges.map(e=>byId[e.from]?.dir||e.from).join(', ')||'—'}</div>
+    <div class="field"><label>繁中名（玩家看到的名字；留空＝顯示英文名）</label>
+      <input type="text" value="${escA(n.nameZh||'')}" placeholder="例如 亞古獸" onchange="upd('${id}','nameZh',this.value.trim())"></div>
     <div class="row">
       <div class="field"><label>階段 stage</label>
         <select onchange="upd('${id}','stage',this.value)">
@@ -773,6 +799,41 @@ function rmTag(id, t) {
   const n = byId[id];
   n.tags = (n.tags || []).filter(x => x !== t);
   dirty = true; openPanel(id); setStatus(`移除 tag：${t}`);
+}
+
+// ── 名稱總表（2026-10-27）：一頁列完所有角色的繁中名，直接改；儲存走原本的 💾 ──
+// 屬性值一律跳脫（名字是人打的）
+function escA(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function openNameTable() { document.getElementById('nameModal').style.display = 'flex'; renderNameTable(); }
+function closeNameTable() { document.getElementById('nameModal').style.display = 'none'; render(); if (selected) openPanel(selected); }
+function nameRows() {
+  const q = document.getElementById('nameFilter').value.trim().toLowerCase();
+  const emptyOnly = document.getElementById('nameEmptyOnly').checked;
+  const implOnly = document.getElementById('nameImplOnly').checked;
+  const st = (s) => { const i = STAGE_ORDER.indexOf(s); return i < 0 ? 99 : i; };
+  return G.nodes.filter(n => (!emptyOnly || !n.nameZh) && (!implOnly || n.implanted)
+      && (!q || n.id.includes(q) || String(n.dir).toLowerCase().includes(q) || (n.nameZh || '').includes(q)))
+    .sort((a, b) => st(a.stage) - st(b.stage) || a.id.localeCompare(b.id));
+}
+function renderNameTable() {
+  const rows = nameRows();
+  document.getElementById('nameCount').textContent = nameCountText();
+  document.getElementById('nameRows').innerHTML = rows.map(n =>
+    `<tr class="${(n.nameZh ? '' : 'nozh') + (n.implanted ? '' : ' unimpl')}"><td>${escA(n.id)}</td><td>${escA(n.dir)}</td><td>${escA(n.stage)}</td><td>${n.implanted ? '✓' : ''}</td>`
+    + `<td><input type="text" value="${escA(n.nameZh || '')}" onchange="setNameZh('${n.id}', this)"></td></tr>`).join('');
+}
+// 已實裝（玩家看得到）的才是重點：分開算
+function nameCountText() {
+  const im = G.nodes.filter(n => n.implanted);
+  return `已實裝 ${im.filter(n => n.nameZh).length}／${im.length}　全部 ${G.nodes.filter(n => n.nameZh).length}／${G.nodes.length}`;
+}
+function setNameZh(id, input) {
+  const n = byId[id]; if (!n) return;
+  const v = input.value.trim(); if (v === (n.nameZh || '')) return;
+  n.nameZh = v; dirty = true;
+  input.closest('tr').classList.toggle('nozh', !v);
+  document.getElementById('nameCount').textContent = nameCountText();
+  setStatus(`繁中名：${n.dir} → ${v || '（清掉）'}`);
 }
 
 function upd(id, key, val) {

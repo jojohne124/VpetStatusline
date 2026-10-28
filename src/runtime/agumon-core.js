@@ -832,9 +832,10 @@ const PAGE2_CAP_BONUS = 4;
 const PAGE2_BOSS      = 'diablomon';   // 第一階段：自動戰鬥遇到並打贏
 const PAGE2_FINAL     = 'armagemon';   // 第二階段：營地裡挑一隻跟牠打
 const PAGE2_REWARD    = 'keramon';     // 打贏後加進營地、開放重抽
-// 營地滿了在等解鎖時，Diablomon 主動找上門：每場先擲這個機率，中了直接是牠（2026-10-16 定 10%）。
+// 營地滿了在等解鎖時，Diablomon 主動找上門：每場先擲這個機率，中了直接是牠（2026-10-16 定 10%；2026-10-27 改 20%，
+// 同事打 Armagemon 輸了要從牠重來，等太久）。
 // 平均抽的話 Ultimate 池 58 隻、五六十場才碰一次，滿 4 隻的人等太久。
-const PAGE2_BOSS_CHANCE = 0.1;
+const PAGE2_BOSS_CHANCE = 0.2;
 const PAGE2_BOSS_SALT   = 7717;        // 跟勝負 seed、SU 擲骰的 salt 錯開，免得三個擲骰綁在一起
 
 // 收進營地時**丟掉**的欄位。其餘一律保存。
@@ -2714,7 +2715,7 @@ module.exports = {
     snapshotPet, restorePet, isRanchTransient, applyRanchOp,
     SPECIAL_EVO_FILE, loadSpecialEvolutions, matchRanchRule, applyRanchAging, RANCH_AGE_CHECK_MS,
     JOGRESS_FILE, loadJogress, jogressTarget, jogressCandidates, isJogressStep, settleJogress,
-    recordAlbumChar,
+    recordAlbumChar, albumKeyOf,
     getDisplayName,
     readCharConfig,
     getCharacterTags,

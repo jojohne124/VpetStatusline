@@ -165,6 +165,8 @@ function create(opts = {}) {
             onStairs('duel', d);    // 手動戰鬥：一回合結算了（頁面照結果演出）
         } else if (event === 'volley:in') {
             onStairs('vin', d);     // 打排球：對手這一格的按鍵（一秒 25 次）
+        } else if (event === 'commute:day' || event === 'commute:dayEnd') {
+            onStairs(event === 'commute:day' ? 'cday' : 'cdayEnd', d);   // 上班快遲到：一天開始（地圖）／一天結束（結果、新聞）
         } else if (event === 'dino:ghost') {
             onStairs('ghost', d);   // 小恐龍：同房的人的位置（約 10 次／秒）
         } else if (event === 'stairs:end') {
@@ -222,7 +224,7 @@ function create(opts = {}) {
     async function join(profile) {
         if (me) return { ok: true, already: true };
         const r = await request('POST', '/join', profile);
-        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (r.status === 0) return { ok: false, error: UNREACHABLE, offline: true };   // offline：連不上（前線會露出單機小遊戲）
         if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
         cleanup();
         me = { ...r.body.me };
@@ -333,7 +335,7 @@ function create(opts = {}) {
         return r.body;
     }
     async function stairsBoard(kind) {
-        const r = await request('GET', '/stairs/board' + (kind === 'dino' ? '?kind=dino' : ''));
+        const r = await request('GET', '/stairs/board' + (kind === 'dino' || kind === 'commute' ? '?kind=' + kind : ''));
         return r.body && r.body.ok ? r.body.board : [];
     }
 

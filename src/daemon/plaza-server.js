@@ -24,6 +24,7 @@ const os     = require('os');
 const path   = require('path');
 const W      = require('../shared/plaza-walk.js');
 const ST     = require('../shared/stairs-sim.js');   // 下樓梯（docs/plaza-stairs-spec.md）
+const CM     = require('../shared/commute-sim.js');  // 上班快遲到（docs/plaza-commute-spec.md）
 const DN     = require('../shared/dino-sim.js');     // 小恐龍（docs/plaza-dino-spec.md）
 const DS     = require('../shared/duel-sim.js');     // 手動戰鬥（docs/plaza-duel-spec.md）
 const STOCK  = require('./stock-source.js');
@@ -70,7 +71,11 @@ const STAIRS_BOARD_N  = 50;      // 排行榜留幾名
 const STAIRS_BOARD_FILE = process.env.VPET_STAIRS_BOARD || path.join(os.homedir(), '.vpet', 'stairs-board.json');
 // 小恐龍：位置各自算，伺服器只發 seed、轉送位置、收成績（規格 §二）
 const DINO_BOARD_FILE = process.env.VPET_DINO_BOARD || path.join(os.homedir(), '.vpet', 'dino-board.json');
-const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋', duel: '⚔ 手動戰鬥' };   // 聊天室系統訊息用
+// 上班快遲到：五天一局，天跟天之間停幾秒看當天結果＋新聞；排行榜比出勤天數、再比總通勤時間
+const COMMUTE_BOARD_FILE = process.env.VPET_COMMUTE_BOARD || path.join(os.homedir(), '.vpet', 'commute-board.json');
+const COMMUTE_BREAK_MS = 8000;
+const BANDAGE_MAX = 3;
+const STAIRS_NAMES = { stairs: '🪜 下樓梯', dino: '🦖 小恐龍', volley: '🏐 打排球', gomoku: '⚫ 五子棋', duel: '⚔ 手動戰鬥', commute: '🛵 上班快遲到' };   // 聊天室系統訊息用
 // 五子棋（docs/plaza-gomoku-spec.md）：輪流下，伺服器判定（不吃時機，不用輸入同步）
 const GOMOKU_N = 15;
 const GOMOKU_END_MS = 2500;
@@ -151,6 +156,8 @@ function createPlazaServer(opts = {}) {
     const dinoBoardFile   = opts.dinoBoardFile || DINO_BOARD_FILE;
     const dinoStaleMs     = opts.dinoStaleMs ?? DINO_STALE_MS;
     const dinoCountdownMs = opts.dinoCountdownMs ?? DINO_COUNTDOWN_MS;
+    const commuteBoardFile = opts.commuteBoardFile || COMMUTE_BOARD_FILE;
+    const commuteBreakMs   = opts.commuteBreakMs ?? COMMUTE_BREAK_MS;
 
     const members = new Map();   // id -> { id, name, char, stage, card, walk, stream, lostAt, chatAt }
     const chat = [];             // 最近 CHAT_KEEP 則：{ seq, at, from, name, color, text } 或 { seq, at, sys:true, text }
@@ -587,11 +594,14 @@ function createPlazaServer(opts = {}) {
                               // 手動戰鬥：雙方選了什麼不公開（只給「選好了沒」），回合結算後才在 last 裡
                               duel: r.duel ? { sides: r.duel.sides, str: r.duel.str, hp: r.duel.hp, max: r.duel.max, row: r.duel.row,
                                                round: r.duel.round, bg: r.duel.bg, startAt: r.duel.startAt, deadline: r.duel.deadline,
-                                               picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner } : null,
+                                               picked: r.duel.picks.map(p => !!p), last: r.duel.last, winner: r.duel.winner,
+                                               charged: r.duel.charged, lastAct: r.duel.lastAct } : null,   // 集氣好了沒（有氣焰，看得到）、上回合動作（防禦不能連續）
                               gomoku: r.gomoku ? { board: r.gomoku.board.join(''), turn: r.gomoku.turn, sides: r.gomoku.sides,
                                                    last: r.gomoku.last, expr: r.gomoku.expr, exprAt: r.gomoku.exprAt,
                                                    winner: r.gomoku.winner, n: GOMOKU_N,
                                                    turnAt: r.gomoku.turnAt, turnMs: opts.gomokuTurnMs ?? GOMOKU_TURN_MS } : null,
+                              commute: r.cm ? { day: r.cm.day, phase: r.cm.phase, bandage: r.cm.bandage, rows: r.cm.rows,
+                                                map: r.cm.game ? CM.mapPub(r.cm.game) : null } : null,
                               ids: r.ids.slice(),
                               names: r.ids.map(i => (members.get(i) || {}).name || '?'),
                               chars: r.ids.map(i => (members.get(i) || {}).char || null) });
@@ -607,7 +617,7 @@ function createPlazaServer(opts = {}) {
         if (stairsRoomOf(m.id)) return { status: 409, body: { ok: false, error: '你已經在一個房間裡了' } };
         const mode = body.mode === 'survival' ? 'survival' : 'endless';
         if (mode === 'survival') return { status: 400, body: { ok: false, error: '生存制還沒開放（第二期）' } };
-        const kind = ['dino', 'volley', 'gomoku', 'duel'].includes(body.kind) ? body.kind : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
+        const kind = ['dino', 'volley', 'gomoku', 'duel', 'commute'].includes(body.kind) ? body.kind : 'stairs';   // 哪個小遊戲（房間、等待、排行榜共用）
         const r = { id: crypto.randomBytes(5).toString('hex'), host: m.id, kind, mode, ids: [m.id], state: 'lobby',
                     game: null, timer: null, ver: STAIRS_VER };
         rooms.set(r.id, r);
@@ -644,6 +654,7 @@ function createPlazaServer(opts = {}) {
         if (r.kind === 'dino') return dinoStart(r, seed);
         if (r.kind === 'volley') return volleyStart(r);
         if (r.kind === 'gomoku') return gomokuStart(r);
+        if (r.kind === 'commute') return commuteStart(r, seed);
         // 手動戰鬥的房：要剛好 2 人（一個人出發是跟電腦打，頁面自己跑，不經伺服器）
         if (r.kind === 'duel') {
             if (r.ids.length !== 2) return { status: 409, body: { ok: false, error: '手動戰鬥要 2 個人（一個人請跟電腦打）' } };
@@ -705,7 +716,7 @@ function createPlazaServer(opts = {}) {
     const boardPub = (board) => board.map(({ pid, ...b }) => { void pid; return b; });
     function boardsSync(m) {
         if (!m || !m.pid) return;
-        for (const file of [stairsBoardFile, dinoBoardFile]) {
+        for (const file of [stairsBoardFile, dinoBoardFile, commuteBoardFile]) {
             let j; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { continue; }
             if (!Array.isArray(j.board)) continue;
             let changed = false;
@@ -738,7 +749,7 @@ function createPlazaServer(opts = {}) {
             const i = board.findIndex(b => pid ? b.pid === pid : (!b.pid && String(b.name).toLowerCase() === nm));
             if (i >= 0 && board[i][key] >= x[key]) { if (board[i].name !== x.name) board[i].name = x.name; continue; }
             if (i >= 0) board.splice(i, 1);
-            board.push({ name: x.name, char: x.char, [key]: x[key], at: now(), ...(pid ? { pid } : {}) });
+            board.push({ name: x.name, char: x.char, [key]: x[key], at: now(), ...(x.extra || {}), ...(pid ? { pid } : {}) });
             out.push(x.id);
         }
         board.sort((a, b) => (b[key] - a[key]) || (a.at - b.at));
@@ -996,7 +1007,9 @@ function createPlazaServer(opts = {}) {
         const last = DS.resolve(d, picks);
         d.picks = [null, null];
         const anim = opts.duelAnimMs ?? DS.ANIM_MS;
-        if (d.winner != null) d.endAt = now() + anim + (opts.duelEndMs ?? DS.END_MS);
+        // 決勝的一擊：頁面放慢演出（最後一擊特寫），結算多等這一段
+        const fin = DS.isFinisher(last) ? (opts.duelFinishMs ?? DS.finishMs(last)) : 0;
+        if (d.winner != null) d.endAt = now() + anim + fin + (opts.duelEndMs ?? DS.END_MS);
         else d.deadline = now() + anim + (opts.duelPickMs ?? DS.PICK_MS);
         roomSend(r, 'duel:round', { last });
         roomsChanged();
@@ -1010,10 +1023,11 @@ function createPlazaServer(opts = {}) {
         if (t < open || t >= d.deadline) return { status: 409, body: { ok: false, error: '還不能選' } };
         if (d.picks[i]) return { status: 409, body: { ok: false, error: '這回合已經選好了' } };
         const has = (k) => body[k] !== undefined && body[k] !== null;
-        const mv = Number(body.mv), aim = Number(body.aim), p = Number(body.p);
+        const mv = Number(body.mv), aim = Number(body.aim), p = Number(body.p), act = has('act') ? String(body.act) : undefined;
         if ((has('mv') && !DS.okMove(d, i, mv)) || (has('aim') && ![0, 1, 2].includes(aim))
-            || (has('p') && !(p >= 0 && p <= 1))) return { status: 400, body: { ok: false, error: '選擇不合法' } };
-        d.picks[i] = { mv: has('mv') ? mv : undefined, aim: has('aim') ? aim : undefined, p: has('p') ? p : undefined };
+            || (has('p') && !(p >= 0 && p <= 1)) || (act !== undefined && !DS.ACTS.includes(act))) return { status: 400, body: { ok: false, error: '選擇不合法' } };
+        if (act !== undefined && !DS.okAct(d, i, act)) return { status: 409, body: { ok: false, error: '不能連續兩回合防禦' } };
+        d.picks[i] = { act, mv: has('mv') ? mv : undefined, aim: has('aim') ? aim : undefined, p: has('p') ? p : undefined };
         if (d.picks[0] && d.picks[1]) duelResolve(r);
         else roomsChanged();   // 讓對手看到「已選好」
         return { status: 200, body: { ok: true } };
@@ -1030,12 +1044,92 @@ function createPlazaServer(opts = {}) {
         const result = d.sides.map((i, k) => ({ id: i, name: (members.get(i) || {}).name || '?', char: (members.get(i) || {}).char || null,
                                                rank: winner == null ? 1 : i === winner ? 1 : 2, draw: winner == null,
                                                why: winner != null && i !== winner ? why : null,
-                                               hp: d.hp[k], max: d.max[k], rounds: d.round - 1 }));
+                                               hp: d.hp[k], max: d.max[k], rounds: d.round - 1, stat: DS.statOf(d.stat, k) }));
         r.duel = null; r.state = 'lobby';
         roomSend(r, 'stairs:end', { room: roomPub(r), result, records: [], board: [] });
         closeRoom(r);
         endBattle('duel:' + r.id, d.sides, winner);   // 解除原地不動、頭上的 ⚔（不記戰績、不算進化）
         log(`手動戰鬥結束：${result.map(x => x.name + (x.draw ? ' 和' : x.rank === 1 ? ' 勝' : ' 敗')).join('、')}（${why}，${d.round - 1} 回合）`);
+    }
+
+    // ── 上班快遲到（docs/plaza-commute-spec.md）：伺服器算（比照下樓梯），五天一局 ──
+    // r.cm = { seed, day, phase:'day'|'break', game, bandage:{id:n}, rows:{id:{days,total,log:[]}} }
+    function commuteStart(r, seed) {
+        r.cm = { seed, day: 0, phase: 'day', game: null, bandage: {}, rows: {} };
+        for (const i of r.ids) { r.cm.bandage[i] = 0; r.cm.rows[i] = { days: 0, total: 0, log: [] }; }
+        r.state = 'play'; r.startedAt = now();
+        roomSend(r, 'stairs:start', { room: roomPub(r), seed });
+        roomsChanged();
+        commuteDay(r);
+        return { status: 200, body: { ok: true } };
+    }
+    function commuteDay(r) {
+        const cm = r.cm;
+        cm.phase = 'day';
+        cm.game = CM.createDay({ seed: cm.seed, day: cm.day, players: r.ids.map(i => ({ id: i })) });
+        roomSend(r, 'commute:day', { room: roomPub(r), map: CM.mapPub(cm.game), day: cm.day, bandage: cm.bandage });
+        r.timer = setInterval(() => commuteTick(r), stairsTickMs);
+        if (r.timer.unref) r.timer.unref();
+    }
+    function commuteTick(r) {
+        const g = r.cm && r.cm.game;
+        if (!g) return;
+        // 遊戲中斷線太久 = 當天出局（比照下樓梯）
+        for (const p of g.players) {
+            const m = members.get(p.id);
+            if (p.state === 'ride' && (!m || (!m.stream && m.lostAt != null && now() - m.lostAt > stairsLostMs))) { p.state = 'out'; p.why = 'lost'; }
+        }
+        const ev = CM.step(g);
+        roomSend(r, 'stairs:tick', { s: CM.snapshot(g), ev: ev.length ? ev : undefined });
+        if (g.over) commuteDayEnd(r);
+    }
+    function commuteDayEnd(r) {
+        clearInterval(r.timer); r.timer = null;
+        const cm = r.cm, g = cm.game;
+        const res = g.players.filter(p => cm.rows[p.id]).map(p => {
+            const row = cm.rows[p.id];
+            if (p.state === 'done') { row.days++; row.total = Math.round((row.total + p.at) * 100) / 100; }
+            // 受傷（撞車、互撞）才貼繃帶，一直貼到週五；闖紅燈、遲到不貼
+            if (p.why === 'crash') cm.bandage[p.id] = Math.min(BANDAGE_MAX, (cm.bandage[p.id] || 0) + 1);
+            const x = { id: p.id, ok: p.state === 'done', at: p.at, why: p.why, hit: p.hit };
+            row.log.push({ ok: x.ok, at: x.at, why: x.why });
+            return x;
+        });
+        const news = CM.news(g.events);
+        // log：每個人當天的結果；出局的帶位置（哪裡撞的、騎在第幾道，對畫面查「明明沒碰到」用）
+        for (const e of g.events) if (e.type === 'out') {
+            const I = e.hit === 'island' && g.map.islands.find(I => e.x + CM.BIKE_LEN > I.x0 - 5 && e.x < I.x1 + 5);
+            log(`上班快遲到 週${'一二三四五'[cm.day]}：${(members.get(e.id) || {}).name || e.id} ${e.why}${e.hit ? '/' + e.hit : ''}`
+                + ` t=${e.t} x=${e.x} ly=${e.ly}` + (I ? `（島 ${I.x0}～${I.x1}）` : ''));
+        }
+        cm.phase = 'break'; cm.game = null;
+        roomSend(r, 'commute:dayEnd', { room: roomPub(r), day: cm.day, res, news, bandage: cm.bandage });
+        if (cm.day >= CM.DAYS - 1) return commuteEnd(r);
+        cm.day++;
+        r.timer = setTimeout(() => { r.timer = null; if (rooms.has(r.id) && r.cm) commuteDay(r); }, commuteBreakMs);
+        if (r.timer.unref) r.timer.unref();
+    }
+    function commuteEnd(r) {
+        const cm = r.cm;
+        const rows = Object.entries(cm.rows).map(([id, x]) => ({ id, name: (members.get(id) || {}).name || '?',
+            char: (members.get(id) || {}).char || null, days: x.days, total: x.total, log: x.log }));
+        const result = CM.rankWeek(rows);
+        // 排行榜：一個分數排（天數優先，再比時間少）；天數、時間另外存著給畫面顯示。一天都沒到的不上榜
+        const records = boardRecord(commuteBoardFile, 'score', result.filter(x => x.days > 0).map(x =>
+            ({ ...x, score: commuteScore(x.days, x.total), extra: { days: x.days, total: x.total } })));
+        r.state = 'lobby'; r.cm = null;
+        roomSend(r, 'stairs:end', { room: roomPub(r), result, records, board: boardPub(boardRead(commuteBoardFile, 'score').slice(0, 10)) });
+        closeRoom(r);
+        log(`上班快遲到結束：${result.map(x => x.name + ' ' + x.days + ' 天 ' + x.total + ' 秒').join('、')}`);
+    }
+    const commuteScore = (days, total) => days * 1000000 - Math.round(total * 100);
+    function commuteInput(body) {
+        const id = body && body.id, r = stairsRoomOf(id), g = r && r.cm && r.cm.game;
+        if (!g) return { status: 409, body: { ok: false, error: '不在路上' } };
+        const k = Number(body.k);
+        if (!Number.isInteger(k) || k < 0 || k > 63) return { status: 400, body: { ok: false, error: '按鍵格式不對' } };
+        CM.setInput(g, id, k);
+        return { status: 200, body: { ok: true } };
     }
 
     function stairsInput(body) {
@@ -1059,13 +1153,15 @@ function createPlazaServer(opts = {}) {
         r.ids = r.ids.filter(i => i !== id);
         if (r.game) { const p = r.game.players.find(q => q.id === id); if (p && p.alive) { p.alive = false; p.diedAt = r.game.tick; p.why = 'left'; } }
         if (r.dino) { const p = r.dino.players.get(id); if (p && p.alive) { p.alive = false; p.at = now(); } }
+        if (r.cm && r.cm.game) { const p = r.cm.game.players.find(q => q.id === id); if (p && p.state === 'ride') { p.state = 'out'; p.why = 'left'; } }
         if (!r.ids.length) {
-            if (r.timer) clearInterval(r.timer);
+            if (r.timer) { clearInterval(r.timer); r.timer = null; }
             rooms.delete(r.id);
         } else {
             if (r.host === id) r.host = r.ids[0];
             roomSend(r, 'stairs:lobby', { room: roomPub(r) });
             if (r.dino) dinoCheck(r);   // 走掉的是最後一個還在跑的 → 結束
+            if (r.cm) delete r.cm.rows[id];   // 不幹了：不列入這週的結算
             if (r.volley) volleyEnd(r, r.ids[0], 'left');   // 打到一半有人走了 → 留下來的贏
             // 已經分出勝負（等著結算）的照原本的結果；還在下的 → 留下來的贏
             if (r.duel) { const dw = r.duel.winner; duelEnd(r, dw == null ? r.ids[0] : dw >= 0 ? r.duel.sides[dw] : null, dw == null ? 'left' : 'done'); }
@@ -1164,13 +1260,15 @@ function createPlazaServer(opts = {}) {
             return readBody(req, (j) => { const r = adminChat(j); reply(res, r.status, r.body); });
         }
         if (req.method === 'GET' && u.pathname === '/stairs/board') {
-            return reply(res, 200, { ok: true, board: boardPub(u.searchParams.get('kind') === 'dino' ? boardRead(dinoBoardFile, 'score') : stairsBoard()) });
+            const bk = u.searchParams.get('kind');
+            return reply(res, 200, { ok: true, board: boardPub(bk === 'dino' ? boardRead(dinoBoardFile, 'score')
+                : bk === 'commute' ? boardRead(commuteBoardFile, 'score') : stairsBoard()) });
         }
         const SR = { '/stairs/open': stairsOpen, '/stairs/start': stairsStart, '/stairs/input': stairsInput,
                      '/stairs/report': dinoReport, '/stairs/join': stairsJoin, '/stairs/leave': (j) => stairsLeave(j),
                      '/stairs/vin': volleyInput, '/stairs/vend': volleyReport, '/stairs/vresign': volleyResign, '/stairs/vstat': volleyStat,
                      '/stairs/gmove': gomokuMove, '/stairs/gresign': gomokuResign,
-                     '/stairs/dpick': duelPick, '/stairs/dresign': duelResign };
+                     '/stairs/dpick': duelPick, '/stairs/dresign': duelResign, '/stairs/cin': commuteInput };
         if (req.method === 'POST' && SR[u.pathname]) {
             return readBody(req, (j) => { const r = SR[u.pathname](j); reply(res, r.status, r.body); });
         }

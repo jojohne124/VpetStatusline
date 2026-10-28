@@ -224,7 +224,7 @@ function create(opts = {}) {
     async function join(profile) {
         if (me) return { ok: true, already: true };
         const r = await request('POST', '/join', profile);
-        if (r.status === 0) return { ok: false, error: UNREACHABLE };
+        if (r.status === 0) return { ok: false, error: UNREACHABLE, offline: true };   // offline：連不上（前線會露出單機小遊戲）
         if (!r.body || !r.body.ok) return { ok: false, error: (r.body && r.body.error) || ('廣場回應異常（' + r.status + '）') };
         cleanup();
         me = { ...r.body.me };

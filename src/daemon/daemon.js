@@ -91,7 +91,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev', 'frontMini', 'miniBest']);   // frontMini／miniBest：前線小遊戲（先開發版限定，2026-10-21）
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev']);   // frontMini／miniBest（前線小遊戲）2026-10-28 起 release 也開放：連不上廣場時露出
 // 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
 const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
@@ -703,7 +703,7 @@ async function plazaJoin() {
     const prof = readProfile();
     const r = await plazaClient.join({ name, color: prof.color, costume: prof.costume, char, stage, pid: plazaPlayerId(),
                                        card: { power, train: st.trainingBonus || 0, str } });
-    if (!r.ok) return { ok: false, error: r.error };
+    if (!r.ok) return { ok: false, error: r.error, offline: !!r.offline };
     plazaNotice = null; plazaCaches.clear();
     return { ok: true, action: 'plazaJoin', output: '進入廣場（' + plazaClient.url() + '）' };
 }
@@ -2045,7 +2045,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                   // 好幾組能合體時的下拉，緊跟在合體鈕後面
                   .map((h) => (h.includes('data-cmd="jogress"') ? h + '<select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>' : h))
                   .join('\n      ')}
-      ${IS_RELEASE ? '' : '<button id="minifront" data-help="minifront" data-scope="home" class="devonly" title="自己玩小遊戲（單機，開發版限定）">🎮 小遊戲 <span class="devtag">dev</span></button>'}
+      <button id="minifront" data-help="minifront" data-scope="home" data-when="miniFront" style="display:none" title="自己玩小遊戲（單機）">🎮 小遊戲</button>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
       <label class="k" id="festplaza" data-help="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
@@ -3383,6 +3383,7 @@ function jogressConfirmText(o){
 const WHEN={
   jogress:      ()=>jgOptions().length>0,
   jogressMulti: ()=>jgOptions().length>1,   // 不止一組才需要選
+  miniFront:    ()=>MINI_FRONT_ALWAYS||plazaOffline,   // 前線單機小遊戲：開發版一直有；正式版連不上廣場後才露出（2026-10-28）
 };
 function applyWhen(){
   document.querySelectorAll('[data-when]').forEach(el=>{
@@ -3988,7 +3989,7 @@ document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventLis
   // 能不能出門（進化中、戰鬥中、睡覺中）由伺服器端的 plazaBlocked 判，這裡不另寫一份。
   if(b.dataset.cmd==='plaza'){
     flashCmdMsg('連線到廣場…','#8b949e');
-    sendCmd('plazaJoin').then(r=>{ if(r&&r.ok) setView('plaza'); });
+    sendCmd('plazaJoin').then(r=>{ if(r&&r.ok) setView('plaza'); else if(r&&r.offline&&!plazaOffline){ plazaOffline=true; applyWhen(); } });
     return;
   }
   if(b.dataset.cmd==='plazaLeave'){
@@ -5698,7 +5699,9 @@ function miniFrontOpen(){
   draw(); el.style.display='block';
   sendCmd('miniBest',{}).then(r=>{ if(!r||!r.ok) return; miniBestCache={ stairs:r.stairs, dino:r.dino }; stMyChar=r.char||stMyChar; if(el.style.display==='block') draw(); });
 }
-// 前線小遊戲先開發版限定：release 沒有這顆鈕
+// 前線小遊戲：正式版平常藏著，連不上廣場（主機沒開、不在內網）才露出來，讓玩家自己玩（見 WHEN.miniFront）
+const MINI_FRONT_ALWAYS=${IS_RELEASE ? 'false' : 'true'};
+let plazaOffline=false;
 if(document.getElementById('minifront')) document.getElementById('minifront').addEventListener('click',()=>{
   const el=document.getElementById('minipick'); if(el.style.display==='block') miniClose(); else miniFrontOpen();
 });

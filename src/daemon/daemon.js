@@ -2069,11 +2069,11 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <div id="ctx"></div>
 <div id="helptoast">❓ 點想問的地方　（Esc 或右鍵離開）</div>
 <div id="helpdim"><div id="helphole"></div><div id="helpbox"><canvas id="helpcv" width="16" height="16"></canvas>
-  <div style="flex:1;min-width:0"><div class="who">🎓 Terriermon 助手</div><div class="hd"></div><div class="bd"></div><div class="ft">點任何地方關閉</div></div></div></div>
+  <div style="flex:1;min-width:0"><div class="who">🎓 大耳獸助手</div><div class="hd"></div><div class="bd"></div><div class="ft">點任何地方關閉</div></div></div></div>
 <div id="photobox"><div id="photocard"><img id="photoimg" alt="營地照片"><div id="photomsg"></div>
   <div class="btns"><button id="photosave" class="pri">💾 儲存</button><button id="photoagain">🔄 再拍一張</button><button id="photoclose">關閉</button></div></div></div>
 <div id="story"><div id="storypanel"><div id="storycut"><canvas id="storycv" width="32" height="16"></canvas><canvas id="storyfx" width="36" height="20"></canvas></div>
-  <div id="storybubble"><div class="nm">🎓 Terriermon 助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
+  <div id="storybubble"><div class="nm">🎓 大耳獸助手</div><div class="bd"></div><div class="btns"></div><div class="hint">點一下繼續</div></div></div></div>
 <h1>🥚 Vpet daemon</h1>
 <div id="wrap">
   <div id="petbox"><div id="stage" data-help="stage"><canvas id="scene"></canvas><canvas id="fest"></canvas><canvas id="pet" width="480" height="200"></canvas><canvas id="festfront"></canvas><canvas id="wx"></canvas><div id="battlebox"><canvas id="battlecv"></canvas></div><div id="peekbox"><canvas id="peekcv"></canvas><div id="peekphone"><div class="island"></div><div class="scr"><div class="r1"><input id="peekcode" maxlength="7" placeholder="代號 例：2330" autocomplete="off"><button id="peekgo">查詢</button><span id="peekmsg"></span></div><div class="main"><div class="lf"><div id="pkname">輸入台股代號查詢</div><div id="pkprice">—</div><div id="pkchg"></div><div id="pkinfo"></div></div><table id="pkbook"></table></div><div class="ft"><span id="pktime">資料有延遲，僅供參考</span><button id="peekback" title="回到廣場">🚽 沖水回座位</button></div></div></div></div><div id="peekfade"></div><div id="stairsbox"><canvas id="stairscv"></canvas><div id="stairspanel"></div><button id="gmresign" style="display:none">🏳 認輸</button><button id="stout" style="display:none">🚪 先離開（回廣場）</button></div><div id="minipick"></div><div id="p2hl"></div><button id="pgprev" class="pgarrow" data-help="yardpage" title="上一頁">‹</button><button id="pgnext" class="pgarrow" data-help="yardpage" title="下一頁">›</button><div id="pgdots"></div><div id="photoflash"></div><div id="plazacount"></div><div id="hud" data-help="hud"><div id="hudTime">–</div><div class="wx" id="hudWx">–</div></div></div>
@@ -4372,7 +4372,7 @@ setInterval(()=>{document.getElementById('fetchAge').textContent=Math.round((Dat
 // 一起，畫面反而更頓。
 // ── 教學（docs/tutorial-spec.md）────────────────────────────────────
 // ? 鈕 → 問號模式（helpMode 1）：滑鼠變問號、滑過有說明的地方亮虛線框，點了 →
-// 講解（helpMode 2）：其餘壓黑、只留那一塊，Terriermon 助手逐字講。點任何地方關閉、回到平常。
+// 講解（helpMode 2）：其餘壓黑、只留那一塊，大耳獸助手逐字講。點任何地方關閉、回到平常。
 // 問號模式下的點擊**一律在捕獲階段攔下來**（preventDefault + stopImmediatePropagation）：
 // 想問「重抽」是什麼，不能真的重抽下去。mousedown 也要攔 —— 長壓拎起、下拉選單都從 mousedown 開始。
 // 說明文字在 help-tips.js（release 不帶 dev 條目），元素只標 data-help 代號。
@@ -5327,12 +5327,16 @@ function cmDraw(){
   const lights=cmMap.lights||[], lt=stCur.lt||'';
   const nl=mine&&mine.st===0?lights.findIndex(L=>L>mine.x+CM_BIKE-0.1):-1, nst=nl>=0?(lt[nl]||'G'):'G', nd=nl>=0?lights[nl]-mine.x-CM_BIKE:1e9;
   const warn=nl>=0&&nst!=='G'&&nd<CM_VIEW;
+  // 騎在下面幾道時，鏡頭往下跟，上人行道的燈頭被切出畫面外 → 看得到停止線卻不知道燈號（2026-10-28 回報）。
+  // 燈頭不在畫面裡：在畫面上緣、燈桿正上方釘一個小燈號（跟著燈桿左右走；前方紅黃燈時框閃黃，跟停止線同步），車子畫完再畫、不被蓋住
+  const ltPin=[];
   lights.forEach((L,i)=>{
     if(L<left-30||L>left+span+30) return;
     const x=X(L), st=lt[i]||'G';
     g.fillStyle=warn&&i===nl&&Math.floor(nowMs/250)%2?'#f7c631':'#e8e8e8'; g.fillRect(x-5,RY,5,4*LH);
     g.fillStyle='rgba(232,232,232,.85)'; for(let y=RY+5;y<RB-5;y+=12) g.fillRect(x+8,y,R(6*PXU),6);
     const ph=R(SKY*0.7);
+    if(RY-ph-8<cmCamY+2) ltPin.push([x,st,warn&&i===nl]);
     g.fillStyle='#2b2b30'; g.fillRect(x-6,RY-ph,4,ph-6); g.fillRect(x-18,RY-ph-8,30,16);
     [['R','#ff4d4f'],['Y','#f7c631'],['G','#3fb950']].forEach(([s,c],j)=>{ g.fillStyle=st===s?c:'#4a4a50'; g.fillRect(x-16+j*10,RY-ph-5,8,10); });
   });
@@ -5372,6 +5376,13 @@ function cmDraw(){
     } });
   }
   things.sort((s1,s2)=>s1.ly-s2.ly).forEach(t=>t.f());
+  for(const [x,st,w] of ltPin){
+    const y=R(cmCamY)+7;
+    g.fillStyle=w&&Math.floor(nowMs/250)%2?'#f7c631':'#e8e8e8'; g.fillRect(x-20,y-2,34,20);
+    g.beginPath(); g.moveTo(x-8,y-2); g.lineTo(x-3,y-7); g.lineTo(x+2,y-2); g.fill();   // 小三角往上指：燈在上面
+    g.fillStyle='#2b2b30'; g.fillRect(x-18,y,30,16);
+    [['R','#ff4d4f'],['Y','#f7c631'],['G','#3fb950']].forEach(([s,c],j)=>{ g.fillStyle=st===s?c:'#4a4a50'; g.fillRect(x-16+j*10,y+3,8,10); });
+  }
   g.font='18px sans-serif'; g.textAlign='center'; for(const [x,y,s] of fx) if(s) g.fillText(s,x,y);
   g.restore();
   // 上方 HUD：左邊週幾＋速度，正中間大大的時鐘（最後 15 秒閃紅），右邊下一個紅綠燈
@@ -5660,9 +5671,9 @@ window.addEventListener('keyup',e=>{
   for(const t of ['pointerup','pointercancel','pointerleave']) cv.addEventListener(t,up);
 })();
 // ── 跟電腦玩（打排球、五子棋）─────────────────────────────────────────────
-// 不開房、不連伺服器：整局在這個頁面裡跑。電腦用 Terriermon 助手（教學助手那隻），難度先只有「普通」。
+// 不開房、不連伺服器：整局在這個頁面裡跑。電腦用大耳獸助手（教學助手那隻），難度先只有「普通」。
 // 結束後可以再來一局或回廣場（不用等別人，所以保留再來一局）。
-const COM_ID='com', COM_CHAR='${TUTOR_ID}', COM_NAME='Terriermon 助手';
+const COM_ID='com', COM_CHAR='${TUTOR_ID}', COM_NAME='大耳獸助手';
 let comState=null;   // { kind:'volley'|'gomoku', gm?, startAt, done }
 function stMeId(){ return comState?'me':(stairs&&stairs.meId); }
 // 名字／角色：跟電腦玩時是「我＋助手」，平常是房間名單
@@ -5717,8 +5728,8 @@ function miniSoloOver(kind, val){
 const FRONT_GAMES=[
   { id:'stairs', name:'🪜 下樓梯', desc:'← → 或 A D 左右移動，踩階梯往下走，越深越快。三顆心，尖刺和天花板會扣血。' },
   { id:'dino', name:'🦖 小恐龍', desc:'空白鍵、↑ 或點畫面跳，跳過仙人掌、閃過飛鳥，越跑越快。' },
-  { id:'gomoku', name:'⚫ 五子棋', desc:'跟 Terriermon 助手下，先連成五顆就贏（你執黑先下）。' },
-  { id:'volley', name:'🏐 打排球', desc:'跟 Terriermon 助手打。← → 移動、↑ 跳，碰到球時按空白鍵或點畫面用力打。先拿 7 分贏。' },
+  { id:'gomoku', name:'⚫ 五子棋', desc:'跟大耳獸助手下，先連成五顆就贏（你執黑先下）。' },
+  { id:'volley', name:'🏐 打排球', desc:'跟大耳獸助手打。← → 移動、↑ 跳，碰到球時按空白鍵或點畫面用力打。先拿 7 分贏。' },
   { id:'commute', name:'🛵 上班快遲到', desc:'一個人騎一週（五天）。→ 油門、← 煞車、↑ ↓ 移動；撞車、闖紅燈、遲到當天出局。' },
   { id:'duel', name:'⚔ 手動戰鬥', desc:'跟電腦打（同階隨機對手）。每回合選移動、攻擊位置、力度。' },
 ];

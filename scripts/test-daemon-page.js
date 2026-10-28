@@ -1590,6 +1590,9 @@ setTimeout(async () => {
            && /if\(cam\)\{ g\.save\(\); g\.translate\(W\/2,H\/2\); g\.scale\(cam\.z,cam\.z\);/.test(src) && /if\(cam\) g\.restore\(\);\n  \/\/ 上方：名字＋血條/.test(src),
            '手動戰鬥沒有最後一擊特寫（或血條跟著鏡頭放大）');
         ok(/d\.endAt=now\+DS\.ANIM_MS\+DS\.finishMs\(L\)\+DS\.END_MS;/.test(src), '單機手動戰鬥沒有等最後一擊特寫演完才結算');
+        // 上班快遲到：燈頭被切出畫面（騎在下面幾道）→ 畫面上緣釘燈號，車子畫完再畫
+        ok(/if\(RY-ph-8<cmCamY\+2\) ltPin\.push\(\[x,st,warn&&i===nl\]\);/.test(src) && /things\.sort\(\(s1,s2\)=>s1\.ly-s2\.ly\)\.forEach\(t=>t\.f\(\)\);\n  for\(const \[x,st,w\] of ltPin\)\{/.test(src.replace(/\r/g, '')),
+           '上班快遲到騎在下面時看不到燈號（燈頭切出畫面沒有釘在上緣）');
         // 結算卡（數碼風）：連線、單機共用 dgResultHtml；其他小遊戲的面板不能留著 dgw
         ok(/h=dgResultHtml\(\{ res:dgRes, mode:'⚔ 手動戰鬥'/.test(src) && /el\.innerHTML=dgResultHtml\(\{ res, mode:/.test(src)
            && /el\.classList\.toggle\('dgw',end\.kind==='duel'\)/.test(src) && /el\.classList\.toggle\('dgw',comState\.kind==='duel'\)/.test(src)
@@ -1708,8 +1711,10 @@ setTimeout(async () => {
     ok(/stES\.addEventListener\('vin'/.test(src) && /id:'volley', name:'🏐 打排球'/.test(src), '打排球沒接到選單或對手的按鍵');
     ok(/sendCmd\('stairsJoin',\{room\}\)/.test(src) && /action === 'stairsJoin'/.test(src), '加入房間沒有接到伺服器');
     ok(/<button id="stback" class="pri">回到廣場<\/button>/.test(src) && !/再來一局/.test((src.match(/function stEndPanel\(end\)\{[\s\S]*?\n\}/) || [''])[0]), '連線房間結束後不是回廣場（還有再來一局）');
-    // 跟電腦玩（打排球、五子棋）：本地跑、電腦是 Terriermon 助手、結束可以再來一局
-    ok(/const COM_ID='com', COM_CHAR='\$\{TUTOR_ID\}'/.test(src) && /<button data-c="'\+gm\.id\+'">🤖 跟電腦玩<\/button>/.test(src), '沒有跟電腦玩（或電腦不是 Terriermon 助手）');
+    // 助手的名字給玩家看的一律繁中（2026-10-28：「?」說明框、對話框、跟電腦玩還寫 Terriermon）
+    ok(!/Terriermon 助手/.test(src) && (src.match(/大耳獸助手/g) || []).length >= 5, '大耳獸助手還有地方寫成英文 Terriermon');
+    // 跟電腦玩（打排球、五子棋）：本地跑、電腦是大耳獸助手、結束可以再來一局
+    ok(/const COM_ID='com', COM_CHAR='\$\{TUTOR_ID\}'/.test(src) && /<button data-c="'\+gm\.id\+'">🤖 跟電腦玩<\/button>/.test(src), '沒有跟電腦玩（或電腦不是大耳獸助手）');
     ok(/VB\.step\(g,\[vbKeyBits\(\),comVolleyKeys\(g\)\]\)/.test(src) && /function comGomokuMove\(gm\)/.test(src), '跟電腦玩的排球／五子棋電腦沒接上');
     ok(/if\(comState\)\{ comPlace\(c\.x,c\.y\); return; \}/.test(src), '跟電腦下五子棋，點棋盤還送去伺服器');
     ok(/action==='dinoReport'/.test((src.match(/const quiet=[\s\S]*?;/) || [''])[0]), '小恐龍回報（一秒 10 次）會一直洗「已送出」訊息');

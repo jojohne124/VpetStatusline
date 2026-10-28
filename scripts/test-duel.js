@@ -132,11 +132,27 @@ console.log('— 動作：攻擊／集氣／防禦（docs/plaza-duel-actions-spe
     ok(badA === 0 && acts.has('atk') && acts.has('chg'), '電腦剛防禦過還防禦（或集氣時移動）');
     d.lastAct = [null, null]; d.charged = [false, true];
     ok([...Array(100)].every(() => DS.randomPick(d, 1).act === 'atk'), '電腦集氣好了沒有攻擊');
+    // 最後一擊特寫：有人歸零才算；直接命中、對波放慢的長度不同；比血量結束不演
+    ok(DS.finishMs({ hp: [10, 0], clash: false }) === 1800 && DS.finishMs({ hp: [0, 5], clash: true }) === 3000
+       && DS.finishMs({ hp: [10, 3], clash: false }) === 0 && !DS.isFinisher({ hp: [1, 1] }) && DS.isFinisher({ hp: [0, 1] }),
+       '最後一擊特寫的判定或多等的時間不對');
+    // 整場統計（結算卡）：開火、命中（實扣）、擋下、對波勝、最大一擊
+    {
+        const g = DS.createDuel([30, 30]), lost = [];
+        const r = (p0, p1) => { const L = DS.resolve(g, [p0, p1]); lost.push(L.block[1] ? 0 : L.hpBefore[1] - L.hp[1]); return L; };
+        r({ act: 'atk', mv: 0, aim: 1, p: 0 }, { act: 'atk', mv: 0, aim: 0, p: 0 });   // 0 打中 1，1 打歪
+        r({ act: 'atk', mv: 0, aim: 1, p: 0 }, { act: 'def', mv: 0 });                 // 1 擋下
+        const L3 = r({ act: 'atk', mv: 0, aim: 1, p: 1 }, { act: 'atk', mv: 0, aim: 1, p: 0 });   // 對波，0 力度大贏
+        const a = DS.statOf(g.stat, 0), b = DS.statOf(g.stat, 1);
+        ok(L3.clash && a.shot === 3 && b.shot === 2 && a.hit === 2 && b.hit === 0 && b.blk === 1 && a.clash === 1 && b.clash === 0
+           && a.dmg === lost[0] + lost[2] && a.max === L3.dmg[0] && b.dmg === 0,
+           '整場統計不對：' + JSON.stringify(g.stat));
+    }
 }
 
 (async () => {
     console.log('— 伺服器 —');
-    const T = { duelOpenMs: 60, duelPickMs: 500, duelAnimMs: 60, duelEndMs: 60 };
+    const T = { duelOpenMs: 60, duelPickMs: 500, duelAnimMs: 60, duelEndMs: 60, duelFinishMs: 300 };
     const ps = S.createPlazaServer({ ...T, stairsLostMs: 200, graceMs: 3000, rand: () => 0.4 });
     await new Promise(r => ps.server.listen(0, '127.0.0.1', r));
     const url = 'http://127.0.0.1:' + ps.server.address().port;
@@ -225,18 +241,23 @@ console.log('— 動作：攻擊／集氣／防禦（docs/plaza-duel-actions-spe
            '認輸的結果不對：' + JSON.stringify(end && end.result));
         ok(!ps.members.get(a.me().id).battle && !ps.members.get(b.me().id).battle, '打完沒有解除原地不動');
 
-        // 打到有人歸零 → 結算（A 每回合都打中 B；B 60 血、A 打一下 25×2）
+        // 打到有人歸零 → 結算（A 每回合都打中 B；B 60 血、A 打一下 25×2）；結算要多等最後一擊特寫
+        let finGap = -1;
         await start();
         for (let k = 0; k < 3 && room(); k++) {
             const d = room().duel; if (!d || d.winner != null) break;
             await a.stairs('dpick', { mv: 0, aim: d.row[1], p: 1 });
             await b.stairs('dpick', { mv: 0, aim: (d.row[0] + 1) % 3, p: 0 });   // B 故意打不中
+            const dd = room() && room().duel; if (dd && dd.winner != null) finGap = dd.endAt - Date.now();
             await sleep(T.duelAnimMs + 30);
         }
+        ok(finGap > T.duelAnimMs + T.duelEndMs + T.duelFinishMs - 60, '決勝的一擊沒有多等最後一擊特寫就結算：' + finGap);
         ok(await until(() => !room()), '有人歸零沒有結算');
         await until(() => a.stairsEnd());
         const e2 = a.stairsEnd();
         ok(e2 && e2.result.find(x => x.id === a.me().id).rank === 1 && e2.result.find(x => x.id === b.me().id).hp === 0, '歸零的勝負不對：' + JSON.stringify(e2 && e2.result));
+        { const sa = e2 && e2.result.find(x => x.id === a.me().id).stat;
+          ok(sa && sa.hit >= 1 && sa.dmg >= 60 && sa.shot >= sa.hit, '結算沒有帶整場統計（結算卡要用）：' + JSON.stringify(sa)); }
 
         // 中途離開 → 留下來的贏
         await start();

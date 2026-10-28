@@ -693,8 +693,8 @@ setTimeout(async () => {
             let cls = null;
             const doc = { body: { classList: { toggle: (c, v) => { cls = v ? c : null; } } },
                           getElementById: (id) => els[id] || null, querySelectorAll: () => [] };
-            const setDevUi = new Function('document', 'localStorage', 'Event', fnSrc + '\nreturn setDevUi;')(
-                doc, { setItem() {} }, function () {});
+            const setDevUi = new Function('document', 'localStorage', 'Event', 'applyWhen', fnSrc + '\nreturn setDevUi;')(
+                doc, { setItem() {} }, function () {}, () => {});
             setDevUi(false);
             ok(cls === 'nodev', 'dev介面 off 沒有掛上 nodev');
             ok(els.wxsel.value === '' && els.festsel.value === '' && !els.wxcold.checked && !els.zonebox.checked
@@ -1568,7 +1568,9 @@ setTimeout(async () => {
     // 前線小遊戲（單機）：按鈕只在前線、下樓梯模擬內嵌、玩的時候報 frontMini、daemon 收到就不觸發自動戰鬥也不排隊、個人最佳只記本機
     // 2026-10-28：正式版也有，但平常藏著，連不上廣場（offline）才露出；開發版一直有
     ok(/<button id="minifront" data-help="minifront" data-scope="home" data-when="miniFront" style="display:none"/.test(src)
-       && /miniFront: {4}\(\)=>MINI_FRONT_ALWAYS\|\|plazaOffline,/.test(src) && /const MINI_FRONT_ALWAYS=\$\{IS_RELEASE \? 'false' : 'true'\};/.test(src)
+       && /miniFront: {4}\(\)=>\(MINI_FRONT_ALWAYS&&!document\.body\.classList\.contains\('nodev'\)\)\|\|plazaOffline,/.test(src)
+       && /classList\.toggle\('nodev', !on\);\n  applyWhen\(\);/.test(src)
+       && /const MINI_FRONT_ALWAYS=[^\n]*\nlet plazaOffline=false;\nconst WHEN=\{/.test(src.replace(/\r/g, '')) && /const MINI_FRONT_ALWAYS=\$\{IS_RELEASE \? 'false' : 'true'\};/.test(src)
        && /else if\(r&&r\.offline&&!plazaOffline\)\{ plazaOffline=true; applyWhen\(\); \}/.test(src)
        && /error: r\.error, offline: !!r\.offline \}/.test(src)
        && /'page2Dev', 'duelDev'\]\);/.test(src), '前線的「🎮 小遊戲」沒有在連不上廣場時露出（或正式版還擋著 frontMini／miniBest）');
@@ -1579,8 +1581,24 @@ setTimeout(async () => {
        '前線玩小遊戲時自動戰鬥還會觸發（或排隊等關掉後補打）');
     ok(/const MINI_BEST_FILE = path\.join\(STATE_DIR, 'minigame-best\.json'\);/.test(src) && /sendCmd\('miniBest',\{kind, val:String\(val\)\}\)/.test(src), '單機的個人最佳沒有記在本機');
     ok(/if\(comState&&v!==view\) comStop\(\);/.test(src) && /if\(view!=='yard'&&view!=='plaza'\)\{ CW=HOME_CW; CH=HOME_CH; \}/.test(src), '前線小遊戲切畫面沒收掉（或玩完格子大小沒換回來）');
+    // 最後一擊特寫（2026-10-28）：決勝那一擊放慢＋鏡頭；單機結算多等；頁面時間軸跟 duel-sim 的 FIN_WIN 對得上
+    {
+        const mbt = src.match(/const MBT=(\{[^}]*\});/), M = mbt ? new Function('return ' + mbt[1])() : {};
+        const DSm = require(path.join(__dirname, '..', 'src', 'shared', 'duel-sim.js'));
+        ok(DSm.FIN_WIN.hit === M.FLY + 300 && DSm.FIN_WIN.clash === M.FLY * 0.5 + M.HOLD + M.WIN + 300, '頁面演出時間軸跟 duel-sim 的 FIN_WIN 對不上（結算會太早或太晚）');
+        ok(/fin:DS\.isFinisher\(d\.last\) \};/.test(src) && /const T=mbAnimT\(mbAnim,performance\.now\(\)-mbAnim\.t0\);/.test(src)
+           && /if\(cam\)\{ g\.save\(\); g\.translate\(W\/2,H\/2\); g\.scale\(cam\.z,cam\.z\);/.test(src) && /if\(cam\) g\.restore\(\);\n  \/\/ 上方：名字＋血條/.test(src),
+           '手動戰鬥沒有最後一擊特寫（或血條跟著鏡頭放大）');
+        ok(/d\.endAt=now\+DS\.ANIM_MS\+DS\.finishMs\(L\)\+DS\.END_MS;/.test(src), '單機手動戰鬥沒有等最後一擊特寫演完才結算');
+        // 結算卡（數碼風）：連線、單機共用 dgResultHtml；其他小遊戲的面板不能留著 dgw
+        ok(/h=dgResultHtml\(\{ res:dgRes, mode:'⚔ 手動戰鬥'/.test(src) && /el\.innerHTML=dgResultHtml\(\{ res, mode:/.test(src)
+           && /el\.classList\.toggle\('dgw',end\.kind==='duel'\)/.test(src) && /el\.classList\.toggle\('dgw',comState\.kind==='duel'\)/.test(src)
+           && /el\.classList\.remove\('cmw','dgw'\)/.test(src), '手動戰鬥的結算卡沒接上（或別的小遊戲面板留著它的樣式）');
+        ok(/if\(tl&&mbAnim\.fin&&L0\.hp\[s\]<=0&&tl\.T>=tl\.hitT\) fr=tl\.T<tl\.hitT\+800\?2:3;/.test(src), '被最後一擊打倒的中間會變回待機（應該受傷 → 一路難過）');
+    }
     ok(/function stPanel\(m\)\{[^]{0,200}?clearRect\(0,0,cv\.width,cv\.height\)/.test(src), '等待畫面後面留著上一局的最後一幕（例如手動戰鬥的擂台）');
-    ok(/title="自己玩小遊戲（單機）">🎮 小遊戲<\/button>/.test(src), '前線的小遊戲鈕還掛著 dev 標記（正式版玩家也看得到）');
+    ok(/title="自己玩小遊戲（單機）">🎮 小遊戲\$\{IS_RELEASE \? '' : '<span class="devtag mfdev"> dev<\/span>'\}<\/button>/.test(src) && /body\.nodev #minifront \.mfdev\{display:none\}/.test(src),
+       '前線的小遊戲鈕：開發版要掛 dev、正式版（或關掉 dev 介面）不掛');
     {   // 手動戰鬥：能選的移動只有上／不動／下一格（從頁面抽出 mbMoveOk 實際跑）
         const m = src.match(/function mbMoveOk\(d,mi,mv\)\{[^\n]*\}/);
         let fn = null; try { fn = m && new Function('return ' + m[0])(); } catch (e) {}

@@ -1807,6 +1807,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   .tgl .tx{font-size:12px;color:#8b949e}
   /* dev 介面關掉：dev 限定的鈕／列／預覽全部藏起來，看到的就是 release 的樣子 */
   body.nodev .devonly{display:none!important}
+  body.nodev #minifront .mfdev{display:none}   /* 關掉 dev 介面＝看正式版：小遊戲鈕照正式版的規則露出、不掛 dev。
+     不用單純的 class="devtag"：那代表整顆是 dev 功能（說明正式版會拿掉），這顆是玩家功能，dev 只表示「開發版一直露出」 */
   body.noinfo #info{display:none!important}   /* 進階指令「daemon 資訊」隱藏 */
   /* 指令輸出：子行程的 stdout 原樣顯示（doctor / stats / code 這種有回應的） */
   #cmdout{margin-top:8px;max-width:480px;display:none;background:#0d1117;border:1px solid #30363d;
@@ -1932,6 +1934,42 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #stairspanel .cm-row .sc small{color:#8b949e}
   #stairspanel.cmw{width:400px;padding:6px 10px}   /* 上班快遲到的一週結算：寬一點，獎項排三欄，一個畫面看完（4 人＋5 個獎項也不用捲） */
   #stairspanel.cmw .st-hint{margin-top:2px} #stairspanel.cmw .st-btns{margin-top:4px}
+  /* 手動戰鬥的結算（2026-10-28）：數碼風 —— 深藍底＋格線＋掃描線、青色發光框、WIN!／LOSE… 大字、雙方點陣圖、10 格血條、對照統計 */
+  #stairspanel.dgw{width:360px;padding:0;background:#061024;border:2px solid #2ad4ff;border-radius:4px;color:#cfe8ff;
+                   box-shadow:0 0 0 1px #0b3a66,0 0 18px rgba(42,212,255,.45),inset 0 0 22px rgba(42,212,255,.25)}
+  #stairspanel .dg{position:relative;padding:5px 12px 8px;font-family:Consolas,"Microsoft JhengHei",monospace;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,.035) 0 1px,transparent 1px 3px),
+               linear-gradient(90deg,rgba(64,160,255,.09) 1px,transparent 1px) 0 0/16px 16px,
+               linear-gradient(rgba(64,160,255,.09) 1px,transparent 1px) 0 0/16px 16px,
+               radial-gradient(ellipse at 50% 28%,#14408a 0,#0a1d45 45%,#061024 80%)}
+  #stairspanel .dg::before,#stairspanel .dg::after{content:'';position:absolute;width:14px;height:14px;border:2px solid #ffe14a}
+  #stairspanel .dg::before{left:3px;top:3px;border-right:0;border-bottom:0}
+  #stairspanel .dg::after{right:3px;bottom:3px;border-left:0;border-top:0}
+  #stairspanel .dg-top{display:flex;justify-content:space-between;font-size:10px;letter-spacing:2px;color:#6fd3ff;border-bottom:1px dashed rgba(111,211,255,.45);padding:0 6px 2px}
+  #stairspanel .dg-big{margin-top:3px;font:900 30px/1 Consolas,monospace;letter-spacing:5px;animation:dgPop .55s cubic-bezier(.2,1.6,.4,1) both}
+  #stairspanel .dg-big.win{color:#ffe14a;text-shadow:0 0 10px #ff9d00,3px 3px 0 #b34700}
+  #stairspanel .dg-big.lose{color:#9cc0ff;text-shadow:0 0 8px #2a5bd7,3px 3px 0 #10245a}
+  #stairspanel .dg-big.draw{color:#e6edf3;text-shadow:0 0 8px #6fd3ff,3px 3px 0 #1d3b6f}
+  #stairspanel .dg-sub{font-size:11px;line-height:15px;color:#cfe8ff;letter-spacing:3px}
+  @keyframes dgPop{0%{transform:scale(2.2);opacity:0;filter:blur(3px)}100%{transform:none;opacity:1;filter:none}}
+  #stairspanel .dg-vs{display:grid;grid-template-columns:1fr 30px 1fr;align-items:end;margin-top:2px}
+  #stairspanel .dg-vs>b{font:italic 900 18px Consolas,monospace;color:#2ad4ff;text-shadow:0 0 6px #2ad4ff;align-self:center}
+  #stairspanel .dg-f{position:relative;display:flex;flex-direction:column;align-items:center;min-width:0}
+  #stairspanel .dg-f canvas{width:56px;height:56px;image-rendering:pixelated;border-radius:50%;
+    background:radial-gradient(circle,rgba(42,212,255,.28) 0,rgba(42,212,255,.06) 60%,transparent 70%)}
+  #stairspanel .dg-f.w canvas{background:radial-gradient(circle,rgba(255,225,74,.4) 0,rgba(255,157,0,.1) 60%,transparent 70%)}
+  #stairspanel .dg-f.l canvas{filter:grayscale(.55) brightness(.8)}
+  #stairspanel .dg-f em{position:absolute;top:-2px;font:normal 900 9px Consolas,monospace;letter-spacing:1px;color:#3a2200;background:#ffe14a;padding:0 5px;border-radius:2px;box-shadow:0 0 6px #ff9d00}
+  #stairspanel .dg-f span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:15px;color:#e6edf3}
+  #stairspanel .dg-f.me span{color:#f7c631}
+  #stairspanel .dg-hp{display:flex;gap:2px;margin-top:2px} #stairspanel .dg-hp i{width:9px;height:6px;background:#1b2a4a;box-shadow:inset 0 0 0 1px #0b1630}
+  #stairspanel .dg-st{display:grid;grid-template-columns:1fr 78px 1fr;margin:5px 4px 0;font-size:12px;line-height:14px;border-top:1px solid rgba(111,211,255,.3);padding-top:3px}
+  #stairspanel .dg-st i{font-style:normal;font-size:10px;color:#6fd3ff;letter-spacing:1px}
+  #stairspanel .dg-st span{color:#9fb3cc} #stairspanel .dg-st span.hi{color:#ffe14a;font-weight:700}
+  #stairspanel .dg-foot{margin-top:3px;font-size:11px;line-height:14px;color:#8fb4ff;letter-spacing:1px}
+  #stairspanel .dg .st-btns{margin-top:5px}
+  #stairspanel .dg .st-btns button{background:#0b2a55;border:1px solid #2ad4ff;color:#cfe8ff;border-radius:2px;font-family:inherit}
+  #stairspanel .dg .st-btns button.pri{background:#ffe14a;border-color:#ffe14a;color:#3a2200;font-weight:700;box-shadow:0 0 8px rgba(255,157,0,.6)}
   #stairspanel .cm-awards{margin:6px 0 2px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;text-align:left;font-size:11px;line-height:1.35}
   #stairspanel .cm-awards div{border:1px dashed #444c56;border-radius:6px;padding:3px 6px;display:flex;flex-direction:column;min-width:0}
   #stairspanel .cm-awards span{color:#8b949e} #stairspanel .cm-awards b{color:#e6edf3;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2045,7 +2083,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                   // 好幾組能合體時的下拉，緊跟在合體鈕後面
                   .map((h) => (h.includes('data-cmd="jogress"') ? h + '<select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>' : h))
                   .join('\n      ')}
-      <button id="minifront" data-help="minifront" data-scope="home" data-when="miniFront" style="display:none" title="自己玩小遊戲（單機）">🎮 小遊戲</button>
+      <button id="minifront" data-help="minifront" data-scope="home" data-when="miniFront" style="display:none" title="自己玩小遊戲（單機）">🎮 小遊戲${IS_RELEASE ? '' : '<span class="devtag mfdev"> dev</span>'}</button>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
       <label class="k" id="festplaza" data-help="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
@@ -3380,10 +3418,14 @@ function jogressConfirmText(o){
        + '前線的 '+front+' 會變成 '+o.toName+'。確定嗎？';
 }
 // data-when 的條件。不成立 = 整顆不出現（不是灰掉：灰掉的鈕會讓人一直想點點看為什麼）。
+// MINI_FRONT_ALWAYS／plazaOffline 要宣告在 WHEN 前面：頁面一開 setDevUi 就會跑 applyWhen，宣告在後面會 TDZ 整頁掛掉（2026-10-28）
+const MINI_FRONT_ALWAYS=${IS_RELEASE ? 'false' : 'true'};
+let plazaOffline=false;
 const WHEN={
   jogress:      ()=>jgOptions().length>0,
   jogressMulti: ()=>jgOptions().length>1,   // 不止一組才需要選
-  miniFront:    ()=>MINI_FRONT_ALWAYS||plazaOffline,   // 前線單機小遊戲：開發版一直有；正式版連不上廣場後才露出（2026-10-28）
+  // 前線單機小遊戲：正式版連不上廣場後才露出（2026-10-28）；開發版一直有（掛 dev），關掉 dev 介面就照正式版
+  miniFront:    ()=>(MINI_FRONT_ALWAYS&&!document.body.classList.contains('nodev'))||plazaOffline,
 };
 function applyWhen(){
   document.querySelectorAll('[data-when]').forEach(el=>{
@@ -4033,6 +4075,7 @@ document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventLis
 // 關的時候順便把預覽歸回自動，不然藏起來的預覽還在生效，畫面會對不上。
 function setDevUi(on){
   document.body.classList.toggle('nodev', !on);
+  applyWhen();   // 前線小遊戲鈕跟著 dev 介面露出／藏起來
   try{ localStorage.setItem('vpet.devui', on ? '1' : '0'); }catch(e){}
   document.querySelectorAll('#devui button').forEach(b=>{ b.style.borderColor = (b.dataset.on==='1')===on ? '#58a6ff' : ''; });
   const pd=document.getElementById('plazadev'); if(pd) pd.checked=on;   // 廣場那顆勾選框（同一個開關）
@@ -4898,16 +4941,19 @@ function stBoardHtml(kind, board, meName, n){
 }
 // 一局結束：成績、紀錄、排行榜前 10，「回到廣場」收掉（房間已經解散了）
 function stEndPanel(end){
-  const el=document.getElementById('stairspanel'); el.style.display='block'; el.classList.toggle('cmw',end.kind==='commute');
+  const el=document.getElementById('stairspanel'); el.style.display='block'; el.classList.toggle('cmw',end.kind==='commute'); el.classList.toggle('dgw',end.kind==='duel');
   document.getElementById('stairscv').style.display='';
   const dino=end.kind==='dino', volley=end.kind==='volley', gomoku=end.kind==='gomoku', duel=end.kind==='duel', commute=end.kind==='commute', me=end.result.find(r=>r.id===stairs.meId);
   let h='<div class="st-h">'+(commute?'🛵 上班快遲到':duel?'⚔ 手動戰鬥':gomoku?'⚫ 五子棋':volley?'🏐 打排球':dino?'🦖 小恐龍':'🪜 下樓梯')+(commute?'　本週結算':'　結束')+'</div>';
   // 上班快遲到：一週結算（名次、出勤天數、總通勤時間、每天的結果、獎項）
   if(commute) h+=cmWeekHtml(end.result, stairs.meId);
-  if(duel&&me){
-    const op=end.result.find(r=>r.id!==me.id);
-    h+='<div class="st-res"><b>'+(me.draw?'平手':me.rank===1?'你贏了！':'你輸了')+'</b>'+(op?'　vs '+stEsc(op.name):'')+'　共 '+me.rounds+' 回合'
-      +(op&&op.why==='resign'?'（對手認輸）':me.why==='resign'?'（認輸）':op&&op.why==='left'?'（對手離開了）':op&&op.why==='lost'?'（對手斷線）':'')+'</div>';
+  let dgSides=null, dgRes='';
+  if(duel&&me){   // 結算卡（數碼風）取代標題＋一行字
+    const op=end.result.find(r=>r.id!==me.id)||{ name:'?', hp:0, max:1 };
+    dgRes=me.draw?'draw':me.rank===1?'win':'lose';
+    dgSides=[me,op].map(r=>({ name:r.name, char:r.char, hp:r.hp, max:r.max, st:r.stat||null }));
+    h=dgResultHtml({ res:dgRes, mode:'⚔ 手動戰鬥', sides:dgSides, rounds:me.rounds,
+        why:op.why==='resign'?'對手認輸':me.why==='resign'?'你認輸了':op.why==='left'?'對手離開了':op.why==='lost'?'對手斷線':'' });
   }
   if(gomoku&&me){
     const op=end.result.find(r=>r.id!==me.id);
@@ -4926,8 +4972,8 @@ function stEndPanel(end){
   if(commute&&me){ const i=(end.board||[]).findIndex(b=>b.name===me.name);
     h+='<div class="st-hint">🏆 排行榜'+(i>=0?'第 '+(i+1)+' 名':me.days?'未進前 10':'：一天都沒準時，不上榜')+(rec?'　<b style="color:#f7c631">'+(rec.top1?'全服第一！':'刷新個人紀錄！')+'</b>':'')+'</div>'; }
   if(!volley&&!gomoku&&!duel&&!commute) h+=stBoardHtml(end.kind, end.board, me&&me.name, 10);
-  h+='<div class="st-btns"><button id="stback" class="pri">回到廣場</button></div>';
-  if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h; if(commute) stPanelPets();
+  h+='<div class="st-btns"><button id="stback" class="pri">回到廣場</button></div>'+(dgSides?'</div>':'');
+  if(el.dataset.h!==h){ el.dataset.h=h; el.innerHTML=h; if(commute) stPanelPets(); if(dgSides) dgPets(dgSides,dgRes);
     document.getElementById('stback').addEventListener('click',()=>{ stEndSeen=end.at; stairsSync(stairs); });
   }
 }
@@ -4935,7 +4981,7 @@ function stPanel(m){
   const el=document.getElementById('stairspanel'); el.style.display='block';
   // 等待畫面：畫布上不該留著上一局（任何小遊戲）的最後一幕
   { const cv=document.getElementById('stairscv'); if(cv.width) cv.getContext('2d').clearRect(0,0,cv.width,cv.height); }
-  el.classList.remove('cmw');   // 上班快遲到一週結算的寬版只給結算用
+  el.classList.remove('cmw','dgw');   // 上班快遲到一週結算的寬版、手動戰鬥的結算卡只給結算用
   const host=stairs.meId===m.host, end=stairs.end;
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const dino=m.kind==='dino', volley=m.kind==='volley', gomoku=m.kind==='gomoku', duel=m.kind==='duel', commute=m.kind==='commute';
@@ -5700,8 +5746,6 @@ function miniFrontOpen(){
   sendCmd('miniBest',{}).then(r=>{ if(!r||!r.ok) return; miniBestCache={ stairs:r.stairs, dino:r.dino }; stMyChar=r.char||stMyChar; if(el.style.display==='block') draw(); });
 }
 // 前線小遊戲：正式版平常藏著，連不上廣場（主機沒開、不在內網）才露出來，讓玩家自己玩（見 WHEN.miniFront）
-const MINI_FRONT_ALWAYS=${IS_RELEASE ? 'false' : 'true'};
-let plazaOffline=false;
 if(document.getElementById('minifront')) document.getElementById('minifront').addEventListener('click',()=>{
   const el=document.getElementById('minipick'); if(el.style.display==='block') miniClose(); else miniFrontOpen();
 });
@@ -5739,13 +5783,62 @@ function comStart(kind){
 }
 function comStop(){ if(comState&&comState.timer) clearInterval(comState.timer); comState=null; cmStop(); cmReset(); vbStop(); gmStop(); mbStop(); dnStop(); stStop(); stPrev=stCur=null; miniFrontOff(); document.getElementById('stairsbox').style.display='none'; poll(); }
 // 結束面板（本地）：勝負、比分／手數，再來一局或回廣場
+// ── 手動戰鬥的結算卡（2026-10-28，數碼風）：連線（stEndPanel）、單機（comEndPanel）共用 ──
+// o = { res:'win'|'lose'|'draw', mode, sides:[自己, 對手]（{ name, char, hp, max, st }）, rounds, why }
+function dgResultHtml(o){
+  const big={ win:'WIN!', lose:'LOSE…', draw:'DRAW' }[o.res], sub={ win:'你贏了！', lose:'你輸了', draw:'平手' }[o.res];
+  const fighter=(s,i)=>{
+    const w=o.res!=='draw'&&(i===0)===(o.res==='win'), cls=(i===0?' me':'')+(o.res==='draw'?'':w?' w':' l');
+    const ratio=Math.max(0,s.hp)/(s.max||1), lit=s.hp>0?Math.max(1,Math.round(ratio*10)):0;
+    const col=ratio>.5?'#3ad15a':ratio>.25?'#f1c40f':'#e74c3c';
+    let hp=''; for(let k=0;k<10;k++) hp+='<i'+(k<lit?' style="background:'+col+'"':'')+'></i>';
+    return '<div class="dg-f'+cls+'">'+(w?'<em>WINNER</em>':'')+'<canvas width="72" height="72" data-dg="'+i+'"></canvas><span>'+stEsc(s.name||'?')+'</span><div class="dg-hp">'+hp+'</div></div>';
+  };
+  let h='<div class="dg"><div class="dg-top"><span>◆ BATTLE RESULT</span><span>'+o.mode+'</span></div>'
+    +'<div class="dg-big '+o.res+'">'+big+'</div><div class="dg-sub">'+sub+'</div>'
+    +'<div class="dg-vs">'+fighter(o.sides[0],0)+'<b>VS</b>'+fighter(o.sides[1],1)+'</div>';
+  const a=o.sides[0].st, b=o.sides[1].st;
+  if(a&&b){   // 舊版廣場主機沒送統計：整塊不顯示
+    const row=(label,x,y,fmt)=>{ fmt=fmt||String;
+      return '<span'+(x>y?' class="hi"':'')+'>'+fmt(x,a)+'</span><i>'+label+'</i><span'+(y>x?' class="hi"':'')+'>'+fmt(y,b)+'</span>'; };
+    h+='<div class="dg-st">'+row('造成傷害',a.dmg,b.dmg)+row('命中',a.hit,b.hit,(v,s)=>v+'/'+s.shot)+row('最大一擊',a.max,b.max)
+      +row('對波勝',a.clash,b.clash)+row('擋下',a.blk,b.blk)+'</div>';
+  }
+  h+='<div class="dg-foot">ROUND '+o.rounds+(o.why?'　·　'+o.why:'')+'</div>';
+  return h;   // 呼叫端接上按鈕再收尾 </div>
+}
+// 結算卡上的點陣圖：贏的開心、輸的難過、平手站著；圖還沒載好就晚一點再畫
+function dgPets(sides,res,tries){
+  let miss=false;
+  document.querySelectorAll('#stairspanel canvas[data-dg]').forEach(cv=>{
+    const i=+cv.dataset.dg, a=mbArt[sides[i].char||'agumon'];
+    if(!a){ miss=true; return; }
+    const w=res!=='draw'&&(i===0)===(res==='win'), fr=res==='draw'?0:w?5:3, set=i===0?a.r:a.l, sp=set[fr]||set[0];
+    if(!sp) return;
+    const g=cv.getContext('2d'), k=Math.min(64/sp.img.width,64/sp.img.height);
+    g.clearRect(0,0,72,72); g.imageSmoothingEnabled=false;
+    g.drawImage(sp.img,Math.round(36-sp.img.width*k/2),Math.round(40-sp.img.height*k/2),Math.round(sp.img.width*k),Math.round(sp.img.height*k));
+  });
+  if(miss&&(tries||0)<10){ mbLoadArt(sides.map(s=>s.char||'agumon')); setTimeout(()=>dgPets(sides,res,(tries||0)+1),300); }
+}
 function comEndPanel(won, text){
   const el=document.getElementById('stairspanel'); el.style.display='block'; el.classList.toggle('cmw',comState.kind==='commute');
+  el.classList.toggle('dgw',comState.kind==='duel');
+  if(comState.kind==='duel'){
+    const d=comState.duel, res=d.winner<0?'draw':d.winner===0?'win':'lose';
+    const sides=[0,1].map(i=>({ name:d.names[i], char:d.chars[i], hp:d.hp[i], max:d.max[i], st:DS.statOf(d.stat,i) }));
+    el.dataset.h='';
+    el.innerHTML=dgResultHtml({ res, mode:comState.devTest?'⚔ DEV 測試':'⚔ VS 電腦', sides, rounds:d.round-1,
+        why:(d.resign===0?'你認輸了　·　':'')+'對手戰力 '+d.str[1] })
+      +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div></div>';
+    dgPets(sides,res);
+  } else {
   const k0=comState.kind, solo=k0==='stairs'||k0==='dino'||k0==='commute';
   const title={ commute:'🛵 上班快遲到', volley:'🏐 打排球', duel:comState.devTest?'⚔ 手動戰鬥（dev 測試）':'⚔ 手動戰鬥　vs 電腦', stairs:'🪜 下樓梯', dino:'🦖 小恐龍' }[k0]||'⚫ 五子棋';
   // 單機（下樓梯、小恐龍）沒有勝負：won 不用，text 是成績那一行
   el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(k0==='duel'||solo?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res">'+(solo?'':'<b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　')+text+'</div>'
     +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div>';
+  }
   document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(comState.devTest?'dev':'com'); else comStart(k); });
   document.getElementById('comback').addEventListener('click',comStop);
 }
@@ -6191,6 +6284,39 @@ function mbTimeline(L, T, mi){
   return { rows, bullets, booms, frame, hp:T<hitT?L.hpBefore:L.hp, done:T>=DS.ANIM_MS, T, hitT };
 }
 
+// ── 最後一擊特寫（2026-10-28）：決勝的那一擊（有人歸零）──
+// 直接命中：拉近到攻擊者 → 慢動作跟著子彈 → 命中 → 拉回。
+// 對波：慢動作，子彈往中間飛時鏡頭一路拉近 → 對波結束跟著贏的那顆 → 命中 → 拉回。
+// 放慢的那段長度在 duel-sim（FIN_WIN），伺服器照它延後結算；這裡的 MBT 改了要一起改那邊
+const MB_ZOOM=2.2;
+// 實際經過的毫秒 r → 時間軸上的 T：發射到命中後 300ms 那段放慢 FIN_SLOW 倍，其餘照常
+function mbAnimT(A,r){
+  if(!A.fin) return r;
+  const w=DS.FIN_WIN[A.last.clash?'clash':'hit'], slow=w/DS.FIN_SLOW;
+  return r<MBT.MOVE?r:r<MBT.MOVE+slow?MBT.MOVE+(r-MBT.MOVE)*DS.FIN_SLOW:r-slow+w;
+}
+function mbCam(L,tl,mi,W,H){
+  const T=tl.T, M=MBT.MOVE, hitT=tl.hitT, holdEnd=M+MBT.FLY*0.5+MBT.HOLD, col=(s)=>s===mi?0:2;
+  const v=L.hp[0]<=0?0:1, a=1-v;   // 倒下的、打出最後一擊的
+  const C=[W/2,H/2], vic=mbCell(col(v),L.to[v]);
+  const lerp=(A,B,k)=>[A[0]+(B[0]-A[0])*k, A[1]+(B[1]-A[1])*k];
+  const bul=(s)=>{ const b=tl.bullets.find(b=>b.s===s); return b?[b.x,b.y]:null; };
+  let z=1, p=C;
+  if(T>=hitT+300){ const k=mbEase(Math.min(1,(T-hitT-300)/500)); z=MB_ZOOM+(1-MB_ZOOM)*k; p=lerp(vic,C,k); }   // 拉回正常視角
+  else if(T>=hitT){ z=MB_ZOOM; p=vic; }                                                                       // 命中：停在被打中的那隻
+  else if(L.clash){
+    if(T>=holdEnd){ z=MB_ZOOM; p=bul(L.cw)||vic; }   // 對波分出勝負：跟著贏的那顆
+    else if(T>=M){ const k=(T-M)/(holdEnd-M), bs=tl.bullets; z=1+(MB_ZOOM-1)*k;   // 往中間飛、頂住：一路拉近，對準兩顆中間
+      if(bs.length) p=[bs.reduce((t,b)=>t+b.x,0)/bs.length, bs.reduce((t,b)=>t+b.y,0)/bs.length]; }
+  } else {
+    const att=mbCell(col(a),tl.rows[a]);
+    if(T<M){ const k=mbEase(T/M); z=1+(MB_ZOOM-1)*k; p=lerp(C,att,k); }   // 移動時拉近到攻擊者
+    else { z=MB_ZOOM; p=bul(a)||vic; }                                      // 跟著子彈
+  }
+  const hw=W/2/z, hh=H/2/z;   // 鏡頭不拍到場地外面
+  return { z, x:Math.max(hw,Math.min(W-hw,p[0])), y:Math.max(hh,Math.min(H-hh,p[1])) };
+}
+
 // ── 選擇（每回合依序：移動 → 攻擊位置 → 力度）──
 function mbPhase(d,now){
   if(now<d.startAt) return 'open';
@@ -6287,7 +6413,7 @@ function rsAt(e){
   const [x,y]=mbCanvasXY(e); return x>=rsBox.x&&x<rsBox.x+rsBox.w&&y>=rsBox.y&&y<rsBox.y+rsBox.w;
 }
 function mbResign(d){
-  if(comState){ d.winner=1; d.endAt=0; return; }   // dev 測試：本地直接判輸
+  if(comState){ d.winner=1; d.endAt=0; d.resign=0; return; }   // 單機：本地直接判輸（結算卡寫「你認輸了」）
   sendCmd('duelResign').then(()=>poll());
 }
 function mbClick(e){
@@ -6342,9 +6468,9 @@ function mbLocalTick(d,now){
   if(now<d.startAt) return;
   if(!d.picks[1]&&now>=d.deadline-DS.PICK_MS){ d.picks[1]=DS.randomPick(d,1); d.picked[1]=true; }
   if((d.picks[0]&&d.picks[1])||now>=d.deadline){
-    DS.resolve(d,[0,1].map(i=>DS.normPick(d,i,d.picks[i])));
+    const L=DS.resolve(d,[0,1].map(i=>DS.normPick(d,i,d.picks[i])));
     d.picks=[null,null]; d.picked=[false,false];
-    if(d.winner!=null) d.endAt=now+DS.ANIM_MS+DS.END_MS; else d.deadline=now+DS.ANIM_MS+DS.PICK_MS;
+    if(d.winner!=null) d.endAt=now+DS.ANIM_MS+DS.finishMs(L)+DS.END_MS; else d.deadline=now+DS.ANIM_MS+DS.PICK_MS;   // 最後一擊特寫放慢的那段也要等
   }
 }
 
@@ -6354,7 +6480,7 @@ function mbFrame(){
   const now=mbNow();
   if(comState) mbLocalTick(d,now);
   mbLoadArt(d.chars.map(c=>c||'agumon'));
-  if(d.last&&(!mbAnim||d.last.round>mbAnim.round)) mbAnim={ round:d.last.round, last:d.last, t0:performance.now(), done:false };
+  if(d.last&&(!mbAnim||d.last.round>mbAnim.round)) mbAnim={ round:d.last.round, last:d.last, t0:performance.now(), done:false, fin:DS.isFinisher(d.last) };
   // 時限快到還沒送出：有選多少送多少（沒選的伺服器用預設）
   if(mbPhase(d,now)==='pick'){ const s=mbSelFor(d); if(!s.sent&&d.deadline-now<400) mbSend(null); }
   mbDraw(d,now);
@@ -6366,10 +6492,13 @@ function mbDraw(d,now){
   cv.style.left=pet.offsetLeft+'px'; cv.style.top=pet.offsetTop+'px';
   const g=miniCanvas(cv,W,H,69*CW,54*(CH/2));
   const mi=mbMe(d), oi=1-mi, side=[0,1].map(s=>s===mi?0:2);
-  g.drawImage(mbBg(d.bg,W,H),0,0);
   // 演出中用這回合的時間軸；其他時候站在現在的位置
   let tl=null;
-  if(mbAnim){ const T=performance.now()-mbAnim.t0; tl=mbTimeline(mbAnim.last,T,mi); if(tl.done){ mbAnim.done=true; tl=null; } }
+  if(mbAnim){ const T=mbAnimT(mbAnim,performance.now()-mbAnim.t0); tl=mbTimeline(mbAnim.last,T,mi); if(tl.done){ mbAnim.done=true; tl=null; } }
+  // 最後一擊特寫：場地、角色、子彈、爆炸跟著鏡頭放大；上方血條、面板不動（畫在 restore 之後）
+  const cam=tl&&mbAnim.fin?mbCam(mbAnim.last,tl,mi,W,H):null;
+  if(cam){ g.save(); g.translate(W/2,H/2); g.scale(cam.z,cam.z); g.translate(-cam.x,-cam.y); }
+  g.drawImage(mbBg(d.bg,W,H),0,0);
   const rows=tl?tl.rows:d.row, hp=tl?tl.hp:d.hp, phase=mbPhase(d,now), t=performance.now();
   const sel=phase==='pick'?mbSelFor(d):null;
   // 選擇中：可以去的格子、要打的格子
@@ -6389,6 +6518,8 @@ function mbDraw(d,now){
     const [x,y]=mbCell(side[s],rows[s]);
     if(L0&&L0.act&&L0.act[s]==='chg'&&!(L0.chgFail[s]&&tl.T>=tl.hitT)&&tl.T<tl.hitT+200) mbGather(g,x,y,tl.T);
     let fr=tl&&tl.frame[s]>=0?tl.frame[s]:Math.floor(t/600)%2;
+    // 被最後一擊打倒的：受傷 → 一路難過到結算（不要中間變回待機再難過，2026-10-28）
+    if(tl&&mbAnim.fin&&L0.hp[s]<=0&&tl.T>=tl.hitT) fr=tl.T<tl.hitT+800?2:3;
     if(over) fr=d.winner<0?0:(d.winner===s?5:3);
     const sp=(s===mi?a.r:a.l)[fr]||(s===mi?a.r:a.l)[0]; if(!sp) continue;
     g.fillStyle='rgba(0,0,0,.25)'; g.beginPath(); g.ellipse(x,y+40,36,8,0,0,6.2832); g.fill();
@@ -6424,6 +6555,7 @@ function mbDraw(d,now){
       });
       g.restore(); }
   }
+  if(cam) g.restore();
   // 上方：名字＋血條（不顯示數字）、第幾回合、倒數
   g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(0,0,W,48);
   const bar=(x,s,right)=>{ const ratio=Math.max(0,hp[s]/d.max[s]), w=Math.round(200*ratio);

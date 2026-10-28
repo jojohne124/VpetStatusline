@@ -27,6 +27,13 @@ const BGS = ['colosseum', 'ring', 'studio'];
 const ACTS = ['atk', 'chg', 'def'];
 const CHARGE = 1.5;          // 集氣後下一發的倍率（跟力度倍率相乘）
 const HEAL = 1 / 3;          // 防禦擋下時回幾成最大血量
+// 最後一擊特寫（2026-10-28）：決勝那一擊（有人血量歸零）頁面放慢演出、鏡頭跟著子彈，結算要多等 finishMs。
+// 伺服器、單機都照這個算。打滿回合比血量、認輸不演。
+// FIN_WIN：演出時間軸上放慢的那一段（發射 → 命中後 300ms）：直接命中 FLY＋300；對波 FLY/2＋HOLD＋WIN＋300（頁面 MBT）
+const FIN_SLOW = 0.4;
+const FIN_WIN = { hit: 1200, clash: 2000 };
+const isFinisher = (L) => !!(L && L.hp && L.hp.some(h => h <= 0));
+const finishMs = (L) => (isFinisher(L) ? Math.round(FIN_WIN[L.clash ? 'clash' : 'hit'] * (1 / FIN_SLOW - 1)) : 0);
 
 // 數值（2026-10-20 定）：血量 = 戰力，攻擊 = 戰力／4 向上取整數（不取到 10 的倍數：低戰力會一下就死、跨門檻會跳一級）
 function hpOf(str)  { return Math.max(1, Math.round(Number(str) || 0)); }
@@ -36,8 +43,11 @@ function multOf(p)  { return p >= ZONE_2 ? 2 : p >= ZONE_15 ? 1.5 : 1; }
 function createDuel(strs, bg) {
     return { str: strs.slice(), hp: strs.map(hpOf), max: strs.map(hpOf), row: [1, 1], round: 1,
              charged: [false, false], lastAct: [null, null],   // 集氣好了沒（看得到：身上有氣焰）、上回合的動作（防禦不能連續）
-             winner: null, last: null, bg: BGS.includes(bg) ? bg : BGS[0] };
+             winner: null, last: null, bg: BGS.includes(bg) ? bg : BGS[0], stat: newStat() };
 }
+// 整場統計（結算畫面用，2026-10-28）：各邊 造成傷害（實扣）、命中（沒被擋下）、開火、對波勝、擋下、最大一擊
+function newStat() { return { dmg: [0, 0], hit: [0, 0], shot: [0, 0], clash: [0, 0], blk: [0, 0], max: [0, 0] }; }
+const statOf = (st, i) => (st ? { dmg: st.dmg[i], hit: st.hit[i], shot: st.shot[i], clash: st.clash[i], blk: st.blk[i], max: st.max[i] } : null);
 const okMove = (d, i, mv) => (mv === -1 || mv === 0 || mv === 1) && d.row[i] + mv >= 0 && d.row[i] + mv < ROWS;
 const okAim  = (a) => a === 0 || a === 1 || a === 2;
 const okAct  = (d, i, act) => ACTS.includes(act) && !(act === 'def' && (d.lastAct || [])[i] === 'def');
@@ -84,6 +94,15 @@ function resolve(d, picks) {
         if (act[i] === 'chg') chgFail[i] = true;
         d.hp[i] = Math.max(0, d.hp[i] - dmg[by]);
     }
+    const st = d.stat || (d.stat = newStat());
+    for (const i of [0, 1]) {
+        if (shoot[i]) st.shot[i]++;
+        if (!hit[i]) continue;
+        const by = 1 - i;
+        if (block[i]) { st.blk[i]++; continue; }
+        st.hit[by]++; st.dmg[by] += hpBefore[i] - d.hp[i]; st.max[by] = Math.max(st.max[by], dmg[by]);
+    }
+    if (clash && cw >= 0) st.clash[cw]++;
     const chargedBefore = d.charged.slice();
     for (const i of [0, 1]) {
         if (act[i] === 'atk') d.charged[i] = false;               // 攻擊就用掉
@@ -110,5 +129,5 @@ function randomPick(d, i, rand) {
     return { act, mv: act === 'chg' ? 0 : mvs[Math.floor(rand() * mvs.length)], aim: aims[Math.floor(rand() * aims.length)], p: rand() };
 }
 
-module.exports = { ROWS, MAX_ROUNDS, PICK_MS, OPEN_MS, ANIM_MS, END_MS, ZONE_15, ZONE_2, BGS, ACTS, CHARGE, HEAL,
+module.exports = { ROWS, MAX_ROUNDS, PICK_MS, OPEN_MS, ANIM_MS, END_MS, ZONE_15, ZONE_2, BGS, ACTS, CHARGE, HEAL, FIN_SLOW, FIN_WIN, isFinisher, finishMs, statOf,
                    hpOf, atkOf, multOf, createDuel, normPick, resolve, randomPick, okMove, okAct };

@@ -1007,7 +1007,9 @@ function createPlazaServer(opts = {}) {
         const last = DS.resolve(d, picks);
         d.picks = [null, null];
         const anim = opts.duelAnimMs ?? DS.ANIM_MS;
-        if (d.winner != null) d.endAt = now() + anim + (opts.duelEndMs ?? DS.END_MS);
+        // 決勝的一擊：頁面放慢演出（最後一擊特寫），結算多等這一段
+        const fin = DS.isFinisher(last) ? (opts.duelFinishMs ?? DS.finishMs(last)) : 0;
+        if (d.winner != null) d.endAt = now() + anim + fin + (opts.duelEndMs ?? DS.END_MS);
         else d.deadline = now() + anim + (opts.duelPickMs ?? DS.PICK_MS);
         roomSend(r, 'duel:round', { last });
         roomsChanged();
@@ -1042,7 +1044,7 @@ function createPlazaServer(opts = {}) {
         const result = d.sides.map((i, k) => ({ id: i, name: (members.get(i) || {}).name || '?', char: (members.get(i) || {}).char || null,
                                                rank: winner == null ? 1 : i === winner ? 1 : 2, draw: winner == null,
                                                why: winner != null && i !== winner ? why : null,
-                                               hp: d.hp[k], max: d.max[k], rounds: d.round - 1 }));
+                                               hp: d.hp[k], max: d.max[k], rounds: d.round - 1, stat: DS.statOf(d.stat, k) }));
         r.duel = null; r.state = 'lobby';
         roomSend(r, 'stairs:end', { room: roomPub(r), result, records: [], board: [] });
         closeRoom(r);

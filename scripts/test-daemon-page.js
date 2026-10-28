@@ -1673,18 +1673,28 @@ setTimeout(async () => {
     // 系統匣的進化通知「咦！？ ○○的樣子……」讀 /state 的 jogress.frontName → 要是繁中名
     ok(/const name = \(id\) => \{ try \{ return zhName\(id\); \} catch \(e\) \{ return id; \} \};\s*const pets = ranch\.pets \|\| \[\];\s*return \{\s*front: real\.characterId, frontName: name\(real\.characterId\),/.test(src),
        '進化通知／合體介面的名字（jogress.frontName）沒有用繁中名');
-    // 更新紀錄（2026-10-27）：進階指令一列、讀根目錄 changelog.json、最近 5 版
+    // 更新紀錄（2026-10-27）：進階指令一列、讀根目錄 changelog.json、最近 2 次（CHANGELOG_SHOW）
     {
         ok(/\{ label: '📜 更新紀錄', action: 'changelog', fields: \[\], scope: 'both' \}/.test(src) && /if \(action === 'changelog'\) return \{ ok: true, action, output: changelogText\(\) \};/.test(src),
            '進階指令沒有「📜 更新紀錄」');
         const m = src.match(/const CHANGELOG_SHOW[\s\S]*?\n\}\n/);
         const changelogText = m ? new Function('fs', 'path', 'TREE_ROOT', m[0] + 'return changelogText;')(fs, path, path.join(__dirname, '..')) : () => '';
         const out = changelogText();
-        ok(/^\d{1,2}\/\d{1,2} 更新\n・/.test(out), '更新紀錄的格式不對：' + JSON.stringify(out.slice(0, 40)));
+        ok(/^\d{1,2}\/\d{1,2} 更新\n(【(新增|優化|修正)】\n)?・/.test(out), '更新紀錄的格式不對：' + JSON.stringify(out.slice(0, 40)));
+        // 分類（2026-10-28）：新增／優化／修正照順序、沒有的類別不出現；舊格式（items）照列
+        {
+            const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'vpet-cl-'));
+            fs.writeFileSync(path.join(tmp, 'changelog.json'), JSON.stringify({ entries: [{ date: '2026-10-28', fix: ['修好 A'], new: ['新增 B', '新增 C'] }, { date: '2026-10-27', items: ['舊的'] }] }));
+            const t2 = new Function('fs', 'path', 'TREE_ROOT', m[0] + 'return changelogText;')(fs, path, tmp)();
+            fs.rmSync(tmp, { recursive: true, force: true });
+            ok(t2 === '10/28 更新\n【新增】\n・新增 B\n・新增 C\n【修正】\n・修好 A\n\n10/27 更新\n・舊的', '更新紀錄的分類顯示不對：' + JSON.stringify(t2));
+        }
         // 資料本身：日期格式、每條是字串、不能太長（給玩家看的白話）
         const cl = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'changelog.json'), 'utf8'));
-        const bad = (cl.entries || []).filter(e => !/^\d{4}-\d{2}-\d{2}$/.test(e.date) || !Array.isArray(e.items) || !e.items.length
-            || e.items.some(t => typeof t !== 'string' || !t.trim() || t.length > 40));
+        const all = (e) => ['items', 'new', 'improve', 'fix'].flatMap(k => (Array.isArray(e[k]) ? e[k] : []));
+        const bad = (cl.entries || []).filter(e => !/^\d{4}-\d{2}-\d{2}$/.test(e.date) || !all(e).length
+            || all(e).some(t => typeof t !== 'string' || !t.trim() || t.length > 40)
+            || Object.keys(e).some(k => !['date', 'items', 'new', 'improve', 'fix'].includes(k)));   // 打錯類別名（例如 news）會整組不顯示
         ok(Array.isArray(cl.entries) && cl.entries.length && !bad.length, 'changelog.json 有格式不對的紀錄：' + JSON.stringify(bad).slice(0, 200));
     }
     // 小恐龍：跳 = 開心（HAPPY）、撞到 = 難過（SAD）

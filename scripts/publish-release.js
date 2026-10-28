@@ -66,7 +66,7 @@ function checkChangelog() {
     const shipped = top(tryGit(['show', `origin/${BRANCH}:changelog.json`]) || '');
     if (shipped && shipped === mine) {
         console.error('✗ changelog.json 最上面那筆跟上一次發的一樣 —— 這次的更新紀錄還沒寫。');
-        console.error('  在 entries 最上面加一筆（給玩家看的 3～5 條白話）；真的沒有玩家看得到的改動就加 --no-changelog。');
+        console.error('  在 entries 最上面加一筆（分 new 新增／improve 優化／fix 修正，給玩家看的白話）；真的沒有玩家看得到的改動就加 --no-changelog。');
         process.exit(1);
     }
 }

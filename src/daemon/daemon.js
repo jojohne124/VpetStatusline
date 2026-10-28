@@ -526,7 +526,8 @@ function currentEvent(ranch) {
 // 玩家看到的角色名（繁中名，2026-10-27）。安裝版的 core 還沒有 getDisplayNameZh（剛熱更、還沒 install）就退回英文名
 const zhName = (id) => core.getDisplayNameZh ? core.getDisplayNameZh(id) : core.getDisplayName(id);
 // 更新紀錄：讀這棵樹（repo／release）根目錄的 changelog.json，列最近 CHANGELOG_SHOW 版。每次按都重讀（熱更後就是新的）
-const CHANGELOG_SHOW = 5;
+const CHANGELOG_SHOW = 2;   // 2026-10-28：只列最近 2 次
+const CHANGELOG_GROUPS = [['new', '新增'], ['improve', '優化'], ['fix', '修正']];
 function changelogText() {
     let j; try { j = JSON.parse(fs.readFileSync(path.join(TREE_ROOT, 'changelog.json'), 'utf8')); } catch (e) { return '（還沒有更新紀錄）'; }
     const list = (Array.isArray(j.entries) ? j.entries : []).slice(0, CHANGELOG_SHOW);
@@ -534,7 +535,10 @@ function changelogText() {
     return list.map(e => {
         const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(e.date || ''));
         const head = (m ? Number(m[1]) + '/' + Number(m[2]) : String(e.date || '')) + ' 更新';
-        return head + '\n' + (Array.isArray(e.items) ? e.items : []).map(t => '・' + t).join('\n');
+        const list = (a) => (Array.isArray(a) ? a : []).map(t => '・' + t).join('\n');
+        // 分類（2026-10-28）：新增／優化／修正，沒有的類別省略；舊格式只有 items 就照原樣列
+        const groups = CHANGELOG_GROUPS.filter(([k]) => Array.isArray(e[k]) && e[k].length).map(([k, name]) => '【' + name + '】\n' + list(e[k]));
+        return head + '\n' + (groups.length ? groups.join('\n') : list(e.items));
     }).join('\n\n');
 }
 function lastUpdateResult() {

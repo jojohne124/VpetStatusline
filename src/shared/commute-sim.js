@@ -48,6 +48,11 @@ const LIGHT = { G: 6, Y: 1.5 };   // 綠燈、黃燈秒數；紅燈看哪一天
 const ISLAND_LEN = 90;            // 圓環中央島長度
 const WORK_LEN = 34;              // 施工（最下面那道整段擋住：工程車＋三角錐）
 const KEY = { thr: 1, brk: 2, up: 16, down: 32 };   // 輸入的按鍵位元（4、8 保留）
+// 紅燈壓線（2026-10-28）：車頭超過停止線 RED_PAD 點以內不算闖；黃燈、綠燈時壓到線的，轉紅再走也不算
+const RED_PAD = 3;
+// 圓環支線匯入的車不要在玩家眼前冒出來（2026-10-28 回報憑空生成）：匯入口在騎車的人畫面附近（後 MERGE_HIDE[0]、前 MERGE_HIDE[1] 點）就晚點再進來。
+// 畫面看得到自己後面約 19 點、前面約 36 點（daemon 的 CM_VIEW × CM_PIN），各多留一台車長
+const MERGE_HIDE = [35, 52];
 
 // mulberry32：同 stairs-sim
 function rng(seed) {
@@ -115,7 +120,8 @@ function lightAt(map, L, t) {
 // 圓環（2026-10-27 改版）：上兩道往上繞、下兩道往下繞，島夾在中間，四道都能騎。
 // 判定的島＝中線（1.5 道）附近的扁橢圓：上下半徑 ISLAND_RY 道、前後半徑島長一半 × ISLAND_RX。
 // 第 1、2 道（離中線 0.5 道）騎得過去；騎在兩道中間、壓著中線才會撞島
-const ISLAND_RY = 0.3, ISLAND_RX = 0.9;
+// 2026-10-28 試玩：還是太容易撞島 → 上下 0.3 → 0.2、前後 0.9 → 0.8
+const ISLAND_RY = 0.2, ISLAND_RX = 0.8;
 function hitIsland(map, x0, x1, ly) {
     for (const I of map.islands) {
         const cx = (I.x0 + I.x1) / 2, hx = (I.x1 - I.x0) / 2 * ISLAND_RX;
@@ -135,7 +141,8 @@ function addCar(g, type, lane, x, v, extra) {
 }
 
 /**
- * 開一天。players：[{ id }]，依序排在車道 0、1、2、3。
+ * 開一天。players：[{ id }]。起始車道每天隨機（2026-10-28）：四道洗牌後依序分給每個人（不同道、不會一直是房主在最上面）。
+ * 用另一條亂數（不動車流那條），同一 seed 一樣、大家看到的一樣
  */
 function createDay({ seed = 1, day = 0, players = [] } = {}) {
     const s = daySeed(seed, day), r = rng(s ^ 0xA5A5A5A5);
@@ -154,8 +161,10 @@ function createDay({ seed = 1, day = 0, players = [] } = {}) {
             x += VEH[type].len + df.gap[0] + r() * (df.gap[1] - df.gap[0]);
         }
     }
+    const lr = rng(s ^ 0x1F2E3D4C), lanes = [0, 1, 2, 3];
+    for (let i = LANES - 1; i > 0; i--) { const j = Math.floor(lr() * (i + 1)); [lanes[i], lanes[j]] = [lanes[j], lanes[i]]; }
     players.forEach((p, i) => {
-        g.players.push({ id: p.id, x: START_X, ly: i % LANES, v: 0, k: 0, sk: 0,
+        g.players.push({ id: p.id, x: START_X, ly: lanes[i % LANES], v: 0, k: 0, sk: 0,
                          state: 'ride', why: null, hit: null, at: null, outAt: null });
     });
     return g;
@@ -217,7 +226,8 @@ function stepCars(g) {
             if (g.t < g.mergeNext[k][side]) continue;
             const lane = side ? LANES - 1 : 0;
             // 匯入口有人（車或玩家）就晚一點再進來，不會硬擠到人身上
-            if ([...g.cars, ...riders].some(o => Math.abs(o.ly - lane) < 1.2 && o.x < I.mergeX + 16 && o.x + o.len > I.mergeX - 24)) {
+            if ([...g.cars, ...riders].some(o => Math.abs(o.ly - lane) < 1.2 && o.x < I.mergeX + 16 && o.x + o.len > I.mergeX - 24)
+                || riders.some(o => I.mergeX > o.x - MERGE_HIDE[0] && I.mergeX < o.x + MERGE_HIDE[1])) {
                 g.mergeNext[k][side] += 0.5; continue;
             }
             g.mergeNext[k][side] += df.merge * (0.7 + g.rand() * 0.6);
@@ -255,9 +265,11 @@ function step(g) {
         p.x += p.v * DT;
         p.ly = Math.max(0, Math.min(LANES - 1, p.ly + my * VMOVE * DT));
         const f1 = p.x + BIKE_LEN;
-        // 闖紅燈：紅燈時車頭越過停止線（黃燈不算）
-        for (const L of map.lights) {
-            if (f0 < L.x && f1 >= L.x && lightAt(map, L, g.t) === 'R') { out(g, p, 'red', null, ev); break; }
+        // 闖紅燈：紅燈時車頭越過停止線再過去 RED_PAD 點（壓線不算）。不是紅燈時壓到線的（p.pass 記第幾盞），轉紅再走也不算
+        for (let i = 0; i < map.lights.length; i++) {
+            const L = map.lights[i], st = lightAt(map, L, g.t);
+            if (f0 < L.x && f1 >= L.x && st !== 'R') (p.pass || (p.pass = {}))[i] = 1;
+            if (f0 < L.x + RED_PAD && f1 >= L.x + RED_PAD && st === 'R' && !(p.pass && p.pass[i])) { out(g, p, 'red', null, ev); break; }
         }
         if (p.state !== 'ride') continue;
         // 撞到圓環中央島
@@ -267,9 +279,9 @@ function step(g) {
         // 撞車
         const c = g.cars.find(c => Math.abs(c.ly - p.ly) < HIT_LY && h1 > c.x && h0 < c.x + c.len);
         if (c) { out(g, p, 'crash', c.type, ev); continue; }
-        // 到公司
+        // 到公司。車速留著（2026-10-28）：畫面照這個速度讓車衝過終點線再慢慢停（位置不再動，畫面自己推）
         if (f1 >= map.len) {
-            p.state = 'done'; p.at = Math.round(g.t * 100) / 100; p.v = 0; p.k = 0; p.sk = 0;
+            p.state = 'done'; p.at = Math.round(g.t * 100) / 100; p.k = 0; p.sk = 0;
             ev.push({ type: 'arrive', id: p.id, at: p.at });
         }
     }
@@ -327,7 +339,8 @@ function rankWeek(rows) {
 const r1 = (v) => Math.round(v * 10) / 10, r2 = (v) => Math.round(v * 100) / 100;
 const VIEW_BACK = 60, VIEW_FWD = 160;
 function snapshot(g) {
-    const xs = g.players.filter(p => p.state === 'ride').map(p => p.x);
+    // 這一拍剛出局的人也算（2026-10-28 舉發單：畫面要拍得到撞上的那台車，他是最後一名時車子會被切掉）
+    const xs = g.players.filter(p => p.state === 'ride' || (p.state === 'out' && p.outAt === g.t)).map(p => p.x);
     const all = xs.length ? xs : g.players.map(p => p.x);
     const lo = Math.min(...all) - VIEW_BACK, hi = Math.max(...all) + VIEW_FWD;
     const TY = { car: 0, van: 1, truck: 2 };
@@ -346,5 +359,6 @@ const mapPub = (g) => ({ day: g.day, len: g.map.len, lights: g.map.lights.map(L 
 
 module.exports = {
     DT, TICK_MS, LANES, DAYS, COUNTDOWN_S, DAY_S, CLOCK0, BIKE_LEN, VMAX, ACC, DRAG, SOFT, BRAKE, HARD, HARD_V, VMOVE, LANE_V, HIT_LY, HIT_PAD, FOLLOW_LY, ISLAND_RY, ISLAND_RX, VEH, VEH_NAME, LIGHT, ISLAND_LEN, WORK_LEN, KEY,
+    RED_PAD, MERGE_HIDE,
     CROWD, hitIsland, rng, daySeed, difficulty, makeMap, lightAt, createDay, setInput, step, news, clock, rankWeek, snapshot, mapPub,
 };

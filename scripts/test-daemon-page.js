@@ -1591,15 +1591,16 @@ setTimeout(async () => {
            '手動戰鬥沒有最後一擊特寫（或血條跟著鏡頭放大）');
         ok(/d\.endAt=now\+DS\.ANIM_MS\+DS\.finishMs\(L\)\+DS\.END_MS;/.test(src), '單機手動戰鬥沒有等最後一擊特寫演完才結算');
         // 上班快遲到：燈頭被切出畫面（騎在下面幾道）→ 畫面上緣釘燈號，車子畫完再畫
-        ok(/if\(RY-ph-8<cmCamY\+2\) ltPin\.push\(\[x,st,warn&&i===nl\]\);/.test(src) && /things\.sort\(\(s1,s2\)=>s1\.ly-s2\.ly\)\.forEach\(t=>t\.f\(\)\);\n  for\(const \[x,st,w\] of ltPin\)\{/.test(src.replace(/\r/g, '')),
+        ok(/if\(RY-ph-8<camY\+2\) ltPin\.push\(\[x,st,warn&&i===nl\]\);/.test(src) && /things\.sort\(\(s1,s2\)=>s1\.ly-s2\.ly\)\.forEach\(t=>t\.f\(\)\);\n  for\(const \[x,st,w\] of ltPin\)\{/.test(src.replace(/\r/g, '')),
            '上班快遲到騎在下面時看不到燈號（燈頭切出畫面沒有釘在上緣）');
         // 結算卡（數碼風）：連線、單機共用 dgResultHtml；其他小遊戲的面板不能留著 dgw
         ok(/h=dgResultHtml\(\{ res:dgRes, mode:'⚔ 手動戰鬥'/.test(src) && /el\.innerHTML=dgResultHtml\(\{ res, mode:/.test(src)
            && /el\.classList\.toggle\('dgw',end\.kind==='duel'\)/.test(src) && /el\.classList\.toggle\('dgw',comState\.kind==='duel'\)/.test(src)
            && /el\.classList\.remove\('cmw','dgw'\)/.test(src), '手動戰鬥的結算卡沒接上（或別的小遊戲面板留著它的樣式）');
+        ok(/#stairspanel\.dgw\{overflow-x:hidden;/.test(src), '手動戰鬥結算卡出現時 WIN! 放大那一下撐出橫向捲軸，整張往下跳');
         ok(/if\(tl&&mbAnim\.fin&&L0\.hp\[s\]<=0&&tl\.T>=tl\.hitT\) fr=tl\.T<tl\.hitT\+800\?2:3;/.test(src), '被最後一擊打倒的中間會變回待機（應該受傷 → 一路難過）');
     }
-    ok(/function stPanel\(m\)\{[^]{0,200}?clearRect\(0,0,cv\.width,cv\.height\)/.test(src), '等待畫面後面留著上一局的最後一幕（例如手動戰鬥的擂台）');
+    ok(/function stPanel\(m\)\{[^]{0,200}?miniClear\(document\.getElementById\('stairscv'\)\)/.test(src), '等待畫面後面留著上一局的最後一幕（例如手動戰鬥的擂台）');
     ok(/title="自己玩小遊戲（單機）">🎮 小遊戲\$\{IS_RELEASE \? '' : '<span class="devtag mfdev"> dev<\/span>'\}<\/button>/.test(src) && /body\.nodev #minifront \.mfdev\{display:none\}/.test(src),
        '前線的小遊戲鈕：開發版要掛 dev、正式版（或關掉 dev 介面）不掛');
     {   // 手動戰鬥：能選的移動只有上／不動／下一格（從頁面抽出 mbMoveOk 實際跑）

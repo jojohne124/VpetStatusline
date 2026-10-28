@@ -25,6 +25,7 @@ async function until(cond, ms = 3000) {
 function lab(n = 1) {
     const g = CM.createDay({ seed: 7, day: 0, players: Array.from({ length: n }, (_, i) => ({ id: 'p' + i })) });
     g.cars = []; g.map.lights = []; g.map.islands = []; g.map.works = []; g.mergeNext = []; g.t = 0;
+    g.players.forEach((p, i) => { p.ly = i % CM.LANES; });   // 起始車道每天隨機：測規則時固定照順序排（p0 在最上面）
     return g;
 }
 const P = (g, i = 0) => g.players[i];
@@ -70,7 +71,14 @@ console.log('— 模擬：基本 —');
     ok(isl > 0, '五天都沒有圓環');
     // 四個人排在四道
     const g4 = CM.createDay({ seed: 1, players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] });
-    ok(g4.players.map(p => p.ly).join() === '0,1,2,3', '四個人沒有各占一道');
+    ok(g4.players.map(p => p.ly).sort().join() === '0,1,2,3', '四個人沒有各占一道');
+    // 起始車道每天隨機（2026-10-28）：同一 seed、同一天一樣；五天裡不會天天照房間順序排；車流不受影響
+    const four = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+    const ord = (day) => CM.createDay({ seed: 1, day, players: four }).players.map(p => p.ly).join();
+    ok([0, 1, 2, 3, 4].every(d => ord(d) === ord(d)) && new Set([0, 1, 2, 3, 4].map(ord)).size > 1 && [0, 1, 2, 3, 4].some(d => ord(d) !== '0,1,2,3'),
+       '起始車道沒有每天隨機（或同一天兩次不一樣）：' + [0, 1, 2, 3, 4].map(ord).join(' / '));
+    const two = CM.createDay({ seed: 1, day: 2, players: four.slice(0, 2) });
+    ok(two.players[0].ly !== two.players[1].ly, '兩個人起始在同一道');
     // 倒數中不能動
     CM.setInput(g4, 'a', K.thr | K.down);
     run(g4, Math.floor(CM.COUNTDOWN_S / CM.DT) - 1);
@@ -175,6 +183,18 @@ console.log('— 模擬：紅綠燈 —');
     put(P(g), 50 - CM.BIKE_LEN - 0.5, 30);
     run(g, 3); g.t = R_AT(g); run(g, 3);
     ok(P(g).state === 'ride', '綠燈過了停止線、之後轉紅還是出局');
+    // 壓線（2026-10-28）：紅燈時車頭超過停止線 RED_PAD 以內不算；再往前才算闖
+    g = lab(); g.map.lights = [{ x: 50, off: 0 }]; g.t = R_AT(g);
+    put(P(g), 50 - CM.BIKE_LEN - 0.2, 20);   // 一拍走 1 點：越線、還沒超過 RED_PAD
+    run(g, 1);
+    ok(P(g).state === 'ride' && P(g).x + CM.BIKE_LEN > 50, '紅燈壓到停止線一點點就算闖紅燈');
+    run(g, 6);
+    ok(P(g).state === 'out' && P(g).why === 'red', '紅燈壓線後繼續往前沒有算闖紅燈');
+    // 黃燈壓到線停住、轉紅再走：不算
+    g = lab(); g.map.lights = [{ x: 50, off: 0 }]; g.t = Y_AT;
+    put(P(g), 50 - CM.BIKE_LEN - 0.2, 20);
+    run(g, 1); g.t = R_AT(g); run(g, 6);
+    ok(P(g).state === 'ride', '黃燈壓到線、轉紅後再往前還是算闖紅燈');
     // 紅燈：最快速度在 20 點外按 Z，停得在線前
     g = lab(); g.map.lights = [{ x: 200, off: 0 }]; g.t = R_AT(g);
     put(P(g), 200 - CM.BIKE_LEN - 20, CM.VMAX);
@@ -233,7 +253,9 @@ console.log('— 模擬：撞車、圓環、施工、互撞 —');
     const I = { x0: 100, x1: 190 };
     const isl = { islands: [I] };
     ok(!CM.hitIsland(isl, I.x0 - 2, I.x0 + 6, 0.9) && !CM.hitIsland(isl, I.x1 - 6, I.x1 + 2, 2.1), '島頭島尾的邊邊（畫面上是空的）也算撞到');
-    ok(CM.hitIsland(isl, 141, 149, 1.5) && CM.hitIsland(isl, 141, 149, 1.3) && CM.hitIsland(isl, 141, 149, 1.7), '島的正中間（中線附近）騎上去沒撞到');
+    ok(CM.hitIsland(isl, 141, 149, 1.5) && CM.hitIsland(isl, 141, 149, 1.4) && CM.hitIsland(isl, 141, 149, 1.6), '島的正中間（中線附近）騎上去沒撞到');
+    // 2026-10-28 放寬：離中線 0.25 道、島頭往內 8 點都還不算撞
+    ok(!CM.hitIsland(isl, 141, 149, 1.25) && !CM.hitIsland(isl, 141, 149, 1.75) && !CM.hitIsland({ islands: [I] }, I.x0, I.x0 + 8, 1.5), '圓環判定沒有放寬（離中線 0.25 道、島頭邊邊還是撞）');
     ok(!CM.hitIsland(isl, 141, 149, 1) && !CM.hitIsland(isl, 141, 149, 2), '騎在第 1、2 道（繞圓環）也算撞島');
     // 試玩 log 那兩次（島 613～703）：ly 0.75 擦島頭、ly 1.05 擦島尾，畫面上幾乎沒碰到 → 不算
     const isl2 = { islands: [{ x0: 613, x1: 703 }] }, isl3 = { islands: [{ x0: 703, x1: 793 }] };
@@ -283,6 +305,15 @@ console.log('— 模擬：撞車、圓環、施工、互撞 —');
     put(P(g), 336, 0);
     run(g, 4);
     ok(!g.cars.some(c => c.merge), '匯入口有玩家還硬擠進來');
+    // 匯入口在騎車的人畫面裡（不在匯入口那道）→ 也晚點再進來，不會在眼前憑空冒出一台（2026-10-28）
+    g = lab();
+    g.map.islands = [{ x0: 300, x1: 390, mergeX: 340 }]; g.mergeNext = [[0.1, 0.1]];
+    put(P(g), 300, 0); P(g).ly = 1;
+    run(g, 4);
+    ok(!g.cars.some(c => c.merge), '圓環支線的車在玩家畫面裡憑空冒出來');
+    put(P(g), 340 + CM.MERGE_HIDE[0] + 1, 0);   // 騎過去了：匯入口在畫面左邊外面
+    run(g, 12);
+    ok(g.cars.filter(c => c.merge).length === 2, '騎過圓環之後支線還是一直不匯入');
     // 互撞：雙方都出局（規格 A）
     g = lab(2);
     CM.setInput(g, 'p0', K.down);
@@ -299,6 +330,14 @@ console.log('— 模擬：遲到、到公司 —');
     put(P(g, 1), g.map.len - CM.BIKE_LEN - 1, 30);
     let ev = run(g, 2);
     ok(P(g, 1).state === 'done' && P(g, 1).at > 0 && ev.some(e => e.type === 'arrive'), '騎到終點沒有算到公司');
+    ok(P(g, 1).v > 25 && CM.snapshot(g).p[1][3] > 25, '到公司把車速歸零了（畫面要照車速衝過終點線）');
+    // 舉發單照片：最後面的人這一拍撞車，他撞上的那台車要在這一拍的快照裡（2026-10-28）
+    const g2 = lab(2);
+    put(P(g2, 1), 600, 0);
+    g2.cars.push({ id: 900, type: 'car', len: 12, lane: 0, ly: 0, x: 7.5, v0: 0, v: 0 });
+    put(P(g2, 0), 0, 20);
+    run(g2, 1);
+    ok(P(g2, 0).state === 'out' && CM.snapshot(g2).c.some(c => c[0] === 900), '剛撞車的人在最後面時，快照裡沒有他撞上的那台車（舉發單照片拍不到）');
     g.t = CM.DAY_S - CM.DT / 2;
     ev = run(g, 2);
     ok(P(g, 0).state === 'out' && P(g, 0).why === 'late', '09:00 還沒到沒有算遲到');
@@ -315,8 +354,36 @@ console.log('— 頁面的本地預測 —');
        '頁面本地預測的物理常數跟 commute-sim 不一樣（自己的車會先動到別的地方再被拉回來）：' + (m ? m[1] : '找不到 CM_PHYS'));
     // 中途離開再開一間：等待面板要重畫（不然留著上一場停用的「出發」鈕，2026-10-27 試玩）
     ok(/else \{ box\.style\.display='none'; document\.getElementById\('stairspanel'\)\.dataset\.h=''; \}/.test(src), '離開房間時沒清掉面板的快取（再開一間按出發沒反應）');
+    // 2026-10-28：手動戰鬥第二場的等待畫面後面留著擂台 —— 清畫布要先拿掉縮放（廣場 CW 6，縮放 < 1 只清到左上一塊）
+    const mc = src.match(/function miniClear\(cv\)\{([^\n]*)\}\n/);
+    ok(mc && /setTransform\(1,0,0,1,0,0\);[^;]*clearRect\(0,0,cv\.width,cv\.height\)/.test(mc[1])
+       && /function stPanel\(m\)\{[^]*?miniClear\(document\.getElementById\('stairscv'\)\);[^]*?\n\}/.test(src)
+       && /function mbUnstyle\(\)\{[^\n]*\n[^\n]*miniClear\(cv\);/.test(src), '等待畫面清畫布沒有先拿掉縮放（上一場手動戰鬥的擂台會殘留）');
+    // 到公司衝過終點線、離公司幾公尺、出局後選要看誰
+    ok(/const e=Math\.min\(p\.v\/CM_COAST,/.test(src) && /'🏢 '\+rem\+' m'/.test(src), '到公司沒有衝過終點線／HUD 沒有離公司的距離');
+    ok(/w=c\.find\(p=>p\.id===cmWatch\)\|\|c\[0\]/.test(src) && /cmIn\(cmBtn\.wNext,x,y\)\)\{ cmWatchStep\(1\)/.test(src)
+       && /if\(cmSpecIds\.length&&CM_KEYBIT\[k\]<=2\)/.test(src), '出局後不能選要看誰騎');
+    // 安全帽、車身顏色每局抽一次（2026-10-28）：同一局每台電腦算的一樣（ids 順序不同也一樣）、每個人不同色、五天不變（只看房號，不看哪一天）、換一局會變
+    {
+        const cols = src.match(/const CM_COLS=\[[^\]]*\];/), bike = src.match(/const CM_BIKECOL=\[[^\]]*\];/), fn = src.match(/function cmColOf\(id,ids\)\{[^]*?\n\}\n/);
+        ok(cols && bike && fn, '找不到 cmColOf');
+        if (cols && bike && fn) {
+            const ids = ['a', 'b', 'c', 'd'];
+            const game = (room, order) => { const f = new Function('comState', 'stMine', 'let cmColMap=null;' + cols[0] + bike[0] + fn[0] + 'return cmColOf;')(null, () => ({ id: room }));
+                return ids.map(x => f(x, order).join('/')).join(); };
+            const g1 = game('r1', ids);
+            ok(g1 === game('r1', ids.slice().reverse()) && new Set(g1.split(',').map(c => c.split('/')[0])).size === 4, '安全帽顏色各台電腦算的不一樣（或撞色）');
+            ok(!/cmDay/.test(fn[0]) && /if\(!d\.day\)\{ cmWeek=\{\}; cmTix=\[\]; cmColMap=null; \}/.test(src), '安全帽顏色不是五天都一樣（跟著天數換）');
+            ok(['r2', 'r3', 'r4', 'r5'].some(r => game(r, ids) !== g1), '安全帽顏色每局都一樣（沒有抽）');
+        }
+    }
+    // 違規舉發單：出局當下拍照（cmDraw 的 shot 模式不動即時的攝影機、按鈕、預測），一週結算（廣場、單機）都有按鈕
+    ok(/cmFlash\(v\); cmCapture\(v\);/.test(src) && /if\(!shot\) cmCamY=/.test(src) && /if\(!shot\) cmBtn=\{\};/.test(src)
+       && /const a=!shot&&stPrev/.test(src) && /if\(shot\) return \{ HUD, VH \};/.test(src)
+       && /if\(cmTix\.length\) h\+='<div id="cmtix"/.test(src) && /if\(commute\)\{ stPanelPets\(\); cmTixBind\(\); \}/.test(src)
+       && /comEndPanel\(null,cmWeekHtml\([^\n]*\n\s*stPanelPets\(\); cmTixBind\(\);/.test(src), '一週結算沒有違規舉發單（或拍照會動到即時畫面）');
     // 結算畫面（2026-10-27 改版）：每日結算是出勤卡（cmDayCard），一週結算有五天出勤點與獎項（cmWeekHtml，廣場、前線共用）
-    ok(/if\(cmDayEnd\) cmDayCard\(/.test(src) && /if\(commute\) h\+=cmWeekHtml\(end\.result, stairs\.meId\);/.test(src)
+    ok(/if\(cmDayEnd&&nowMs>=cmDayEnd\.at\) cmDayCard\(/.test(src) && /if\(commute\) h\+=cmWeekHtml\(end\.result, stairs\.meId\);/.test(src)
        && /comEndPanel\(null,cmWeekHtml\(/.test(src) && /'全勤獎'/.test(src) && /'最常掛彩'/.test(src), '上班快遲到的每日／一週結算不是新版（出勤卡、獎項）');
     const mi = src.match(/const CM_ISL=\{ RY:([\d.]+), RX:([\d.]+) \};/);
     ok(mi && Number(mi[1]) === CM.ISLAND_RY && Number(mi[2]) === CM.ISLAND_RX, '畫面上圓環島的大小跟判定不一樣（看起來沒碰到卻撞了）');
@@ -372,6 +439,7 @@ console.log('— 新聞、時鐘、排名 —');
         for (let d = 0; d < CM.DAYS; d++) {
             ok(await until(() => room.cm && room.cm.day === d && room.cm.game, 5000), `第 ${d + 1} 天沒有開始`);
             const g = room.cm.game;
+            g.players.forEach(p => { p.ly = ids.indexOf(p.id); });   // 起始車道每天隨機：固定阿張在阿明正上面（往下移才撞得到）
             if (d === 2) { const p = g.players.find(q => q.id === ids[0]); p.x = g.map.len - CM.BIKE_LEN - 0.5; p.v = 30; g.t = 0; g.cars = []; }
             else { await until(() => g.t > 0, 5000); ok((await a.stairs('cin', { k: CM.KEY.down })).ok, '送按鍵失敗'); }
             if (d === 2) { const q = g.players.find(x => x.id === ids[1]); q.state = 'out'; q.why = 'red'; }

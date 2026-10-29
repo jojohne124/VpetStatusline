@@ -54,6 +54,8 @@ const FESTIVALS = [
     { id: 'election',   name: '選舉',   dates: ['2026-11-28'], acc: null },
     // 尾牙（2026-10-22）：日期未定 → dates 先空著（只有 dev 預覽看得到）。會場舞台背景＋整段都圍爐（feastAll）
     { id: 'weiya',      name: '尾牙',   dates: [], acc: null, lead: 0, feast: true, feastAll: true },
+    // 活蝦餐廳（2026-10-29）：11/19～11/20 兩天（lead 0、after 1）。跟尾牙同一套：整段都圍爐、只換背景＋桌子
+    { id: 'shrimp',     name: '活蝦餐廳', dates: ['2026-11-19'], acc: null, lead: 0, after: 1, feast: true, feastAll: true },
 ];
 
 /** 某節日在某一年的期間 { start, end, day }（ms，end 不含）；農曆表查不到那一年 → null */

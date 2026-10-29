@@ -313,6 +313,11 @@ const TB_STYLE = {
              lazy: [128, 136, 148], lazyRim: [96, 102, 112], dish: [246, 246, 250],
              fish: [214, 150, 70], fishHi: [240, 196, 110], shrimp: [240, 110, 70], pork: [140, 70, 40], broth: [235, 200, 110] },
 };
+// 活蝦餐廳（2026-10-29）：沿用尾牙的轉盤桌菜，桌子改原木色；正中間換成一大盤蝦（center: 'shrimp'），外圈也多是蝦料理
+TB_STYLE.shrimp = { ...TB_STYLE.weiya, cloth: [214, 186, 140], clothHi: [230, 206, 162], trim: [132, 90, 52],
+                    skirt: [168, 128, 84], skirtLo: [130, 96, 60], plate: [235, 235, 240],
+                    lazy: [196, 168, 124], lazyRim: [150, 116, 76],
+                    shrimpHi: [255, 170, 120], shrimpDk: [196, 64, 44], pepper: [70, 60, 50], center: 'shrimp' };
 function feastTable(t, step, style) {
     const TB = TB_STYLE[style] || TB_BASE;
     const { rx, ry } = t, SK = FEAST_SKIRT, UP = 7;   // SK：桌裙高度；UP：熱氣往上飄的空間
@@ -380,8 +385,12 @@ function feastDishes(put, inE, TB, rx, ry, cy) {
         }
     };
     // 六道菜沿著轉盤外圈繞一圈、彼此隔開（2026-10-22 回報：盤子黏在一起），中間只放魚
-    const dishes = [[TB.broth, TB.fishHi], [TB.shrimp, TB.fishHi], [TB.veg, TB.veg],
-                    [TB.pork, TB.fish], [TB.fishHi, TB.broth], [TB.meat, TB.shrimp]];
+    const dishes = TB.center === 'shrimp'
+        // 活蝦：蝦湯、胡椒蝦、炒青菜、鹽烤蝦、蝦捲、炒蝦仁
+        ? [[TB.broth, TB.shrimpHi], [TB.shrimp, TB.pepper], [TB.veg, TB.veg],
+           [TB.shrimpHi, TB.dish], [TB.fishHi, TB.shrimpHi], [TB.shrimp, TB.shrimpHi]]
+        : [[TB.broth, TB.fishHi], [TB.shrimp, TB.fishHi], [TB.veg, TB.veg],
+           [TB.pork, TB.fish], [TB.fishHi, TB.broth], [TB.meat, TB.shrimp]];
     let soup = null;
     dishes.forEach(([c, c2], i) => {
         const a = -Math.PI / 3 + i * Math.PI / 3;          // 從右後方開始（湯），順時針
@@ -389,8 +398,18 @@ function feastDishes(put, inE, TB, rx, ry, cy) {
         plate(px, py, 2, 1, c, c2);
         if (i === 0) soup = { x: px, y: py };
     });
-    // 整尾魚：長盤子、魚身、尾巴（右）、眼睛（左）
     const fl = Math.max(3, Math.round(A * 0.3));
+    if (TB.center === 'shrimp') {
+        // 一大盤蝦：長盤子上兩排，每隻是「頭（亮）、身、尾（深）」三格，上下排錯開
+        for (let x = -fl - 1; x <= fl + 1; x++) for (let y = -1; y <= 1; y++) put(x + rx, y + cy, TB.dish);
+        for (const [row, off] of [[-1, 0], [0, 1], [1, 0]]) {
+            for (let x = -fl + off; x + 2 <= fl; x += 4) {
+                put(x + rx, cy + row, TB.shrimpHi); put(x + 1 + rx, cy + row, TB.shrimp); put(x + 2 + rx, cy + row, TB.shrimpDk);
+            }
+        }
+        return soup;
+    }
+    // 整尾魚：長盤子、魚身、尾巴（右）、眼睛（左）
     for (let x = -fl - 1; x <= fl + 1; x++) for (let y = -1; y <= 1; y++) put(x + rx, y + cy, TB.dish);
     for (let x = -fl + 1; x < fl; x++) put(x + rx, cy, (x % 3 === 0) ? TB.fishHi : TB.fish);
     put(fl + rx, cy - 1, TB.fish); put(fl + rx, cy + 1, TB.fish);

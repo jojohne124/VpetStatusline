@@ -2028,6 +2028,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
      選一隻出戰時不壓黑（要能點到營地裡的桌寵），只留對話框。 */
   #story{position:fixed;inset:0;z-index:9100;display:none;pointer-events:none}
   #story.dim{background:rgba(1,4,9,.62);pointer-events:auto}
+  /* storyOpen 的 opts.hl：講到的那顆鈕浮到壓黑層上面、加框；對話框改排在它下面，免得頭像框蓋住它 */
+  .story-hl{position:relative;z-index:9150;outline:2px solid #ffd84a;outline-offset:2px;pointer-events:none}
   /* 助手在上、對話框在下（上下擺放） */
   #storypanel{position:fixed;display:flex;flex-direction:column;align-items:center;gap:0;pointer-events:auto;cursor:pointer}
   /* CutIn 擺正，外框是點陣的黑框＋四角綠色 L 形：storyfx 比 CutIn 大一圈 2 點、蓋在上面，只畫最外一圈
@@ -3052,6 +3054,14 @@ function festFloor(g,ts,W,H,id){
     // 尾牙會場：深灰地板（2026-10-22 回報：地板不要紅色、改深灰），一條條長板、接縫錯開
     R(0,HZ,W,H-HZ,'#34363a');
     for(let y=HZ+3,r=0;y<H;y+=3,r++){ R(0,y,W,1,'#28292c'); for(let x=(r%3)*5;x<W;x+=15) R(x,y-2,1,2,'#28292c'); }
+  } else if(id==='shrimp'){
+    // 活蝦餐廳：深木地板（2026-10-29 回報：改深木色），一條條長板、接縫錯開，板子深淺交錯＋幾道木紋
+    R(0,HZ,W,H-HZ,'#3a2a1e');
+    for(let y=HZ+3,r=0;y<H;y+=3,r++){
+      if(r%2) R(0,y-2,W,2,'#35261b');
+      R(0,y,W,1,'#271b13'); for(let x=(r%3)*5;x<W;x+=15) R(x,y-2,1,2,'#271b13');
+    }
+    sprinkle(30,1500,'#463325',0.8);
   } else if(id==='lunarny'){
     // 三合院的青磚地＋滿地鞭炮紅紙屑
     bricks(6,3,['#2a2d33','#2d3037','#282b30'],'#232529');
@@ -3165,6 +3175,41 @@ function festWeiya(g,gf,ts,W,H){
   // 台口一排燈泡（前景，一閃一閃）
   for(let x=sx;x<sx+sw;x+=3) festDot(gf,x,HZ-1,(Math.floor(ts/400)+x)%2?'#ffd84a':'#fff3c4',0.85);
 }
+// ── 活蝦餐廳：地平線以上是店裡的牆，左右兩缸活蝦（水裡有蝦游、氣泡往上冒），中間紅招牌「活蝦」，
+//    天花板垂下兩盞暖色吊燈。大家在店裡圍圓桌吃蝦（feastAll，桌子＝尾牙那張換原木色、中間一大盤蝦）──
+function festShrimp(g,ts,W,H){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  R(0,0,W,HZ,'#2a2520');                                   // 牆
+  R(0,HZ-3,W,3,'#3a3029'); R(0,HZ-3,W,1,'#4a3d33');        // 牆腳的木頭踢腳板
+  // 水族箱：鐵框、藍色的水、上面一條水面，蝦左右游、氣泡一直往上冒
+  const tw=Math.min(18,Math.floor(W*0.27)), th=HZ-6;
+  for(const [k,x0] of [[0,2],[1,W-2-tw]]){
+    R(x0,2,tw,th,'#8f969d'); R(x0+1,3,tw-2,th-2,'#1d4a6b'); R(x0+1,3,tw-2,1,'#3f86b4');
+    R(x0+1,th,tw-2,1,'#c8b48a');                            // 缸底的砂
+    for(let i=0;i<4;i++){
+      const sp=2600+i*500, dir=(i+k)%2?1:-1, span=tw-6;
+      const p=((ts/sp+festRnd(i+k*10+1700))%1), xx=x0+2+Math.round(dir>0?p*span:(1-p)*span), yy=5+Math.floor(festRnd(i+k*10+1800)*(th-5));
+      const head=dir>0?xx+2:xx, tail=dir>0?xx:xx+2;
+      R(head,yy,1,1,'#ffaa78'); R(xx+1,yy,1,1,'#f06e46'); R(tail,yy,1,1,'#c4402c');
+    }
+    for(let i=0;i<3;i++){
+      const p=((ts/1800+festRnd(i+k*7+1900))%1), bx=x0+2+Math.floor(festRnd(i+k*7+2000)*(tw-4));
+      R(bx,Math.round(th-1-p*(th-4)),1,1,'#a8d8f0',0.8*(1-p));
+    }
+  }
+  // 中間紅招牌＋金字「活蝦」
+  const bw=16, bx=Math.round((W-bw)/2);
+  R(bx,4,bw,6,'#b5161c'); R(bx,4,bw,1,'#e8484e'); R(bx,9,bw,1,'#7e0f14');
+  R(bx-1,3,bw+2,1,'#d4a53a'); R(bx-1,10,bw+2,1,'#d4a53a');
+  g.save(); g.fillStyle='#ffd84a'; g.font='bold '+Math.round(CH*1.6)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText('活　蝦',(bx+bw/2)*CW,7.1*(CH/2)); g.restore();
+  // 兩盞吊燈：電線＋燈罩＋暖光（很淡，慢慢呼吸）
+  for(const x of [Math.round(W*0.36),Math.round(W*0.64)]){
+    R(x,0,1,11,'#4a4440'); R(x-2,11,5,1,'#c98a2e'); R(x-1,12,3,1,'#ffe39a');
+    g.save(); g.globalAlpha=0.07+0.02*Math.sin(ts/1500+x); g.fillStyle='#ffd88a'; g.beginPath();
+    g.moveTo((x-1)*CW,12*(CH/2)); g.lineTo((x+2)*CW,12*(CH/2)); g.lineTo((x+7)*CW,HZ*(CH/2)); g.lineTo((x-6)*CW,HZ*(CH/2)); g.fill(); g.restore();
+  }
+}
 function festShown(){ return !!festState.id && (view==='plaza' || view==='yard') && festState.bg; }
 function festDraw(ts){
   const cv=document.getElementById('fest');
@@ -3229,6 +3274,8 @@ function festDraw(ts){
     festElection(g,ts,W,H);
   } else if(festState.id==='weiya'){
     festWeiya(g,gf,ts,W,H);
+  } else if(festState.id==='shrimp'){
+    festShrimp(g,ts,W,H);
   } else if(festState.id==='lunarny'){
     // 上緣一整排紅燈籠微微晃，掛在**鏡頭前**（前景畫布，角色走過去會被擋住）；
     // 下緣兩角掛鞭炮，底下一直冒火花
@@ -4047,7 +4094,7 @@ document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventLis
   // 能不能出門（進化中、戰鬥中、睡覺中）由伺服器端的 plazaBlocked 判，這裡不另寫一份。
   if(b.dataset.cmd==='plaza'){
     flashCmdMsg('連線到廣場…','#8b949e');
-    sendCmd('plazaJoin').then(r=>{ if(r&&r.ok) setView('plaza'); else if(r&&r.offline&&!plazaOffline){ plazaOffline=true; applyWhen(); } });
+    sendCmd('plazaJoin').then(r=>{ if(r&&r.ok) setView('plaza'); else if(r&&r.offline&&!plazaOffline){ plazaOffline=true; applyWhen(); storyOpen([{text:MINI_OFFLINE_TIP}], null, {hl:'minifront'}); } });
     return;
   }
   if(b.dataset.cmd==='plazaLeave'){
@@ -4427,20 +4474,23 @@ function storyFxDraw(){
 //   ・網頁視窗太矮：整層改成跟著頁面捲（absolute），頁面多出空間、捲到看得到對話框
 // 之後新增的演出也走 storyOpen／storyPlace，不要自己另外置中或疊在舞台上
 const IN_MINI=!!(window.chrome&&window.chrome.webview);
+// 連不上廣場、前線第一次露出「🎮 小遊戲」時，大耳獸出來講一聲（每次開頁面只講一次，跟 plazaOffline 同一個開關）
+const MINI_OFFLINE_TIP='廣場現在連不上喔。前線多了一顆「🎮 小遊戲」，可以先在這裡自己玩，等廣場恢復再過去找大家！';
 function storyPlace(){
   const o=document.getElementById('story'), p=document.getElementById('storypanel'), st=document.getElementById('stage').getBoundingClientRect();
   const W=document.documentElement.clientWidth, H=document.documentElement.clientHeight;
   const pw=p.offsetWidth, ph=p.offsetHeight;
   const left=Math.max(12, Math.min(W-pw-12, st.left+(st.width-pw)/2));
-  const fits=st.bottom+10+ph<=H-8;
+  const hl=story&&story.hl, bot=hl?Math.max(st.bottom, hl.getBoundingClientRect().bottom+14):st.bottom;
+  const fits=bot+10+ph<=H-8;
   document.body.style.paddingBottom=(IN_MINI||!fits)?Math.ceil(ph+24)+'px':'';
   if(IN_MINI||fits){
     o.style.position=''; o.style.height=''; p.style.position='';
-    p.style.left=left+'px'; p.style.top=Math.round(st.bottom+10)+'px';
+    p.style.left=left+'px'; p.style.top=Math.round(bot+10)+'px';
     return;
   }
   o.style.position='absolute'; o.style.height=document.documentElement.scrollHeight+'px'; p.style.position='absolute';
-  p.style.left=left+'px'; p.style.top=Math.round(st.bottom+window.scrollY+10)+'px';
+  p.style.left=left+'px'; p.style.top=Math.round(bot+window.scrollY+10)+'px';
   p.scrollIntoView({ block:'nearest' });
 }
 function storyLine(){
@@ -4471,14 +4521,15 @@ function storyShown(){
 }
 function storyOpen(lines, done, opts){
   storyClose();
-  story={ lines, i:0, done, typing:null, text:'', onShown:opts&&opts.onShown, shownI:-1 };
+  story={ lines, i:0, done, typing:null, text:'', onShown:opts&&opts.onShown, shownI:-1, hl:opts&&opts.hl&&document.getElementById(opts.hl) };
+  if(story.hl) story.hl.classList.add('story-hl');
   const o=document.getElementById('story');
   o.classList.toggle('dim', !(opts&&opts.dim===false));
   o.style.display='block';
   storyDrawCut(); storyFxDraw(); storyLine();
 }
 function storyClose(){
-  if(story) clearInterval(story.typing);
+  if(story){ clearInterval(story.typing); if(story.hl) story.hl.classList.remove('story-hl'); }
   story=null; const o=document.getElementById('story'); o.style.display='none'; o.style.position=''; o.style.height='';
   document.getElementById('storypanel').style.position='';
   document.body.style.paddingBottom='';   // 小視窗縮回原本的大小、網頁拿掉多出來的空間
@@ -6377,6 +6428,8 @@ function mbTimeline(L, T, mi){
   // 集氣、防禦的人不發射（aim 是 null）
   const P=[0,1].map(s=>mbCell(col(s),L.to[s])), Tg=[0,1].map(s=>L.aim[s]==null?null:mbCell(col(1-s),L.aim[s]));
   const at=(s,u)=>[P[s][0]+(Tg[s][0]-P[s][0])*u, P[s][1]+(Tg[s][1]-P[s][1])*u];
+  // 彈道方向（單位向量）：集氣子彈的殘影照這個方向往後拖，打斜的時候殘影也是斜的（2026-10-28）
+  const dir=(s)=>{ const vx=Tg[s][0]-P[s][0], vy=Tg[s][1]-P[s][1], l=Math.hypot(vx,vy)||1; return [vx/l,vy/l]; };
   const meet=MBT.MOVE+MBT.FLY*0.5, holdEnd=meet+MBT.HOLD, hitT=L.clash?holdEnd+MBT.WIN:MBT.MOVE+MBT.FLY;
   const bullets=[];
   for(const s of [0,1]){
@@ -6389,13 +6442,13 @@ function mbTimeline(L, T, mi){
         const p=at(s,u), j=T>=meet&&T<holdEnd?((Math.floor(T/70)+s)%2?-3:3):0;   // 頂住時上下錯開抖動
         bullets.push({ s, x:p[0], y:p[1]+j, a, lock:true });
       } else if(T<hitT){
-        const p=at(s,0.5+0.5*(T-holdEnd)/MBT.WIN); bullets.push({ s, x:p[0], y:p[1], a:1 });
+        const p=at(s,0.5+0.5*(T-holdEnd)/MBT.WIN); bullets.push({ s, x:p[0], y:p[1], a:1, d:dir(s) });
       }
     } else {
       const u=(T-MBT.MOVE)/MBT.FLY;
       if(L.hit[1-s]&&u>=1) continue;                 // 打中：子彈消失、換爆炸
       if(u>1.35) continue;                            // 沒打中：飛過頭、淡掉
-      const p=at(s,u); bullets.push({ s, x:p[0], y:p[1], a:u>1?Math.max(0,1-(u-1)/0.35):1 });
+      const p=at(s,u); bullets.push({ s, x:p[0], y:p[1], a:u>1?Math.max(0,1-(u-1)/0.35):1, d:dir(s) });
     }
   }
   const blk=L.block||[false,false];
@@ -6453,7 +6506,9 @@ function mbSelFor(d){
 }
 // 力度條：每回合（每次進到這一步）速度、起點、方向都隨機（2026-10-21：固定 1.4 秒一趟、每次從 0 往上，節奏背起來就一直 ×2）。
 // barPh = 起始相位 0～1：前半是往上、後半是往下，所以起點和方向一起決定
-function mbBarVal(){ const ms=mbSel.barMs||MB.BAR_MS, ph=(((performance.now()-mbSel.barT0)/ms+(mbSel.barPh||0))%1+1)%1; return ph<0.5?ph*2:2-ph*2; }
+// t：取哪個時間點的力度。按下去時用「畫面上最後一幀畫出來的那個時間」（barSeen）：玩家是看著畫面按的，
+// 用按下那一刻的現在時間會比看到的多跑一幀以上（畫面卡的時候更多），2026-10-28 回報力度條有延遲
+function mbBarVal(t){ const ms=mbSel.barMs||MB.BAR_MS, ph=((((t||performance.now())-mbSel.barT0)/ms+(mbSel.barPh||0))%1+1)%1; return ph<0.5?ph*2:2-ph*2; }
 // 一次只能走一格（上／不動／下）而且不能出界。原本只檢查出界 → 隔兩格的位置也會出現虛影、點了被伺服器退回（2026-10-21）
 function mbMoveOk(d,mi,mv){ const r=d.row[mi]+mv; return (mv===-1||mv===0||mv===1)&&r>=0&&r<3; }
 // 動作（攻擊／集氣／防禦）：集氣不能動 → 選了就送；防禦只要再選移動；攻擊照原本三步
@@ -6493,7 +6548,7 @@ function mbKey(k){
   }
   if(s.step===0){ if(up&&mbMoveOk(d,mi,s.cur-1)) s.cur--; else if(dn&&mbMoveOk(d,mi,s.cur+1)) s.cur++; else if(ok) mbChooseMove(d,mi,s.cur); return up||dn||ok; }
   if(s.step===1){ if(up&&s.cur>0) s.cur--; else if(dn&&s.cur<2) s.cur++; else if(ok) mbChooseAim(s.cur); return up||dn||ok; }
-  if(ok){ mbSend(mbBarVal()); return true; }
+  if(ok){ mbSend(mbBarVal(s.barSeen)); return true; }
   return false;
 }
 function mbCanvasXY(e){ return miniXY(e); }
@@ -6546,7 +6601,7 @@ function mbClick(e){
   const b=mbBtns.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);
   if(b){ if(!b.off) b.act(); return; }
   if(!s.act) return;   // 還沒選動作：只有三顆大按鈕有用
-  if(s.step===2){ mbSend(mbBarVal()); return; }
+  if(s.step===2){ mbSend(mbBarVal(s.barSeen)); return; }
   const c=mbCellAt(x,y); if(!c) return;
   if(s.step===0&&c[0]===0) mbChooseMove(d,mi,c[1]-d.row[mi]);
   else if(s.step===1&&c[0]===2) mbChooseAim(c[1]);
@@ -6661,8 +6716,9 @@ function mbDraw(d,now){
   if(tl){
     for(const b of tl.bullets){ const a=mbArt[d.chars[b.s]||'agumon']; const im=a&&(b.s===mi?a.bulL:a.bulR); if(!im) continue;
       let x=b.x; if(b.lock) x=b.s===mi?Math.min(x,W/2-im.hw):Math.max(x,W/2+im.hw);   // 對波：兩顆在正中間邊緣相連，不交疊
-      // 集氣過的子彈：後面拖幾個殘影（像排球殺球）
-      if(L0.cshot&&L0.cshot[b.s]&&!b.lock) for(let k=4;k>=1;k--){ g.globalAlpha=b.a*(0.42-k*0.08); g.drawImage(im.img,Math.round(x-im.cx-(b.s===mi?1:-1)*k*20),Math.round(b.y-im.cy)); }
+      // 集氣過的子彈：沿著彈道往後拖幾個殘影（像排球殺球；打斜的就斜著拖）
+      if(L0.cshot&&L0.cshot[b.s]&&!b.lock){ const [ux,uy]=b.d||[b.s===mi?1:-1,0];
+        for(let k=4;k>=1;k--){ g.globalAlpha=b.a*(0.42-k*0.08); g.drawImage(im.img,Math.round(x-im.cx-ux*k*20),Math.round(b.y-im.cy-uy*k*20)); } }
       g.globalAlpha=b.a; g.drawImage(im.img,Math.round(x-im.cx),Math.round(b.y-im.cy)); g.globalAlpha=1; }
     for(const b of tl.booms){ const im=mbBoom&&mbBoom[b.f]; if(im) g.drawImage(im.img,Math.round(b.x-im.img.width/2),Math.round(b.y-im.img.height/2-6)); }
     // 擋下：一群綠色「＋」往上飄（回血）。大小、深淺、出發時間、左右位置都錯開（2026-10-27：一個太少）
@@ -6740,7 +6796,8 @@ function mbPanel(g,d,mi,W,H,sel){
     ['上','中','下'].forEach((t,i)=>btn(bx+i*58,52,t,sel.cur===i?1:0,()=>mbChooseAim(i)));
   } else {
     // 力度條（下排）＋倍率字（上排，各在自己那一段的正上方）
-    const x=bx, y=y0+24, w=MB_BACK-14-bx, h=26, v=mbBarVal();
+    sel.barSeen=performance.now();
+    const x=bx, y=y0+24, w=MB_BACK-14-bx, h=26, v=mbBarVal(sel.barSeen);
     g.fillStyle='#000'; g.fillRect(x-2,y-2,w+4,h+4);
     g.fillStyle='#4a6a4a'; g.fillRect(x,y,w*DS.ZONE_15,h); g.fillStyle='#e67e22'; g.fillRect(x+w*DS.ZONE_15,y,w*(DS.ZONE_2-DS.ZONE_15),h);
     g.fillStyle='#e74c3c'; g.fillRect(x+w*DS.ZONE_2,y,w*(1-DS.ZONE_2),h);
@@ -6831,9 +6888,38 @@ function mbCutin(g,d,mi,W,H,now){
     g.fillStyle='#111'; g.fillRect(x,ty,w,h); g.drawImage(im.img,x,ty); };
   cut(1-mi,false); cut(mi,true);
   if(e>250&&e<out+200){ const p=Math.min(1,(e-250)/250), sc=p<1?0.4+p*0.8:1.2-Math.min(0.2,(e-500)/1000);
-    g.save(); g.globalAlpha=Math.min(1,k*1.5); g.translate(W/2,H/2); g.rotate(-0.12); g.scale(sc,sc);
-    g.font='bold italic 72px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
-    g.lineWidth=12; g.strokeStyle='#000'; g.lineJoin='round'; g.strokeText('VS',0,0); g.fillStyle='#ff2a2a'; g.fillText('VS',0,0); g.restore(); }
+    g.save(); g.globalAlpha=Math.min(1,k*1.5); mbVsDots(g,W/2,MB.GY+MB.GH*1.5,Math.max(2,Math.round(6*sc))); g.restore(); }   // VS 跟中間那排的 vpet 同高（畫面正中間會偏上，2026-10-28）
+}
+// 開場的 VS：點陣字（2026-10-28，原本是斜體的系統字）。先在小畫布上一點一格畫好（影子、黑框、上亮下暗、頂端高光），
+// 再整張放大貼上（關掉平滑）：一格一格 fillRect 在縮放後的畫布上會有細縫。往右上斜用「每四列往右挪一格」，不用旋轉
+const MB_VS=[
+  'XXX....XXX..XXXXXXX.',
+  'XXX....XXX.XXXXXXXXX',
+  'XXX....XXX.XXX......',
+  'XXX....XXX.XXX......',
+  '.XXX..XXX..XXXXXXX..',
+  '.XXX..XXX...XXXXXXX.',
+  '.XXX..XXX.......XXXX',
+  '..XXXXXX.........XXX',
+  '..XXXXXX...XXX...XXX',
+  '...XXXX....XXXXXXXX.',
+  '....XX......XXXXXX..',
+];
+let mbVsImg=null;
+function mbVsBake(){
+  const n=MB_VS.length, w=MB_VS[0].length, P=1, cv=document.createElement('canvas');
+  cv.width=w+3+P*2+2; cv.height=n+P*2+2;
+  const g=cv.getContext('2d'), on=[];
+  MB_VS.forEach((row,r)=>{ const sh=Math.floor((n-1-r)/4); for(let i=0;i<w;i++) if(row[i]==='X') on.push([i+sh+P,r+P]); });
+  const dot=(x,y,col)=>{ g.fillStyle=col; g.fillRect(x,y,1,1); };
+  for(const [x,y] of on) for(let dx=0;dx<=2;dx++) for(let dy=0;dy<=2;dy++) dot(x+dx,y+dy,'#4a0000');   // 影子（往右下多一格）
+  for(const [x,y] of on) for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++) dot(x+dx,y+dy,'#000');   // 黑框
+  for(const [x,y] of on){ const r=y-P; dot(x,y,r<1?'#ffd9cf':r<3?'#ff7a6a':r<8?'#ff2a2a':'#c00f0f'); }
+  return cv;
+}
+function mbVsDots(g,cx,cy,c){
+  const im=mbVsImg||(mbVsImg=mbVsBake()), w=im.width*c, h=im.height*c;
+  g.imageSmoothingEnabled=false; g.drawImage(im,Math.round(cx-w/2),Math.round(cy-h/2),w,h);
 }
 (function(){
   const cv=document.getElementById('stairscv');
@@ -6843,6 +6929,14 @@ function mbCutin(g,d,mi,W,H,now){
   for(const t of ['pointerup','pointercancel','pointerleave']) cv.addEventListener(t,()=>{ rsHold=0; });
   cv.addEventListener('pointermove',e=>{ if(rsHold&&!rsAt(e)) rsHold=0; });
   cv.addEventListener('mousemove',e=>{ if(mbPlaying()) mbHoverAt(e); });
+  // 力度條：按下去（pointerdown）就定，不等放開（click 要等放開，滑鼠一按一放約 0.1 秒，力度條已經跑掉一大段）。
+  // 按在按鈕（返回）、白旗上照舊交給 click；定了之後接著來的 click 看到 sent 就不理
+  cv.addEventListener('pointerdown',e=>{
+    if(!mbPlaying()||e.button>0) return; const d=mbData(); if(!d||mbPhase(d,mbNow())!=='pick') return;
+    const s=mbSelFor(d); if(s.sent||!s.act||s.step!==2||rsAt(e)) return;
+    const [x,y]=mbCanvasXY(e); if(mbBtns.some(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h)) return;
+    mbSend(mbBarVal(s.barSeen));
+  });
 })();
 window.addEventListener('keydown',e=>{
   if(!mbPlaying()||typing()) return;

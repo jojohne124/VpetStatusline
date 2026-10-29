@@ -1,4 +1,4 @@
-﻿# vpet-mini-web.ps1 — 桌寵小視窗（第十四版，2026-10-22）
+﻿# vpet-mini-web.ps1 — 桌寵小視窗（第十四版，2026-10-22；2026-10-28 補丁：常駐記錄 vpet-mini.log、UI 例外接住不死、桌面模式被關掉下次直接回桌面、看門狗 tray 在就不關）
 # 用 WebView2 開vpet 的 http://localhost:3010。不改vpet任何檔案；頁面只注入一條樣式（$STYLE：標題行上下對稱，讓橫列裡的標題與按鈕同一中線，2026-10-22 作者同意）。
 # 三個視窗：
 #   主視窗 = 只有 WebView，形狀（Form.Region）= 頁面回報的實體矩形（面板、按鈕、文字行）＋頂端橫列（面板上方標題列那一段補成整條），其餘是洞（點下去是後面的視窗）
@@ -23,6 +23,38 @@ public static class VpetNative {
 }
 '@
 
+# ── 常駐記錄（2026-10-28 補丁）：以前只有除錯模式才留痕，玩家回報「桌面模式放一兩小時寵物不見、小視窗也不在」完全查不到原因。
+#    不分模式一律寫同資料夾的 vpet-mini.log（超過 200 KB 砍掉前半），記：啟動／關閉（原因）、計時器例外、UI 層例外、看門狗、縮成桌面／回來。
+$script:LogPath = Join-Path $here 'vpet-mini.log'
+function Write-MiniLog([string]$msg) {
+    try {
+        $line = "{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}" -f (Get-Date), $PID, $msg
+        if ((Test-Path $script:LogPath) -and (Get-Item $script:LogPath).Length -gt 204800) {
+            $all = Get-Content $script:LogPath -Raw -Encoding UTF8; Set-Content $script:LogPath $all.Substring([int]($all.Length / 2)) -Encoding UTF8 }
+        Add-Content $script:LogPath $line -Encoding UTF8
+    } catch {}
+}
+# 會一直重複的錯誤（寵物每 150ms 一拍、頁面訊息、設定監看）：同一種最多記 50 次，不然壞掉時一秒寫好幾行、log 一直砍半
+$script:errCount = @{}
+function Write-MiniErr([string]$kind, [string]$msg) {
+    $n = 1 + [int]$script:errCount[$kind]; $script:errCount[$kind] = $n
+    if ($n -le 50) { Write-MiniLog ("{0} #{1}: {2}" -f $kind, $n, $msg) }
+    elseif ($n -eq 51) { Write-MiniLog ("{0}: 超過 50 次，之後不記" -f $kind) }
+}
+# UI 層（WndProc／Paint）的例外原本會讓整個程式結束（PowerShell 包的 WinForms 沒人接）：改成接住、記下來、程式繼續。
+# SetUnhandledExceptionMode 一定要在建任何 Form 之前呼叫，所以放這裡。
+try { [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException) } catch {}
+$script:uiExCount = 0
+[System.Windows.Forms.Application]::add_ThreadException({ param($s, $e)
+    $script:uiExCount++
+    if ($script:uiExCount -le 50) { Write-MiniLog ("UI exception #{0}: {1}" -f $script:uiExCount, $e.Exception.ToString()) }
+    elseif ($script:uiExCount -eq 51) { Write-MiniLog "UI exception: 超過 50 次，之後不記" }
+})
+[AppDomain]::CurrentDomain.add_UnhandledException({ param($s, $e)
+    Write-MiniLog ("FATAL（程式要結束了）: " + $e.ExceptionObject.ToString())
+    try { if ($script:petMode) { $script:resumePet = $true; Save-Cfg } } catch {}
+})
+
 # 只允許一個小視窗：第二次啟動就把已開的那個叫到前面，然後結束
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\vpet-mini-window')
 if (-not $script:mutex.WaitOne(0, $false)) {
@@ -40,8 +72,16 @@ if (Test-Path $script:CfgPath) {
         $j = Get-Content $script:CfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($k in @('x','y','w','h','zoom','topmost','autofit','readZoom','petFollow','petScale')) { if ($null -ne $j.$k) { $script:Cfg[$k] = $j.$k } }
         $script:startReq = [string]$j.request   # 系統匣在我們還沒開時就寫了 request（雙擊圖示開「桌寵」）：第一次貼合完就照做
+        # 上次是在桌面模式被關掉的（更新重開、看門狗、外部關閉…）→ 開回來直接回桌面，玩家感受上寵物沒消失；超過 30 分鐘的不算（2026-10-28 補丁）
+        # 寫成自己的值 resumepet，跟系統匣的 pet 分開：系統匣只改 request 一格、petAt 會殘留，用 pet 判期限會把玩家自己按的「桌面」也丟掉（2026-10-29）
+        if ($script:startReq -eq 'resumepet') {
+            if ($null -ne $j.petAt -and ([DateTimeOffset]::Now.ToUnixTimeSeconds() - [double]$j.petAt) -le 1800) { $script:startReq = 'pet' }
+            else { $script:startReqStale = $true; $script:startReq = $null }
+        }
     } catch {}
 }
+$script:resumePet = $false
+Write-MiniLog ("start: port={0} zoom={1} topmost={2} request={3}{4}" -f $script:Port, $script:Cfg.zoom, $script:Cfg.topmost, $script:startReq, $(if ($script:startReqStale) { '（上次桌面模式的回復超過 30 分鐘，不自動回桌面）' } else { '' }))
 $script:Cfg.autofit = $true   # 固定開：右下角拖曳＝整頁等比例縮放
 $script:ZOOM_MIN = 0.4; $script:ZOOM_MAX = 2.0
 $script:ContentW = 0; $script:ContentH = 0   # 頁面回報的內容寬高（CSS px，不隨縮放變）
@@ -49,6 +89,7 @@ $script:Rects = @()                          # 頁面回報的實體矩形（CSS
 $script:fitted = $false
 function Save-Cfg {
     try { $c = $script:Cfg.Clone(); if ($null -ne $script:baseZoom) { $c.zoom = $script:baseZoom }   # 閱讀縮放暫升中，存的是原本的縮放
+          if ($script:resumePet) { $c.request = 'resumepet'; $c.petAt = [DateTimeOffset]::Now.ToUnixTimeSeconds() }   # 在桌面模式被關掉：下次開回來直接回桌面（30 分鐘內）
           ($c | ConvertTo-Json -Compress) | Set-Content $script:CfgPath -Encoding UTF8
           $script:cfgMtime = (Get-Item $script:CfgPath).LastWriteTimeUtc } catch {} }   # 記下自己寫的時間，監看時才分得出是別人（tray）改的
 # ── 跟系統匣共用的設定（v16：兩邊選單做成一樣，各自的項目寫對方的設定檔、對方監看檔案變了就套用）──
@@ -211,7 +252,7 @@ function Load-PetArt([string]$charId) {
                 $cr = Crop-Px $px; if ($cr) { $out += ,$cr }
             }
         }
-    } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} pet art: {1}" -f (Get-Date), $_.Exception.Message) } }
+    } catch { Write-MiniErr 'pet art' $_.Exception.Message }
     $script:petArt[$charId] = $out
     if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet art loaded: {1} frames={2}" -f (Get-Date), $charId, $out.Count) }
     return $out
@@ -371,6 +412,7 @@ function Enter-Pet {
     $tag.Hide(); $btn.Hide(); $grip.Hide(); $form.Hide(); $pet.Show(); $script:petTimer.Start()
     if ($env:VPET_MINI_DEBUG -and $pbox.Image) { try { $pbox.Image.Save((Join-Path $here '_pet_enter.png')) } catch {} }   # 進入那一刻的圖（對位測試拿它跟進入前的截圖比）
     if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet enter: char={1} range={2}..{3} y={4} at {5},{6} {7}x{8} scale={9} z={10} form={11},{12} how={13}" -f (Get-Date), $script:lastChar, $script:petRange.l, $script:petRange.r, $script:petRange.y, $pet.Left, $pet.Top, $pet.Width, $pet.Height, $script:petScale, $z, $form.Left, $form.Top, $how) }
+    Write-MiniLog ("pet enter: char={0} at {1},{2} {3}x{4} scale={5}" -f $script:lastChar, $pet.Left, $pet.Top, $pet.Width, $pet.Height, $script:petScale)
 }
 function Leave-Pet {
     if (-not $script:petMode) { return }
@@ -379,11 +421,12 @@ function Leave-Pet {
     $script:petTimer.Stop(); $script:petMode = $false; $pet.Hide()
     $form.Show(); $tag.Show(); $grip.Show(); Place-Handles; $form.Activate()
     if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} pet leave" -f (Get-Date)) }
+    Write-MiniLog ("pet leave: eventPulled={0} kind={1}" -f $script:eventPulled, $script:lastKind)
 }
 $script:petTimer = New-Object System.Windows.Forms.Timer; $script:petTimer.Interval = $PET_TICK_MS
 $script:petTimer.add_Tick({
     if (-not $script:petMode) { return }
-    try { Pet-Tick } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} pet tick: {1}`n{2}" -f (Get-Date), $_.Exception.Message, $_.ScriptStackTrace) } }
+    try { Pet-Tick } catch { Write-MiniErr 'pet tick' ("{0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace) }
 })
 function Pet-Tick {
     $script:petTick++
@@ -457,7 +500,7 @@ $pm1 = $petMenu.Items.Add('打開小視窗'); $pm1.add_Click({ Leave-Pet })
 $script:pmFollow = $petMenu.Items.Add('跟隨滑鼠'); $script:pmFollow.Checked = [bool]$script:Cfg.petFollow
 $script:pmFollow.add_Click({ Apply-Follow (-not $script:Cfg.petFollow); Save-Cfg })
 [void]$petMenu.Items.Add('-')
-$pm3 = $petMenu.Items.Add('結束 vpet mini'); $pm3.add_Click({ $form.Close() })
+$pm3 = $petMenu.Items.Add('結束 vpet mini'); $pm3.add_Click({ $script:quitByMenu = $true; $form.Close() })
 $pbox.ContextMenuStrip = $petMenu
 
 # ── 形狀與位置 ──
@@ -815,7 +858,7 @@ $wv.add_CoreWebView2InitializationCompleted({
                 [void][System.Windows.Forms.MessageBox]::Show($form, $e2.Message, 'vpet', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
                 $e2.Accept()
             }
-        } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} dialog: {1}" -f (Get-Date), $_.Exception.Message) } }
+        } catch { Write-MiniErr 'dialog' $_.Exception.Message }
     })
     $core.add_WebMessageReceived({ param($s2, $e2)
         try { $m = $e2.WebMessageAsJson | ConvertFrom-Json; $m = $m | ConvertFrom-Json
@@ -845,7 +888,7 @@ $wv.add_CoreWebView2InitializationCompleted({
               if ($script:lastKind -ne 'tree' -and -not $script:treeFit) { $script:homeW = $wNew; if ($m.scene) { $script:homeScene = @($m.scene) } }   # 平常的內容寬與前線畫布框（右欄顯示時會比較寬，那也算平常）
               $script:ContentW = $wNew; $script:ContentH = [int]$m.h; Apply-Fit $script:ContentW $script:ContentH
               Apply-Region; Place-Handles }
-        catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} {1}`n{2}" -f (Get-Date), $_.Exception.Message, $_.ScriptStackTrace) } }
+        catch { Write-MiniErr 'web message' ("{0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace) }
     })
     $core.add_NavigationCompleted({ param($s2, $e2)
         if (-not $e2.IsSuccess) { Set-Tag "連不到 daemon（localhost:$($script:Port)）— 先雙擊 vpet-standalone.vbs" ([System.Drawing.Color]::FromArgb(255, 255, 90, 90)) }
@@ -869,6 +912,7 @@ $wv.add_CoreWebView2InitializationCompleted({
                 elseif ($cmd -match '^petscale ([0-9]+)$') { Set-PetScale ([int]$matches[1]) }
                 elseif ($cmd -eq 'pet') { Enter-Pet }
                 elseif ($cmd -eq 'unpet') { Leave-Pet }
+                elseif ($cmd -eq 'crashtest') { $form.BeginInvoke([Action]{ throw 'crashtest: UI 層例外模擬' }) | Out-Null }   # 驗 ThreadException 接得住、程式不死（2026-10-28 補丁）
                 elseif ($cmd -eq 'petdump') { if ($pbox.Image) { $pbox.Image.Save((Join-Path $here '_pet_now.png')) } }
                 elseif ($cmd -eq 'petpos') { $cp0 = [System.Windows.Forms.Cursor]::Position; Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} petpos mode={1} at {2},{3} {4}x{5} dir={6} single={7} visible={8} formVisible={9} cursor={10},{11} arrived={12}" -f (Get-Date), $script:petMode, $pet.Left, $pet.Top, $pet.Width, $pet.Height, $script:petDir, $script:petSingle, $pet.Visible, $form.Visible, $cp0.X, $cp0.Y, $script:petArrived) } }
         })
@@ -927,7 +971,7 @@ $script:mDblPet  = $mDbl.DropDownItems.Add('桌面'); $script:mDblPet.add_Click(
 [void]$menu.Items.Add($mDbl)
 $mPin = $menu.Items.Add('怎麼讓圖示常駐顯示？'); $mPin.add_Click({ [void][System.Windows.Forms.MessageBox]::Show($form, $PIN_HINT, '怎麼讓圖示常駐顯示？', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) })
 [void]$menu.Items.Add('-')
-$mQ = $menu.Items.Add('結束 vpet mini（只關小視窗）'); $mQ.add_Click({ $form.Close() })
+$mQ = $menu.Items.Add('結束 vpet mini（只關小視窗）'); $mQ.add_Click({ $script:quitByMenu = $true; $form.Close() })
 # 每次打開選單重讀兩邊的設定，勾勾才是現況（系統匣那邊可能改過）
 $menu.add_Opening({
     foreach ($q in $mZoom.DropDownItems) { $q.Checked = ([int]([double]$script:Cfg.zoom * 100) -eq [int]$q.Tag) }
@@ -938,6 +982,13 @@ $menu.add_Opening({
 })
 $tag.ContextMenuStrip = $menu; $lbl.ContextMenuStrip = $menu
 
+$script:quitByMenu = $false; $script:closeByWatchdog = $false
+$form.add_FormClosing({ param($s, $e)
+    # 記下是誰關的；桌面模式下被「不是玩家自己按結束」的原因關掉（更新重開、看門狗、外部送 WM_CLOSE、系統），下次開回來直接回桌面
+    $why = if ($script:quitByMenu) { 'menu' } elseif ($script:closeByWatchdog) { 'watchdog' } else { "external($($e.CloseReason))" }
+    if ($script:petMode -and -not $script:quitByMenu) { $script:resumePet = $true }
+    Write-MiniLog ("closing: by={0} petMode={1} resumePet={2} uiExceptions={3}" -f $why, $script:petMode, $script:resumePet, $script:uiExCount)
+})
 $form.add_FormClosed({ $script:Cfg.x = $form.Left; $script:Cfg.y = $form.Top; Save-Cfg; foreach ($f0 in @($tag, $btn, $grip, $pet)) { try { $f0.Close() } catch {} } })
 
 # ── 閱讀縮放：卡片／進化樹這類「有字」的場景，字是vpet畫進 canvas 的點陣，縮小會缺筆畫；
@@ -1027,7 +1078,7 @@ $script:cfgWatch.add_Tick({
         if ($j.request -eq 'pet') { Save-Cfg; Enter-Pet }        # 系統匣叫的：縮成小寵物（Save-Cfg 會把 request 寫掉）
         elseif ($j.request -eq 'unpet') { Save-Cfg; Leave-Pet }
         if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} cfg reloaded (zoom={1} readZoom={2} topmost={3} follow={4} request={5})" -f (Get-Date), $j.zoom, $j.readZoom, $j.topmost, $j.petFollow, $j.request) }
-    } catch { if ($env:VPET_MINI_DEBUG) { Add-Content (Join-Path $here '_err.log') ("{0:HH:mm:ss.fff} cfg watch: {1}" -f (Get-Date), $_.Exception.Message) } }
+    } catch { Write-MiniErr 'cfg watch' $_.Exception.Message }
 })
 $script:cfgWatch.Start()
 
@@ -1040,16 +1091,24 @@ $script:dmTimer.add_Tick({
     $ok = $false
     try { $tc = New-Object System.Net.Sockets.TcpClient; $ar = $tc.BeginConnect('127.0.0.1', [int]$script:Port, $null, $null)
           if ($ar.AsyncWaitHandle.WaitOne(300)) { try { $tc.EndConnect($ar); $ok = $true } catch {} }; $tc.Close() } catch {}
-    if ($ok) { $script:deadTicks = 0; return }
+    if ($ok) {
+        if ($script:deadTicks -ge 5) { Write-MiniLog ("daemon 回來了（斷了約 {0} 秒）" -f ($script:deadTicks * 2)); if ($script:portDownTag) { $script:portDownTag = $false; Set-Tag (Tag-Text ([double]$script:Cfg.zoom)) $null } }
+        $script:deadTicks = 0; return }
     $script:deadTicks++
     $trayAlive = $false
     # 我們的 tray 開 Local\vpet-mini-tray；同仁 repo 的 tools\vpet-tray.ps1 開 Local\vpet-tray（2026-10-22 起小視窗也可能由他的 tray 帶）→ 兩個都認
     foreach ($mn in 'Local\vpet-mini-tray', 'Local\vpet-tray') {
         try { $mx = $null; if ([System.Threading.Mutex]::TryOpenExisting($mn, [ref]$mx)) { $trayAlive = $true }; if ($mx) { $mx.Dispose() } } catch {}
     }
-    $limit = if ($trayAlive) { 45 } else { 5 }
-    if ($env:VPET_MINI_DEBUG -and $script:deadTicks -eq 1) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} port down, trayAlive={1}, limit={2} ticks" -f (Get-Date), $trayAlive, $limit) }
-    if ($script:deadTicks -ge $limit) { $script:dmTimer.Stop(); $form.Close() }
+    if ($env:VPET_MINI_DEBUG -and $script:deadTicks -eq 1) { Add-Content (Join-Path $here '_fit.log') ("{0:HH:mm:ss.fff} port down, trayAlive={1}" -f (Get-Date), $trayAlive) }
+    if ($script:deadTicks -eq 5) {
+        Write-MiniLog ("daemon 連不上 10 秒（trayAlive={0}）" -f $trayAlive)
+        if ($trayAlive -and -not $script:petMode) { $script:portDownTag = $true; Set-Tag "連不到 daemon，等它回來…" ([System.Drawing.Color]::FromArgb(255, 255, 90, 90)) }
+    }
+    # tray 在＝daemon 父行程活著，子行程只是在重開或卡住 → 一直等、不關（2026-10-28 補丁；以前等 90 秒就關，玩家回來找不到小視窗）。
+    # tray 不在＝玩家按了結束或 daemon 真的掛了 → 10 秒關，不留孤兒
+    if ($trayAlive) { if (($script:deadTicks % 30) -eq 0) { Write-MiniLog ("daemon 仍連不上約 {0} 秒，tray 在，繼續等" -f ($script:deadTicks * 2)) }; return }
+    if ($script:deadTicks -ge 5) { Write-MiniLog "daemon 連不上 10 秒且 tray 不在 → 關小視窗"; $script:closeByWatchdog = $true; $script:dmTimer.Stop(); $form.Close() }
 })
 $script:dmTimer.Start()
 
@@ -1062,4 +1121,6 @@ if (-not $envTask.Wait(15000) -or $envTask.Status -ne 'RanToCompletion') {
     [System.Windows.Forms.MessageBox]::Show("WebView2 環境建立失敗（Windows 內建的 WebView2 runtime 不在？）", 'vpet mini') | Out-Null; exit 1
 }
 $null = $wv.EnsureCoreWebView2Async($envTask.Result)
-[void][System.Windows.Forms.Application]::Run($form)
+try { [void][System.Windows.Forms.Application]::Run($form) }
+catch { Write-MiniLog ("FATAL at Application.Run: " + $_.Exception.ToString()); try { if ($script:petMode) { $script:resumePet = $true; Save-Cfg } } catch {} }
+Write-MiniLog ("exit: uiExceptions={0}" -f $script:uiExCount)

@@ -382,6 +382,11 @@ console.log('— 頁面的本地預測 —');
        && /const a=!shot&&stPrev/.test(src) && /if\(shot\) return \{ HUD, VH \};/.test(src)
        && /if\(cmTix\.length\) h\+='<div id="cmtix"/.test(src) && /if\(commute\)\{ stPanelPets\(\); cmTixBind\(\); \}/.test(src)
        && /comEndPanel\(null,cmWeekHtml\([^\n]*\n\s*stPanelPets\(\); cmTixBind\(\);/.test(src), '一週結算沒有違規舉發單（或拍照會動到即時畫面）');
+    // 舉發單翻頁：寬度＝下面文字欄、置中、不換行（2026-10-29：原本靠右排、左箭頭凸到照片上方）
+    ok(/#stairspanel \.tk-nav\{[^}]*justify-content:center;[^}]*width:calc\(42% - 12px\);white-space:nowrap\}/.test(src)
+       && /#stairspanel \.cm-tk img\{[^}]*width:58%;[^}]*border:2px /.test(src) && /\.tk-b\{display:flex;gap:8px;/.test(src)
+       && /<span>No\.'\+String\(i\+1\)\.padStart\(3,'0'\)\+' \('\+\(i\+1\)\+'\/'\+n\+'\)<\/span>/.test(src),
+       '舉發單的翻頁沒有置中在下面那一欄（照片寬、邊框、間距改了要一起改 tk-nav 的寬度）');
     // 結算畫面（2026-10-27 改版）：每日結算是出勤卡（cmDayCard），一週結算有五天出勤點與獎項（cmWeekHtml，廣場、前線共用）
     ok(/if\(cmDayEnd&&nowMs>=cmDayEnd\.at\) cmDayCard\(/.test(src) && /if\(commute\) h\+=cmWeekHtml\(end\.result, stairs\.meId\);/.test(src)
        && /comEndPanel\(null,cmWeekHtml\(/.test(src) && /'全勤獎'/.test(src) && /'最常掛彩'/.test(src), '上班快遲到的每日／一週結算不是新版（出勤卡、獎項）');

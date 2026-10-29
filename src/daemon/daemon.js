@@ -2020,7 +2020,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #stairspanel .cm-tk .tk-g b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* 每格一行：字長了也不會把單子撐高 */
   #stairspanel .cm-tk b.tk-why{color:#c93c3c}
   #stairspanel .cm-tk .tk-st{position:absolute;left:calc(58% - 34px);bottom:12px;width:40px;height:40px;line-height:34px;border:3px solid #c93c3c;border-radius:50%;color:#c93c3c;font-weight:bold;text-align:center;transform:rotate(-15deg);opacity:.8}
-  #stairspanel .tk-nav{display:flex;align-items:center;gap:6px;font-size:11px} #stairspanel .tk-nav button{padding:0 6px;line-height:1.4}
+  #stairspanel .tk-nav{display:flex;align-items:center;justify-content:center;gap:2px;font-size:11px;flex:none;width:calc(42% - 12px);white-space:nowrap}   /* 寬度＝下面文字欄（照片 58% 加 2px 邊框兩側、間距 8px 之外），翻頁置中在文字欄上方 */ #stairspanel .tk-nav button{padding:0 3px;font-size:10px;line-height:1.4}
   #stairspanel .cm-awards span{color:#8b949e} #stairspanel .cm-awards b{color:#e6edf3;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stairspanel .st-btns{margin-top:8px;display:flex;gap:8px;justify-content:center}
   #stairspanel button.pri{background:#238636;border-color:#238636;color:#fff}
@@ -5630,7 +5630,7 @@ function cmTixFact(x){
 function cmTixHtml(i){
   const x=cmTix[i], n=cmTix.length, dis=n>1?'':' disabled';
   return '<div class="cm-tk"><div class="tk-h"><b>交通違規舉發單</b>'
-    +'<span class="tk-nav"><button data-d="-1"'+dis+'>◀</button><span>No. '+String(i+1).padStart(3,'0')+'（'+(i+1)+' / '+n+'）</span><button data-d="1"'+dis+'>▶</button></span></div>'
+    +'<span class="tk-nav"><button data-d="-1"'+dis+'>◀</button><span>No.'+String(i+1).padStart(3,'0')+' ('+(i+1)+'/'+n+')</span><button data-d="1"'+dis+'>▶</button></span></div>'
     +'<div class="tk-b"><img src="'+x.img+'" alt="">'
     +'<div class="tk-g"><span>違規人</span><b>'+stEsc(x.name)+'</b><span>時間</span><b>週'+CM_DAYN[x.day]+'　'+cmClock(x.t)+'</b>'
     +'<span>地點</span><b>'+(x.at!=null?'距公司 '+x.at+' 公尺':'—')+'</b><span>違規事實</span><b class="tk-why">'+cmTixFact(x)+'</b></div></div>'

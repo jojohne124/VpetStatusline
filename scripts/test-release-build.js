@@ -189,6 +189,13 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     ok(/if \(\$u\.Scheme -eq 'http' -or \$u\.Scheme -eq 'https'\) \{ Start-Process \$u\.AbsoluteUri \}/.test(mini) && !/try \{ Start-Process \$e2\.Uri \}/.test(mini),
        'vpet mini 的新視窗沒有限制只開 http／https');
     ok(/if\(e\.id==='chatlog'\) return true;/.test(mini), 'vpet mini 的聊天紀錄會被當成空白拖曳（字沒辦法反白複製）');
+    // 2026-10-28 補丁（mini 模式寵物消失）：tray 在就不因 daemon 連不上關小視窗；桌面模式被關掉 → 30 分鐘內開回來直接回桌面
+    ok(/if \(\$trayAlive\) \{[^\n]*return \}/.test(mini) && !/\$limit = if \(\$trayAlive\) \{ 45 \}/.test(mini), 'tray 在時看門狗還是會把小視窗關掉（寵物不見）');
+    ok(/\$c\.request = 'resumepet'; \$c\.petAt = /.test(mini) && /if \(\$script:startReq -eq 'resumepet'\) \{/.test(mini)
+       && !/\$script:startReq -eq 'pet' -and \$null -ne \$j\.petAt/.test(mini),
+       '自動回桌面跟系統匣的「桌面」共用 request=pet（殘留的 petAt 會把玩家自己按的桌面擋掉）');
+    ok(/function Write-MiniErr\(/.test(mini) && /if \(\$n -le 50\)/.test(mini) && /try \{ Pet-Tick \} catch \{ Write-MiniErr /.test(mini),
+       '寵物每拍的錯誤記錄沒有上限（壞掉時一秒寫好幾行）');
     // 系統匣只有一個（repo 自己的），選單開小視窗、結束時一起關；小視窗看同一個 Mutex
     ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /foreach \(\$mn in 'Local\\vpet-mini-tray', 'Local\\vpet-tray'\) \{\s*try \{ \$mx = \$null; if \(\[System\.Threading\.Mutex\]::TryOpenExisting\(\$mn,/.test(mini),
        'tray 跟小視窗沒有用同一個 Mutex（自動更新空檔的判斷會錯）');

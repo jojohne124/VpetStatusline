@@ -82,7 +82,7 @@ ok(id(at(2028, 10, 3)) === 'midautumn' && id(at(2028, 10, 4)) === 'doubleten', '
 console.log('— 指定日期的節日（選舉、尾牙）—');
 {
     // 選舉：投票日 2026/11/28，前一週（11/21）起到當天
-    ok(id(at(2026, 11, 20, 23, 59)) === null && id(at(2026, 11, 21, 0, 0)) === 'election', '選舉應該 11/21 00:00 開始');
+    ok(id(at(2026, 11, 20, 23, 59)) === 'shrimp' && id(at(2026, 11, 21, 0, 0)) === 'election', '選舉應該 11/21 00:00 開始（前一天是活蝦餐廳）');
     ok(id(at(2026, 11, 28, 23, 0)) === 'election' && id(at(2026, 11, 29, 0, 0)) === null, '選舉應該到投票日當天結束');
     ok(id(at(2027, 11, 25)) === null, '沒列的年份不該有選舉');
     ok(FEST.active(0, 'election').acc === null, '選舉不戴配件');
@@ -99,7 +99,17 @@ console.log('— 指定日期的節日（選舉、尾牙）—');
     // 尾牙不是吃鍋，是桌菜（2026-10-22 回報）：沒有火鍋的湯色，有一尾魚
     const has = (style, rgb) => P.feastTable(t, 0, style).dots.flat().some(c => c && c.join() === rgb);
     ok(has(undefined, '222,96,40') && !has('weiya', '222,96,40') && has('weiya', '214,150,70'), '尾牙桌上還是火鍋（或沒有魚）');
+    // 活蝦餐廳（2026-10-29）：11/19～11/20 兩天整段圍爐；桌子不是紅的、中間是一大盤蝦（不是魚）
+    const sh = FEST.FESTIVALS.find(f => f.id === 'shrimp');
+    ok(id(at(2026, 11, 18, 23, 59)) === null && id(at(2026, 11, 19, 0, 0)) === 'shrimp' && id(at(2026, 11, 20, 23, 59)) === 'shrimp'
+       && id(at(2026, 11, 21, 0, 0)) === 'election', '活蝦餐廳應該是 11/19 00:00～11/20 整天，11/21 接選舉');
+    ok(sh && sh.acc === null && FEST.feastOn(sh, at(2026, 11, 19, 9)) && FEST.feastOn(sh, at(2026, 11, 20, 23)) && !FEST.feastOn(sh, at(2026, 11, 21, 0, 1)),
+       '活蝦餐廳兩天都要整天圍爐、11/21 結束');
+    ok(reds('shrimp') < reds(undefined) / 5, `活蝦餐廳桌子還是紅的（紅點 ${reds('shrimp')}）`);
+    ok(has('shrimp', '255,170,120') && has('shrimp', '196,64,44') && !has('shrimp', '214,150,70') && !has('shrimp', '222,96,40'),
+       '活蝦餐廳中間不是一大盤蝦（還是魚或火鍋）');
     const dsrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), 'utf8');
+    ok(/\} else if\(id==='shrimp'\)\{/.test(dsrc) && /\} else if\(festState\.id==='shrimp'\)\{\s*festShrimp\(g,ts,W,H\);/.test(dsrc), '活蝦餐廳沒有自己的地板／背景');
     ok((dsrc.match(/feast, feastStyle: fest && fest\.id/g) || []).length === 2, '廣場／營地沒把節日（feastStyle）帶給圓桌');
 }
 

@@ -3054,6 +3054,14 @@ function festFloor(g,ts,W,H,id){
     // 尾牙會場：深灰地板（2026-10-22 回報：地板不要紅色、改深灰），一條條長板、接縫錯開
     R(0,HZ,W,H-HZ,'#34363a');
     for(let y=HZ+3,r=0;y<H;y+=3,r++){ R(0,y,W,1,'#28292c'); for(let x=(r%3)*5;x<W;x+=15) R(x,y-2,1,2,'#28292c'); }
+  } else if(id==='shrimp'){
+    // 活蝦餐廳：深木地板（2026-10-29 回報：改深木色），一條條長板、接縫錯開，板子深淺交錯＋幾道木紋
+    R(0,HZ,W,H-HZ,'#3a2a1e');
+    for(let y=HZ+3,r=0;y<H;y+=3,r++){
+      if(r%2) R(0,y-2,W,2,'#35261b');
+      R(0,y,W,1,'#271b13'); for(let x=(r%3)*5;x<W;x+=15) R(x,y-2,1,2,'#271b13');
+    }
+    sprinkle(30,1500,'#463325',0.8);
   } else if(id==='lunarny'){
     // 三合院的青磚地＋滿地鞭炮紅紙屑
     bricks(6,3,['#2a2d33','#2d3037','#282b30'],'#232529');
@@ -3167,6 +3175,41 @@ function festWeiya(g,gf,ts,W,H){
   // 台口一排燈泡（前景，一閃一閃）
   for(let x=sx;x<sx+sw;x+=3) festDot(gf,x,HZ-1,(Math.floor(ts/400)+x)%2?'#ffd84a':'#fff3c4',0.85);
 }
+// ── 活蝦餐廳：地平線以上是店裡的牆，左右兩缸活蝦（水裡有蝦游、氣泡往上冒），中間紅招牌「活蝦」，
+//    天花板垂下兩盞暖色吊燈。大家在店裡圍圓桌吃蝦（feastAll，桌子＝尾牙那張換原木色、中間一大盤蝦）──
+function festShrimp(g,ts,W,H){
+  const HZ=PLAZA_HORIZON, R=(x,y,w,h,c,a)=>sceneRect(g,x,y,w,h,c,a);
+  R(0,0,W,HZ,'#2a2520');                                   // 牆
+  R(0,HZ-3,W,3,'#3a3029'); R(0,HZ-3,W,1,'#4a3d33');        // 牆腳的木頭踢腳板
+  // 水族箱：鐵框、藍色的水、上面一條水面，蝦左右游、氣泡一直往上冒
+  const tw=Math.min(18,Math.floor(W*0.27)), th=HZ-6;
+  for(const [k,x0] of [[0,2],[1,W-2-tw]]){
+    R(x0,2,tw,th,'#8f969d'); R(x0+1,3,tw-2,th-2,'#1d4a6b'); R(x0+1,3,tw-2,1,'#3f86b4');
+    R(x0+1,th,tw-2,1,'#c8b48a');                            // 缸底的砂
+    for(let i=0;i<4;i++){
+      const sp=2600+i*500, dir=(i+k)%2?1:-1, span=tw-6;
+      const p=((ts/sp+festRnd(i+k*10+1700))%1), xx=x0+2+Math.round(dir>0?p*span:(1-p)*span), yy=5+Math.floor(festRnd(i+k*10+1800)*(th-5));
+      const head=dir>0?xx+2:xx, tail=dir>0?xx:xx+2;
+      R(head,yy,1,1,'#ffaa78'); R(xx+1,yy,1,1,'#f06e46'); R(tail,yy,1,1,'#c4402c');
+    }
+    for(let i=0;i<3;i++){
+      const p=((ts/1800+festRnd(i+k*7+1900))%1), bx=x0+2+Math.floor(festRnd(i+k*7+2000)*(tw-4));
+      R(bx,Math.round(th-1-p*(th-4)),1,1,'#a8d8f0',0.8*(1-p));
+    }
+  }
+  // 中間紅招牌＋金字「活蝦」
+  const bw=16, bx=Math.round((W-bw)/2);
+  R(bx,4,bw,6,'#b5161c'); R(bx,4,bw,1,'#e8484e'); R(bx,9,bw,1,'#7e0f14');
+  R(bx-1,3,bw+2,1,'#d4a53a'); R(bx-1,10,bw+2,1,'#d4a53a');
+  g.save(); g.fillStyle='#ffd84a'; g.font='bold '+Math.round(CH*1.6)+'px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText('活　蝦',(bx+bw/2)*CW,7.1*(CH/2)); g.restore();
+  // 兩盞吊燈：電線＋燈罩＋暖光（很淡，慢慢呼吸）
+  for(const x of [Math.round(W*0.36),Math.round(W*0.64)]){
+    R(x,0,1,11,'#4a4440'); R(x-2,11,5,1,'#c98a2e'); R(x-1,12,3,1,'#ffe39a');
+    g.save(); g.globalAlpha=0.07+0.02*Math.sin(ts/1500+x); g.fillStyle='#ffd88a'; g.beginPath();
+    g.moveTo((x-1)*CW,12*(CH/2)); g.lineTo((x+2)*CW,12*(CH/2)); g.lineTo((x+7)*CW,HZ*(CH/2)); g.lineTo((x-6)*CW,HZ*(CH/2)); g.fill(); g.restore();
+  }
+}
 function festShown(){ return !!festState.id && (view==='plaza' || view==='yard') && festState.bg; }
 function festDraw(ts){
   const cv=document.getElementById('fest');
@@ -3231,6 +3274,8 @@ function festDraw(ts){
     festElection(g,ts,W,H);
   } else if(festState.id==='weiya'){
     festWeiya(g,gf,ts,W,H);
+  } else if(festState.id==='shrimp'){
+    festShrimp(g,ts,W,H);
   } else if(festState.id==='lunarny'){
     // 上緣一整排紅燈籠微微晃，掛在**鏡頭前**（前景畫布，角色走過去會被擋住）；
     // 下緣兩角掛鞭炮，底下一直冒火花

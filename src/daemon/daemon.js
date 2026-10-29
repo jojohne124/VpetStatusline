@@ -91,7 +91,7 @@ const FORCE_FILE     = path.join(STATE_DIR, 'force-char.json');   // vpet 指令
 const IS_RELEASE = fs.existsSync(path.join(core.INSTALL_ROOT, 'RELEASE'));
 // 與 statusline-cheat.js 的 release gate 對齊（那邊是 blockedCmd / blockedBattle / blockedSwitch）。
 // 兩份名單必須一致，否則會出現「按鈕在網頁上看得到、按下去子行程回一句『此版本未提供此指令』」。
-const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev']);   // frontMini／miniBest（前線小遊戲）2026-10-28 起 release 也開放：連不上廣場時露出
+const DEV_ONLY   = new Set(['battle', 'evolve', 'stats', 'switch', 'pvp-server', 'zoneedit', 'page2Dev', 'duelDev', 'gzDev']);   // frontMini／miniBest（前線小遊戲）2026-10-28 起 release 也開放：連不上廣場時露出
 // 廣場管理（踢人、刪聊天）：只有 daemon 有（不是 CLI 指令，不跟上面那份對齊），release 一樣擋
 const PLAZA_ADMIN_CMDS = new Set(['plazaKick', 'plazaChatDel', 'plazaChatClear']);
 
@@ -1156,6 +1156,71 @@ function duelDev(opts = {}) {
     return { ok: true, action: 'duelDev', me: { char, str: Math.max(1, str), name: plazaName() || nm(char) },
              opp: { char: opp, str: Math.max(1, oppStr), name: nm(opp) + (opts.com ? '（電腦）' : '（dev）') } };
 }
+// ── 期間限定事件：怪獸入侵（哥吉拉，docs/godzilla-event-spec.md）──────────────
+// 檔期暫定 2026-11-05～11-12（本地時間，12 號整天都算）。開發版不看檔期、一直開著（按鈕掛 dev）。
+// 三關都是手動戰鬥、跟電腦打（頁面本地跑 duel-sim，同 duelCom），我方固定是那一關的哥吉拉，不是前線那隻。
+// 進度記在 ranch.json 的 gz：{ seen：看過說明, clear：三關各打贏過沒, rewardId：領到的哥吉拉寶寶（營地 id）}
+const GZ_FROM = new Date(2026, 10, 5).getTime(), GZ_TO = new Date(2026, 10, 13).getTime();
+const GZ_REWARD = 'babygodzilla';
+// boss：敵方戰力 = 原本戰力 × 這個倍率（頭目比較硬，越後面越硬）。bg：duel-sim 的 EVENT_BGS
+const GZ_STAGES = [
+    { me: 'godzilla_1954',   meName: '哥吉拉 1954', opp: 'kiryu',              oppName: '3式機龍',      bg: 'ruins',     boss: 1.15 },
+    { me: 'godzilla_1994',   meName: '哥吉拉 1994', opp: 'king_ghidorah_2001', oppName: '基多拉 2001',  bg: 'ruins',     boss: 1.15 },
+    { me: 'burninggodzilla', meName: '紅蓮哥吉拉',  opp: 'destoroyah',         oppName: '戴斯特洛伊亞', bg: 'ruinsfire', boss: 1.25 },
+];
+const gzInWindow = (t = Date.now()) => t >= GZ_FROM && t < GZ_TO;
+const gzActive = () => !IS_RELEASE || gzInWindow();
+function gzProg(ranch) {
+    const g = ranch.gz || {};
+    return { seen: !!g.seen, clear: [0, 1, 2].map(i => !!(g.clear || [])[i]), rewardId: g.rewardId || null };
+}
+function gzInfo(ranch) {
+    ranch = ranch || core.loadRanch();
+    const p = gzProg(ranch);
+    return { ok: true, action: 'gzInfo', active: gzActive(), dev: !gzInWindow(), period: '11/5～11/12', reward: GZ_REWARD,
+             seen: p.seen, clear: p.clear, claimed: !!p.rewardId, full: (ranch.pets || []).length >= core.ranchCap(ranch),
+             stages: GZ_STAGES.map(s => ({ me: s.me, meName: s.meName, opp: s.opp, oppName: s.oppName, bg: s.bg })) };
+}
+function gzCmd(action, args) {
+    if (action === 'gzInfo') return gzInfo();
+    if (!gzActive()) return { ok: false, error: '怪獸入侵活動現在沒有開放' };
+    const ranch = core.loadRanch(), g = ranch.gz || (ranch.gz = {}), i = Number(args.stage);
+    const save = () => { core.saveRanch(ranch); return gzInfo(ranch); };
+    if (action === 'gzSeen') { g.seen = true; return save(); }
+    if (action === 'gzStart' || action === 'gzClear') {
+        if (![0, 1, 2].includes(i)) return { ok: false, error: '沒有這一關' };
+        if (action === 'gzClear') { g.clear = [0, 1, 2].map(k => !!(g.clear || [])[k] || k === i); return save(); }
+        const s = GZ_STAGES[i], pw = (c) => { try { return core.getCharacterPower(c) || 100; } catch (e) { return 100; } };
+        return { ok: true, action, stage: i, bg: s.bg, me: { char: s.me, str: pw(s.me), name: s.meName },
+                 opp: { char: s.opp, str: Math.round(pw(s.opp) * s.boss), name: s.oppName } };
+    }
+    if (action === 'gzClaim') {
+        const p = gzProg(ranch);
+        if (!p.clear.every(Boolean)) return { ok: false, error: '三關都通關才能領' };
+        if (p.rewardId) return { ok: false, error: '已經領過了' };
+        if ((ranch.pets || []).length >= core.ranchCap(ranch)) return { ok: false, full: true, error: '營地滿了，空出一個位置再來領' };
+        const now = Date.now(), id = core.newRanchId(ranch);
+        ranch.pets.push({ id, keptAt: now, state: core.snapshotPet({ characterId: GZ_REWARD, birthAt: now, lastEvolveAt: now }) });
+        g.rewardId = id;
+        // 圖鑑：營地直接多一隻、從沒當過現役 → 送的當下就登錄（同哈哈獸 page2GrantAlbum）
+        try {
+            core.recordAlbumChar(GZ_REWARD);
+            const pet = ranch.pets.find(x => x.id === id);
+            if (core.albumKeyOf) pet.state.albumKey = core.albumKeyOf(pet.state);
+        } catch (e) {}
+        return Object.assign(save(), { action, id });
+    }
+    // dev：reset = 進度全清（領到的那隻哥吉拉寶寶認 id 收走，玩家自己養的不動）；clear = 三關直接通關（測領獎）
+    if (action === 'gzDev') {
+        if (args.act === 'reset') {
+            if (g.rewardId) ranch.pets = (ranch.pets || []).filter(x => x.id !== g.rewardId);
+            delete ranch.gz;
+        } else if (args.act === 'clear') g.clear = [true, true, true];
+        else return { ok: false, error: 'act 只能是 reset／clear' };
+        return save();
+    }
+    return { ok: false, error: '不認得的指令：' + action };
+}
 function page2Dev(act) {
     const ranch = core.loadRanch();
     if (act === 'quest') {
@@ -1403,6 +1468,7 @@ function applyCommand(action, args = {}) {
     if (action === 'duelResign') return plazaClient.stairs('dresign').then(r => (r.ok ? { ok: true, action } : r));
     if (action === 'duelDev') return duelDev();
     if (action === 'duelCom') return duelDev({ com: true });   // 跟電腦打：同一套對手挑法，名字標「電腦」
+    if (/^gz[A-Z]/.test(action)) return gzCmd(action, args);   // 期間限定事件：怪獸入侵（哥吉拉）
     // 前線小遊戲：開著（每幾秒報一次）／關了；個人最佳（kind + val = 記一筆，沒給 val = 只讀）
     if (action === 'changelog') return { ok: true, action, output: changelogText() };
     if (action === 'frontMini') { frontMiniUntil = args.on === '1' ? Date.now() + FRONT_MINI_TTL : 0; return { ok: true, action }; }
@@ -1893,6 +1959,13 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #minipick .mp-game{border:1px solid #30363d;border-radius:6px;padding:6px 8px;margin-top:6px;text-align:left}
   #minipick .mp-game b{color:#e6edf3;font-size:13px}
   #minipick .mp-desc{color:#8b949e;font-size:11px}
+  /* 怪獸入侵（哥吉拉）的關卡選單：雙方小圖、打贏的蓋 CLEAR 章 */
+  #minipick .gz-st{position:relative} #minipick .gz-st.clr{border-color:#9e6a03}
+  #minipick .gz-row{display:flex;align-items:center;gap:4px} #minipick .gz-row>i{color:#ff7b72;font:900 11px sans-serif}
+  #minipick .gz-row canvas{width:40px;height:40px;background:#161b22;border-radius:4px;flex:none}
+  #minipick .gz-txt{flex:1;min-width:0;margin-left:4px} #minipick .gz-row>button{flex:none}
+  #minipick .gz-clr{position:absolute;left:30px;top:50%;transform:translateY(-50%) rotate(-12deg);background:rgba(13,17,23,.75);border:2px solid #f0b429;border-radius:3px;color:#f0b429;font:900 12px sans-serif;letter-spacing:1px;padding:0 4px}
+  #stairspanel .dg-clr{color:#f0b429}
   #minipick .mp-modes{margin-top:4px;display:flex;gap:6px}
   #minipick .mp-best{align-self:center;font-size:11px;color:#d29922}
   #minipick .mp-soon{color:#7f868e;font-size:11px;margin-top:6px}
@@ -2100,6 +2173,7 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
                   .map((h) => (h.includes('data-cmd="jogress"') ? h + '<select id="jgsel" data-help="jogress" data-scope="home" data-when="jogressMulti" title="營地裡有好幾隻能合體，選一隻"></select>' : h))
                   .join('\n      ')}
       <button id="minifront" data-help="minifront" data-scope="home" data-when="miniFront" style="display:none" title="自己玩小遊戲（單機）">🎮 小遊戲${IS_RELEASE ? '' : '<span class="devtag mfdev"> dev</span>'}</button>
+      <button id="gzbtn" data-help="gzbtn" data-scope="home" data-when="gz" style="display:none" title="期間限定事件">🦖 怪獸入侵</button>
       <span id="ctlright" style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <button id="selfupdate" data-help="selfupdate" class="accent" style="display:none" title="下載新版並重開 daemon（幾秒鐘）">🆕 有新版本</button>
       <label class="k" id="festplaza" data-help="festplaza" style="display:none;margin-left:auto;align-items:center;gap:4px;font-size:12px"
@@ -3435,6 +3509,7 @@ function jogressConfirmText(o){
 }
 // data-when 的條件。不成立 = 整顆不出現（不是灰掉：灰掉的鈕會讓人一直想點點看為什麼）。
 // MINI_FRONT_ALWAYS／plazaOffline 要宣告在 WHEN 前面：頁面一開 setDevUi 就會跑 applyWhen，宣告在後面會 TDZ 整頁掛掉（2026-10-28）
+let gzState=null;   // 怪獸入侵（哥吉拉）事件的進度（gzInfo），WHEN.gz 要用
 const MINI_FRONT_ALWAYS=${IS_RELEASE ? 'false' : 'true'};
 let plazaOffline=false;
 const WHEN={
@@ -3442,6 +3517,7 @@ const WHEN={
   jogressMulti: ()=>jgOptions().length>1,   // 不止一組才需要選
   // 前線單機小遊戲：正式版連不上廣場後才露出（2026-10-28）；開發版一直有（掛 dev），關掉 dev 介面就照正式版
   miniFront:    ()=>(MINI_FRONT_ALWAYS&&!document.body.classList.contains('nodev'))||plazaOffline,
+  gz:           ()=>!!(gzState&&gzState.active),   // 怪獸入侵：檔期內（開發版一直有）
 };
 function applyWhen(){
   document.querySelectorAll('[data-when]').forEach(el=>{
@@ -4023,7 +4099,7 @@ async function sendCmd(action,args){
                  ||action==='plazaHappy'||action==='festCostume'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
-                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyStats'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='commuteInput'||action==='plazaHide'||action==='stockQuery'||action==='duelCom');   // 勾選框／開心鈕／事件：畫面直接看得到
+                 ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyStats'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='commuteInput'||action==='plazaHide'||action==='stockQuery'||action==='duelCom'||action==='gzInfo'||action==='gzSeen'||action==='gzStart'||action==='gzClear'||action==='gzClaim');   // 勾選框／開心鈕／事件：畫面直接看得到
     if(!(quiet&&r.ok))
       flashCmdMsg(r.ok ? (MOOD[r.mood] || ('已送出：'+action)) : failMsg(r,action),
                   r.ok ? ((r.mood==='refuse'||r.mood==='sulking')?'#d29922':'#3fb950') : '#f85149');
@@ -4897,7 +4973,7 @@ function miniOpen(){
   document.getElementById('miniclose').addEventListener('click',miniClose);
   el.style.display='block';
 }
-function miniClose(){ document.getElementById('minipick').style.display='none';
+function miniClose(){ document.getElementById('minipick').style.display='none'; document.getElementById('minipick').style.width='';   // 怪獸入侵的選單比較寬（gzMenu）
   if(view!=='plaza'&&!comState){ const st=document.getElementById('stage'); st.style.minWidth=''; st.style.minHeight=''; }   // 前線：選單撐開的舞台收回去
 }
 // 小遊戲選單裡看排行榜（前 20 名）：跟廣場主機要，「返回」回到遊戲列表
@@ -5950,9 +6026,11 @@ function comEndPanel(won, text){
     const d=comState.duel, res=d.winner<0?'draw':d.winner===0?'win':'lose';
     const sides=[0,1].map(i=>({ name:d.names[i], char:d.chars[i], hp:d.hp[i], max:d.max[i], st:DS.statOf(d.stat,i) }));
     el.dataset.h='';
-    el.innerHTML=dgResultHtml({ res, mode:comState.devTest?'⚔ DEV 測試':'⚔ VS 電腦', sides, rounds:d.round-1,
-        why:(d.resign===0?'你認輸了　·　':'')+'對手戰力 '+d.str[1] })
-      +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div></div>';
+    const gz=comState.gz!=null;
+    if(gz&&res==='win') sendCmd('gzClear',{ stage:String(comState.gz) }).then(r=>{ if(r&&r.ok) gzState=r; });
+    el.innerHTML=dgResultHtml({ res, mode:gz?'🦖 怪獸入侵　第 '+(comState.gz+1)+' 關':comState.devTest?'⚔ DEV 測試':'⚔ VS 電腦', sides, rounds:d.round-1,
+        why:(gz&&res==='win'?'<b class="dg-clr">STAGE CLEAR</b>　·　':'')+(d.resign===0?'你認輸了　·　':'')+'對手戰力 '+d.str[1] })
+      +'<div class="st-btns"><button id="comagain" class="pri">'+(gz?'再打一次':'再來一局')+'</button><button id="comback">'+(gz?'回到關卡選單':view==='plaza'?'回到廣場':'回到前線')+'</button></div></div>';
     dgPets(sides,res);
   } else {
   const k0=comState.kind, solo=k0==='stairs'||k0==='dino'||k0==='commute';
@@ -5961,8 +6039,8 @@ function comEndPanel(won, text){
   el.dataset.h=''; el.innerHTML='<div class="st-h">'+title+(k0==='duel'||solo?'':'　vs 🤖 '+COM_NAME)+'</div><div class="st-res">'+(solo?'':'<b>'+(won==null?'平手':won?'你贏了！':'你輸了')+'</b>　')+text+'</div>'
     +'<div class="st-btns"><button id="comagain" class="pri">再來一局</button><button id="comback">'+(view==='plaza'?'回到廣場':'回到前線')+'</button></div>';
   }
-  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(comState.devTest?'dev':'com'); else comStart(k); });
-  document.getElementById('comback').addEventListener('click',comStop);
+  document.getElementById('comagain').addEventListener('click',()=>{ const k=comState.kind; if(k==='duel') mbDevStart(comState.gz!=null?'gz':comState.devTest?'dev':'com',comState.gz); else comStart(k); });
+  document.getElementById('comback').addEventListener('click',()=>{ const gz=comState&&comState.gz!=null; comStop(); if(gz) gzAfter(); });
 }
 // 排球的電腦（普通）：跑到球底下、球低了就跳、空中有時殺球；只在球在自己這邊時動
 function comVolleyKeys(g){
@@ -6351,6 +6429,47 @@ function mbBg(name,W,H){
     R('#7a5230',0,HZ-38,W,5); for(let x=40;x<W;x+=132) R('#5e3e22',x,HZ-33,5,33);
     R('#8a5a30',0,HZ-5,W,5); R('#b07a45',0,HZ,W,H-HZ);
     for(let y=HZ;y<H;y+=24){ R('#9a6837',0,y,W,2); for(let x=((y-HZ)/24%2)*80;x<W;x+=160) R('#9a6837',x,y,2,24); }
+  } else if(name==='ruins'||name==='ruinsfire'){
+    // 破敗都市（怪獸入侵事件，2026-10-28）：分層的天、兩排斷頭的大樓（窗戶有暗有亮、樓頂斷一截、露出鋼筋）、裂開的柏油路＋瓦礫。
+    // 炎上版：紅黑的天、樓頂跟路邊在燒、冒黑煙、飄火星。亂數用固定種子：每次畫出來都一樣
+    const fire=name==='ruinsfire';
+    let sd=fire?20261105:19541103; const rnd=()=>(sd=(sd*16807)%2147483647)/2147483647;
+    const sky=fire?['#1a0606','#3a0d09','#6b1c0c','#a5381a']:['#22242e','#2e303e','#3d3d4c','#545160'], bh=Math.ceil(HZ/4);
+    sky.forEach((c,k)=>{ R(c,0,k*bh,W,bh); if(k) for(let x=(k%2)*4;x<W;x+=8) R(sky[k-1],x,k*bh,4,4); });
+    for(let i=0;i<(fire?60:24);i++) R(fire?(i%3?'#ff8a2a':'#ffd23f'):'#6a6878',Math.floor(rnd()*W/2)*2,Math.floor(rnd()*(HZ-20)/2)*2,2,2);   // 火星／遠處的灰
+    // 黑煙：從燒起來的地方往上飄、越高越大越淡（先畫，在大樓後面）
+    const smoke=(x,y)=>{ g.save(); for(let j=0;j<7;j++){ g.globalAlpha=0.5-j*0.06; const s=8+j*4; R(fire?'#1c1212':'#3a3a44',x+j*5-s/2,y-j*12-s,s,s); } g.restore(); };
+    (fire?[60,170,300,410,500]:[120,380]).forEach(x=>smoke(x,HZ-30));
+    const flame=(fx,fy,k)=>{ R('#b3261a',fx-6*k,fy-8*k,12*k,8*k); R('#b3261a',fx-4*k,fy-14*k,8*k,6*k); R('#b3261a',fx-2*k,fy-18*k,4*k,4*k);
+      R('#f06a1c',fx-4*k,fy-6*k,8*k,6*k); R('#f06a1c',fx-2*k,fy-11*k,4*k,5*k); R('#ffd23f',fx-2*k,fy-4*k,4*k,4*k); };
+    // 一棟樓：一欄 4 點，斷掉的那一側一欄一欄往下掉；回傳每一欄的高度（窗戶、火要跟著斷口）
+    const tower=(x,w,h,col,lit)=>{
+      const br=rnd()<0.65, cut=0.3+rnd()*0.5, sl=1+Math.floor(rnd()*3), left=rnd()<0.5, tops=[];
+      for(let cx=0;cx<w;cx+=4){ const u=left?(w-cx)/w:cx/w; let hh=h;
+        if(br&&u>cut) hh-=Math.round((u-cut)*w/4)*2*sl+(rnd()<0.3?4:0);
+        hh=Math.max(8,hh); tops.push(hh); R(col,x+cx,HZ-hh,4,hh); }
+      if(br) for(let k=0;k<3;k++){ const ci=Math.floor(rnd()*tops.length); R('#6e6862',x+ci*4+1,HZ-tops[ci]-6,2,6); }   // 鋼筋
+      if(lit!=null) for(let cx=4;cx<=w-8;cx+=8){ const hh=tops[cx/4];
+        for(let y=HZ-h+6;y<HZ-6;y+=10){ if(y<HZ-hh+4) continue;
+          R(rnd()<lit?(fire?'#ff7a1a':'#c9b458'):(fire?'#1e0b08':'#1a1b24'),x+cx,y,4,5); } }
+      return tops;
+    };
+    for(let x=-10;x<W;){ const w=Math.round(6+rnd()*10)*4; tower(x,w,Math.round((40+rnd()*40)/2)*2,fire?'#2a0e0b':'#2a2b37',null); x+=w+Math.round(rnd()*3)*4; }
+    for(let x=-6;x<W;){ const w=Math.round(5+rnd()*8)*4, tops=tower(x,w,Math.round((26+rnd()*44)/2)*2,fire?'#3a1712':'#3b3c4c',fire?0.28:0.12);
+      if(fire&&rnd()<0.7){ const ci=Math.floor(rnd()*tops.length); flame(x+ci*4+2,HZ-tops[ci]+2,rnd()<0.5?1:2); }
+      x+=w+Math.round(1+rnd()*4)*4; }
+    // 路面：柏油＋路緣，炎上版路面映著火光
+    R(fire?'#3a2a26':'#3a3a40',0,HZ,W,H-HZ); R(fire?'#5a3a30':'#56565e',0,HZ,W,4);
+    if(fire){ g.save(); g.globalAlpha=0.18; R('#ff6a1a',0,HZ+4,W,16); g.globalAlpha=0.09; R('#ff6a1a',0,HZ+20,W,24); g.restore(); }
+    for(let i=0;i<300;i++) R(i%3?(fire?'#33241f':'#34343a'):(fire?'#46332c':'#46464e'),(i*97)%W,HZ+6+((i*53)%(H-HZ-6)),4,4);
+    for(const y of [MB.GY+MB.GH,MB.GY+MB.GH*2]) for(let x=8;x<W;x+=64) if(rnd()<0.7) R(fire?'#a08640':'#b8a24a',x,y-2,28,4);   // 車道線：被踩爛的地方不見了
+    for(let k=0;k<7;k++){ let x=Math.floor(rnd()*W/4)*4, y=HZ+8+Math.floor(rnd()*(H-HZ-20)/4)*4;   // 裂縫：4 點一段的折線
+      for(let s=0;s<10;s++){ R('#1e1e22',x,y,4,4); x+=4; y+=rnd()<0.5?-4:4; if(y<HZ+6) y+=8; } }
+    const rubble=(x,y,n)=>{ for(let j=0;j<n;j++){ const s=4+Math.floor(rnd()*3)*2;
+      R(['#5e5a58','#74706a','#4a4644','#6a5a4a'][Math.floor(rnd()*4)],x+Math.floor((rnd()-0.5)*n*6),y-Math.floor(rnd()*s),s,s); } };
+    for(let x=0;x<W;x+=26) rubble(x,HZ+4,3);
+    for(const [x,y] of [[40,HZ+30],[W-60,HZ+40],[W/2-10,H-70],[90,H-60],[W-110,H-75]]) rubble(x,y,6);
+    if(fire) for(const [x,y] of [[22,HZ+10],[W-30,HZ+14],[W/2+70,HZ+8],[150,HZ+12]]) flame(x,y,1);
   } else {
     R('#8fc9f0',0,0,W,38); R('#a9d6f5',0,0,W,14);
     R('#c9a66b',0,38,W,HZ-38);
@@ -6560,20 +6679,101 @@ function mbHoverAt(e){
   else if(mbSel.step===1&&c[0]===2) mbSel.cur=c[1];
 }
 
+// ── 期間限定事件：怪獸入侵（哥吉拉，2026-10-28 試做）──
+// 進度在 daemon（ranch.json 的 gz，gzInfo 拿）。第一次按先由大耳獸說明（選單的「📖 說明」可以重看）；
+// 選單三關都是手動戰鬥、跟電腦打（mbDevStart('gz')），我方固定是哥吉拉；打贏蓋 CLEAR。
+// 三關全通 → 大耳獸出來講、領哥吉拉寶寶（營地要有空位，滿了之後空出位置再從選單領）
+const GZ_INTRO=[
+  { text:'不好了！怪獸入侵城市了，整條街都被踩爛了！' },
+  { text:'請和哥吉拉一起把怪獸擊退！一共三關，每一關都是手動戰鬥，由你來指揮哥吉拉。' },
+  { text:'三關全部通關的話，會有特別的獎勵喔！這段說明在選單的「📖 說明」可以重看。' },
+];
+const GZ_BG={ ruins:'🏚 破敗都市', ruinsfire:'🔥 破敗都市（炎上）' };
+function gzRefresh(){ return sendCmd('gzInfo').then(r=>{ if(r&&r.ok) gzState=r; gzBtnSync(); return gzState; }); }
+// 按鈕：開發版不在檔期內也開著，掛 dev
+function gzBtnSync(){
+  const b=document.getElementById('gzbtn'); if(!b) return;
+  b.innerHTML='🦖 怪獸入侵'+(gzState&&gzState.dev?'<span class="devtag"> dev</span>':'');
+  applyWhen();
+}
+function gzOpen(){
+  const el=document.getElementById('minipick');
+  if(el.style.display==='block'){ miniClose(); return; }
+  if(comState) return;
+  if(frontKind==='battle'||frontKind==='evolve'){ flashCmdMsg('正在戰鬥／進化，等演完再來','#d29922'); return; }
+  gzRefresh().then(s=>{ if(!s||!s.active) return; if(s.seen) gzMenu(); else gzIntro(); });
+}
+function gzIntro(){
+  miniClose();
+  storyOpen(GZ_INTRO, ()=>sendCmd('gzSeen').then(r=>{ if(r&&r.ok) gzState=r; gzMenu(); }));
+}
+function gzMenu(){
+  const s=gzState, el=document.getElementById('minipick'); if(!s) return;
+  const n=s.clear.filter(Boolean).length, all=n===s.clear.length;
+  el.innerHTML='<div class="mp-h">🦖 怪獸入侵</div><div class="mp-desc">活動期間 '+s.period+'　通關 '+n+' / '+s.clear.length+'</div>'
+    +s.stages.map((g,i)=>'<div class="mp-game gz-st'+(s.clear[i]?' clr':'')+'"><div class="gz-row">'
+      +'<canvas width="40" height="40" data-gzc="'+g.me+'" data-gzs="r"></canvas><i>VS</i><canvas width="40" height="40" data-gzc="'+g.opp+'" data-gzs="l"></canvas>'
+      +'<div class="gz-txt"><b>第 '+(i+1)+' 關</b><div class="mp-desc">'+g.meName+' VS '+g.oppName+'<br>'+(GZ_BG[g.bg]||'')+'</div></div>'
+      +'<button class="pri" data-gz="'+i+'">'+(s.clear[i]?'再打':'出擊')+'</button></div>'
+      +(s.clear[i]?'<span class="gz-clr">CLEAR</span>':'')+'</div>').join('')
+    +'<div class="mp-game"><div class="gz-row"><canvas width="40" height="40" data-gzc="'+s.reward+'" data-gzs="r"></canvas>'
+      +'<div class="gz-txt"><b>🎁 三關全通獎勵</b><div class="mp-desc">哥吉拉寶寶　'
+      +(s.claimed?'已經領了，牠在營地裡。':all?(s.full?'營地滿了，空出一個位置就能領。':'可以領了！'):'三關都打贏就能領（營地要有空位）。')+'</div></div>'
+      +(all&&!s.claimed?'<button class="pri" id="gzclaim">領取</button>':'')+'</div></div>'
+    +'<div class="mp-modes" style="justify-content:center;margin-top:8px"><button id="gzhelp">📖 說明</button><button id="miniclose">關閉</button></div>';
+  el.querySelectorAll('button[data-gz]').forEach(b=>b.addEventListener('click',()=>{ miniClose(); mbDevStart('gz',+b.dataset.gz); }));
+  const c=document.getElementById('gzclaim'); if(c) c.addEventListener('click',gzReward);
+  document.getElementById('gzhelp').addEventListener('click',gzIntro);
+  document.getElementById('miniclose').addEventListener('click',miniClose);
+  // 前線的舞台只有走路那條高：選單開著時撐到小遊戲那麼大（同前線小遊戲選單）
+  const st=document.getElementById('stage'); st.style.minWidth=(69*YARD_CW)+'px'; st.style.minHeight=(54*(YARD_CH/2))+'px';
+  el.style.width='380px'; el.style.display='block';
+  gzIcons();
+}
+// 選單上的小圖（2 倍）：我方面右、敵方面左，同手動戰鬥
+function gzIcons(){
+  const cvs=[...document.querySelectorAll('#minipick canvas[data-gzc]')]; if(!cvs.length) return;
+  const key=[...new Set(cvs.map(c=>c.dataset.gzc))].join(',');
+  fetch('/stairs/sprites?c='+encodeURIComponent(key),{cache:'no-store'}).then(r=>r.json()).then(j=>{
+    cvs.forEach(cv=>{ const a=j[cv.dataset.gzc], set=a&&a[cv.dataset.gzs], sp=set&&set[0]&&mbBake(set[0],2,false); if(!sp) return;
+      const g=cv.getContext('2d'); g.clearRect(0,0,40,40); g.drawImage(sp.img,Math.round(20-sp.img.width/2),Math.round(20-sp.img.height/2)); });
+  }).catch(()=>{});
+}
+// 打完一關回選單：三關剛好全通、還沒領 → 大耳獸出來講獎勵
+function gzAfter(){ gzRefresh().then(s=>{ if(!s) return; if(s.clear.every(Boolean)&&!s.claimed) gzReward(); else gzMenu(); }); }
+function gzReward(){
+  const s=gzState; if(!s) return;
+  miniClose();
+  const lines=[{ text:'太厲害了！三隻怪獸都被擊退，城市安全了！' },
+    { text:'哥吉拉在廢墟裡留下了一顆蛋……孵出來的是哥吉拉寶寶！牠好像想跟著你。' }];
+  if(s.full) lines.push({ text:'可是你的營地已經滿了。空出一個位置之後，再到選單按「領取」帶牠回去吧！' });
+  else lines.push({ text:'要帶牠回營地嗎？', buttons:[{ label:'🎁 帶牠回營地', cls:'pri', fn:gzClaim },{ label:'等一下再說', fn:()=>{ storyClose(); gzMenu(); } }] });
+  storyOpen(lines, gzMenu);
+}
+function gzClaim(){
+  sendCmd('gzClaim').then(r=>{
+    if(r&&r.ok){ gzState=r; storyOpen([{ text:'哥吉拉寶寶住進營地了！有空去營地看看牠吧。' }], gzMenu); return; }
+    gzRefresh().then(()=>storyOpen([{ text:(r&&r.full)?'營地已經滿了，空出一個位置再來領吧！':((r&&r.error)||'領不到，等一下再試試看。') }], gzMenu));
+  });
+}
+if(document.getElementById('gzbtn')) document.getElementById('gzbtn').addEventListener('click',gzOpen);
+gzRefresh(); setInterval(gzRefresh,60000);   // 檔期開始那一刻按鈕要自己冒出來
+
 // ── dev 測試對戰：本地跑 duel-sim，對手每回合隨機 ──
 // mode：'com' = 跟電腦打（小遊戲房一個人出發）；其他 = dev 測試對戰。對手都是同階隨機一隻、戰力在那一階隨機
-function mbDevStart(mode){
+// mode 'gz'：怪獸入侵（哥吉拉）的第 stage 關 —— 雙方角色、戰力、場地都照 daemon 給的（gzStart）
+function mbDevStart(mode,stage){
   if(!DS){ flashCmdMsg('手動戰鬥的判定沒載入','#f85149'); return; }
-  const vsCom=mode==='com';
-  sendCmd(vsCom?'duelCom':'duelDev').then(r=>{
+  const vsCom=mode==='com', gz=mode==='gz';
+  sendCmd(gz?'gzStart':vsCom?'duelCom':'duelDev',gz?{ stage:String(stage) }:undefined).then(r=>{
     if(!r||!r.ok){ flashCmdMsg((r&&r.error)||'開不了','#f85149'); return; }
     miniClose();
     stEndSeen=(stairs&&stairs.end&&stairs.end.at)||stEndSeen;
     const now=mbNow(), startAt=now+DS.OPEN_MS;
-    const d=Object.assign(DS.createDuel([r.me.str,r.opp.str], DS.BGS[Math.floor(Math.random()*DS.BGS.length)]),
+    const d=Object.assign(DS.createDuel([r.me.str,r.opp.str], gz?r.bg:DS.BGS[Math.floor(Math.random()*DS.BGS.length)]),
       { sides:['me','dev'], names:[r.me.name,r.opp.name], chars:[r.me.char,r.opp.char], startAt, deadline:startAt+DS.PICK_MS,
         picks:[null,null], picked:[false,false], endAt:0 });
-    comState={ kind:'duel', duel:d, startAt, done:false, devTest:!vsCom };
+    comState={ kind:'duel', duel:d, startAt, done:false, devTest:!vsCom&&!gz, gz:gz?stage:null };
     miniFrontOn();   // 前線開的：換成廣場那組小格（廣場裡開的不動，miniFrontOn 自己會擋）
     const box=document.getElementById('stairsbox'); box.style.display='block';
     document.getElementById('stairspanel').style.display='none';

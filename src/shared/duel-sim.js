@@ -24,6 +24,8 @@ const END_MS     = 1500;    // 最後一回合演完後，停多久才結算
 // 力度條分區：0～80% 是 1 倍、80～95% 是 1.5 倍、95% 以上算「最滿」2 倍
 const ZONE_15 = 0.8, ZONE_2 = 0.95;
 const BGS = ['colosseum', 'ring', 'studio'];
+// 事件專用的場地（不進隨機）：怪獸入侵（哥吉拉，2026-10-28）的破敗都市、炎上版
+const EVENT_BGS = ['ruins', 'ruinsfire'];
 const ACTS = ['atk', 'chg', 'def'];
 const CHARGE = 1.5;          // 集氣後下一發的倍率（跟力度倍率相乘）
 const HEAL = 1 / 3;          // 防禦擋下時回幾成最大血量
@@ -43,7 +45,7 @@ function multOf(p)  { return p >= ZONE_2 ? 2 : p >= ZONE_15 ? 1.5 : 1; }
 function createDuel(strs, bg) {
     return { str: strs.slice(), hp: strs.map(hpOf), max: strs.map(hpOf), row: [1, 1], round: 1,
              charged: [false, false], lastAct: [null, null],   // 集氣好了沒（看得到：身上有氣焰）、上回合的動作（防禦不能連續）
-             winner: null, last: null, bg: BGS.includes(bg) ? bg : BGS[0], stat: newStat() };
+             winner: null, last: null, bg: BGS.includes(bg) || EVENT_BGS.includes(bg) ? bg : BGS[0], stat: newStat() };
 }
 // 整場統計（結算畫面用，2026-10-28）：各邊 造成傷害（實扣）、命中（沒被擋下）、開火、對波勝、擋下、最大一擊
 function newStat() { return { dmg: [0, 0], hit: [0, 0], shot: [0, 0], clash: [0, 0], blk: [0, 0], max: [0, 0] }; }
@@ -129,5 +131,5 @@ function randomPick(d, i, rand) {
     return { act, mv: act === 'chg' ? 0 : mvs[Math.floor(rand() * mvs.length)], aim: aims[Math.floor(rand() * aims.length)], p: rand() };
 }
 
-module.exports = { ROWS, MAX_ROUNDS, PICK_MS, OPEN_MS, ANIM_MS, END_MS, ZONE_15, ZONE_2, BGS, ACTS, CHARGE, HEAL, FIN_SLOW, FIN_WIN, isFinisher, finishMs, statOf,
+module.exports = { ROWS, MAX_ROUNDS, PICK_MS, OPEN_MS, ANIM_MS, END_MS, ZONE_15, ZONE_2, BGS, EVENT_BGS, ACTS, CHARGE, HEAL, FIN_SLOW, FIN_WIN, isFinisher, finishMs, statOf,
                    hpOf, atkOf, multOf, createDuel, normPick, resolve, randomPick, okMove, okAct };

@@ -1573,7 +1573,7 @@ setTimeout(async () => {
        && /const MINI_FRONT_ALWAYS=[^\n]*\nlet plazaOffline=false;\nconst WHEN=\{/.test(src.replace(/\r/g, '')) && /const MINI_FRONT_ALWAYS=\$\{IS_RELEASE \? 'false' : 'true'\};/.test(src)
        && /else if\(r&&r\.offline&&!plazaOffline\)\{ plazaOffline=true; applyWhen\(\); \}/.test(src)
        && /error: r\.error, offline: !!r\.offline \}/.test(src)
-       && /'page2Dev', 'duelDev'\]\);/.test(src), '前線的「🎮 小遊戲」沒有在連不上廣場時露出（或正式版還擋著 frontMini／miniBest）');
+       && /'page2Dev', 'duelDev', 'gzDev'\]\);/.test(src), '前線的「🎮 小遊戲」沒有在連不上廣場時露出（或正式版還擋著 frontMini／miniBest）');
     ok(/if \(r\.status === 0\) return \{ ok: false, error: UNREACHABLE, offline: true \};/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'plaza-client.js'), 'utf8')),
        '連不上廣場沒有回 offline');
     ok(/const STS=\$\{STAIRS_SRC \? '\(function\(\)\{const module=\{exports:\{\}\};' \+ STAIRS_SRC/.test(src) && /STS\.setInput\(sg,'me',stDir\);\s*const ev=STS\.step\(sg\);/.test(src), '前線的下樓梯沒有在頁面本地跑模擬');

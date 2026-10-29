@@ -500,11 +500,13 @@ function composePlaza(core, occupants, step, opts = {}) {
         // 畫布尺寸與名牌仍然吃外層的 field —— 分區只縮走路範圍，不縮畫面。
         // o.walk = 廣場的完整走法（自動或手動，見 plaza-walk 的 walkPos），要用毫秒算；
         // 沒有就是營地／舊版的 seed + joinStep。
-        const p = o.walk
+        const p0 = o.walk
             ? W.walkPos(o.walk, opts.nowMs != null ? opts.nowMs : step * W.STEP_MS, caches.get(key), o.field || field)
             : W.posAt({ seed: o.seed, joinStep: o.joinStep, origin: o.origin, anchor: o.anchor },
                       step, caches.get(key), o.field || field);
-        caches.set(key, p.cache);
+        caches.set(key, p0.cache);
+        // o.at：營地列隊中，位置由隊形給（走路格座標）。走路照算是為了快取，散開時另有 anchor 接回
+        const p = o.at ? { ...p0, x: o.at.x, y: o.at.y, facing: o.at.facing, moving: !!o.at.moving, sleeping: false } : p0;
         // 手動模式放著太久 → 睡著：換成睡覺幀（兩張輪流，跟家裡睡覺同一個節奏）
         const react = p.sleeping ? (Math.floor(step / 2) % 2 ? 'SLEEP_2' : 'SLEEP_1') : o.react;
         // o.facing：指定面向（拍照：大家朝向照片中間）。沒給就照走路的面向。
@@ -833,6 +835,7 @@ function yardOccupants(core, ranch, activeState, react, layout, coreForLayouts, 
             origin:   r && r.anchor ? r.anchor.origin : null,
             react:    r ? r.frame : null,
             jump:     r ? r.jump || 0 : 0,
+            at:       r && r.at ? r.at : null,   // 列隊中：位置照隊形（yard-touch 的 lineup），不照走路
             zoneIdx:  idx,
             field:    zones[idx] || g.field,
             // 放下的落點在區域外時，先走回這裡再接回正常的鏈（見 plaza-walk 的 returnLeg）
@@ -880,7 +883,8 @@ function yardSpriteFor(core, ranch, id, step, opts = {}) {
     // 會跟畫面上的不一樣，游標一接手就跳一格。
     const g = opts.geom || YARD_GEOM;
     const zone = yardZonesFor(core, pets.length, opts.layout, g)[idx] || g.field;
-    const p = W.posAt({ seed: W.hash2(hashStr(id), 0),
+    // opts.at：列隊中（位置照隊形，跟畫面同一份）
+    const p = opts.at ? opts.at : W.posAt({ seed: W.hash2(hashStr(id), 0),
                         joinStep: opts.joinStep != null ? opts.joinStep : W.stepAt(SESSION_START),
                         origin: opts.origin || null,
                         anchor: W.zoneAnchor(zone) },
@@ -1090,6 +1094,43 @@ function composeYardPhoto(core, ranch, activeState, step, opts = {}) {
                                            render: { w: YARD_RENDER.w, h: YARD_RENDER.h, toDraw: YARD_GEOM.toDraw } });
 }
 
+// ── 列隊（2026-10-29）────────────────────────────────────────────────
+// 站位排在**前端正在看的那一頁**：4 隻以內一排，5～8 隻兩排（後排少、前排多），每排平均分開、置中。
+// 站位先在畫的座標上排，再換回走路格；同一排用同一個走路 y、前後排同一欄用同一個走路 x
+// → 換回畫面一定橫的對齊、直的對齊（換算的四捨五入只會讓欄距差 1 細格）。
+function lineupSlots(n, g = YARD_GEOM, page = 0) {
+    if (n <= 0) return [];
+    const RW = YARD_RENDER.w, RH = YARD_RENDER.h, S = W.SPRITE, F = g.field;
+    const x0 = g.wide ? yardPageX(page) : 0;
+    const rows = n <= 4 ? [n] : [Math.floor(n / 2), Math.ceil(n / 2)];
+    const ys = rows.length === 1 ? [Math.round((RH - S) / 2)] : [Math.round((RH - S) / 2) - 10, Math.round((RH - S) / 2) + 10];
+    const out = [];
+    rows.forEach((c, r) => {
+        const gap = (RW - c * S) / (c + 1);
+        for (let i = 0; i < c; i++) {
+            const w = g.fromDraw(x0 + Math.round(gap + i * (S + gap)), ys[r]);
+            out.push({ x: Math.max(F.minX, Math.min(F.maxX, w.x)), y: Math.max(F.minY, Math.min(F.maxY, w.y)), row: r });
+        }
+    });
+    return out;
+}
+/**
+ * 誰站哪一格：上面的（y 小）站後排、下面的站前排，同一排再照左右排 —— 大家大致直直走過去，
+ * 路線不交叉（交叉的話一大群人穿來穿去，看起來不像列隊而是亂成一團）。
+ * ents = [{ id, from:{x,y} }]，會直接補上 to。
+ */
+function lineupAssign(ents, slots) {
+    const byY = ents.slice().sort((a, b) => (a.from.y - b.from.y) || (a.from.x - b.from.x));
+    let k = 0;
+    for (const r of [...new Set(slots.map(s => s.row))]) {
+        const row = slots.filter(s => s.row === r).sort((a, b) => a.x - b.x);
+        const who = byY.slice(k, k + row.length).sort((a, b) => a.from.x - b.from.x);
+        who.forEach((e, i) => { e.to = { x: row[i].x, y: row[i].y }; });
+        k += row.length;
+    }
+    return ents;
+}
+
 // ── 營地第二頁（docs/yard-page2-spec.md）──────────────────────────────
 // 解鎖且超過 4 隻 → 兩頁合成一個兩倍寬的場地一起走（跨頁走動，2026-10-16）。
 // 「頁」只是鏡頭：一次看半張，換頁 = 鏡頭往旁邊滑（前端拿兩頁的畫面並排平移）。
@@ -1144,7 +1185,7 @@ module.exports = {
     cellsToDots, dotsToCells, blit, CAR_MS, carPos, carSprite,
     loadArt, spriteDots,
     composePlaza, buildLabels, renderWithLabels, nameTags, NAME_DEFAULT_COLOR, cellToAnsi, occluded, NPCS,
-    yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor,
+    yardOccupants, composeYard, hashStr, yardJoinStep, yardSpriteFor, lineupSlots, lineupAssign,
     PHOTO_POSES, PHOTO_PEEK, PHOTO_GATHER, photoPeekHit, photoPoses, photoSlots, composeYardPhoto,
     YARD_RENDER, yardToDraw, yardFromDraw,
     PLAZA_RENDER, plazaToDraw, PLAZA_LIVE_FIELD, composePlazaLive,

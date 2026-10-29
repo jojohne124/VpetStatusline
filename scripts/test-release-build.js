@@ -196,6 +196,12 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
        '自動回桌面跟系統匣的「桌面」共用 request=pet（殘留的 petAt 會把玩家自己按的桌面擋掉）');
     ok(/function Write-MiniErr\(/.test(mini) && /if \(\$n -le 50\)/.test(mini) && /try \{ Pet-Tick \} catch \{ Write-MiniErr /.test(mini),
        '寵物每拍的錯誤記錄沒有上限（壞掉時一秒寫好幾行）');
+    // 2026-10-29 補丁（最上層守衛）：相片 App 之類會把寵物擠出最上層那一群；看門狗那拍發現一般視窗排在前面就推回
+    const dmTick = (mini.match(/\$script:dmTimer\.add_Tick\(\{[\s\S]*?\n\}\)/) || [''])[0];
+    ok(/public static IntPtr FirstNormalAbove\(IntPtr target\)/.test(mini)
+       && /function Guard-TopMost \{[\s\S]*?if \(-not \[bool\]\$script:Cfg\.topmost\) \{ return \}[\s\S]*?\[VpetZ\]::SetWindowPos\(\$target\.Handle, \[IntPtr\]\(-1\), 0, 0, 0, 0, 0x13\)/.test(mini)
+       && /try \{ Guard-TopMost \} catch \{ Write-MiniErr /.test(dmTick),
+       '永遠最上層被別的視窗擠下去時沒有推回（桌面寵物會被一般視窗蓋住）');
     // 系統匣只有一個（repo 自己的），選單開小視窗、結束時一起關；小視窗看同一個 Mutex
     ok(/New-Object System\.Threading\.Mutex\(\$false, 'Local\\vpet-tray'\)/.test(tray) && /foreach \(\$mn in 'Local\\vpet-mini-tray', 'Local\\vpet-tray'\) \{\s*try \{ \$mx = \$null; if \(\[System\.Threading\.Mutex\]::TryOpenExisting\(\$mn,/.test(mini),
        'tray 跟小視窗沒有用同一個 Mutex（自動更新空檔的判斷會錯）');

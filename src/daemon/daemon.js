@@ -118,6 +118,8 @@ const UI_BUTTONS = [
     ['tree',   '🌳 進化樹'],
     // 拍照（docs/yard-photo-spec.md）：只在營地。不是送給 daemon 的指令，前端自己處理（photoTake）
     ['photo',  '📷 拍照', { scope: 'yard' }],
+    // 列隊（2026-10-29）：大家快步排到正在看的那一頁、站 10 秒再散開。前端帶 pg（哪一頁）送 yardLineup
+    ['lineup', '🫡 列隊', { scope: 'yard' }],
     ['album',  '📖 圖鑑', { scope: 'both' }],
     ['yard',   '⛺ 營地', { scope: 'both' }],
     // 合體進化：排在第二排的開頭（2026-10-21）。前面那個換行只在按鈕出現時才佔位（見 renderUiButton 的 'br'）
@@ -159,6 +161,8 @@ const UI_FORMS = [
     { label: '⚔ 指定戰鬥', action: 'battle',    fields: [['enemy', '敵人（留空＝隨機）'], ['result', 'win / lose（留空＝依機率）']], dev: true },
     { label: '📊 隱藏統計', action: 'stats',     fields: [], dev: true },
 ];
+// 進階指令的標籤：圖示包成固定寬的 .ico（emoji 寬窄不一，⚔ 這種沒彩色的還特別窄），後面的字才會切齊
+const advLbl = (s) => s.replace(/^(\S+)\s+/, '<i class="ico">$1</i>');
 const PORT           = parseInt(process.env.AGUMON_DAEMON_PORT || '3010', 10);
 // 節奏參數只有一份，在 core（見那邊的說明）。daemon 若從 repo 跑、載到的卻是還沒有這個
 // export 的舊安裝版 core，就退回舊 core 的 1000 —— 一定要跟**實際載入的那份 core** 一致，
@@ -781,7 +785,7 @@ async function plazaRename(name) {
 }
 
 // 在廣場裡不能做的事（規格 §六）。伺服器端也要擋：/cmd 是公開端點，只藏按鈕不夠。
-const PLAZA_BLOCKED_CMDS = new Set(['yard', 'yardPet', 'yardGrab', 'yardDrop', 'pet', 'battle', 'evolve',
+const PLAZA_BLOCKED_CMDS = new Set(['yard', 'yardPet', 'yardGrab', 'yardDrop', 'yardLineup', 'pet', 'battle', 'evolve',
     'switch', 'reset', 'keep', 'swap', 'release', 'jogress', 'pvp', 'drop', 'sleep',
     'page2Fight', 'page2GiveUp', 'page2Dev']);
 
@@ -1488,6 +1492,7 @@ function applyCommand(action, args = {}) {
             joinStep: (r && r.anchor ? r.anchor.step : plaza.yardJoinStep())
                     + (r ? r.holdSteps || 0 : 0),
             origin: r && r.anchor ? r.anchor.origin : null,
+            at: r && r.at ? r.at : null,   // 列隊中：從隊伍裡拎起來（位置跟畫面同一份）
             swap: (() => { const f = festNow(Date.now(), args.fest); return f && readFest().costume ? f.swap || null : null; })(),
             swapSalt: args.ds || null,
         });
@@ -1521,6 +1526,32 @@ function applyCommand(action, args = {}) {
         // 不然交接那一刻會看到牠往旁邊挪一格（細格不是每一格都對得到走路的格子）。
         const at = G.toDraw(cx, cy);
         return { ok: true, action: 'yardDrop', x: at.x - px0, y: at.y };
+    }
+
+    // 列隊：大家從現在的位置快步排到 args.pg 那一頁，站好 LINEUP_MS 再散開（節奏見 yard-touch.js）。
+    // 純表演，同摸摸：只在記憶體、不寫 ranch.json
+    if (action === 'yardLineup') {
+        const ranch = core.loadRanch(), step = plazaStep();
+        if (!(ranch.pets || []).length) return { ok: false, error: '營地裡沒有人' };
+        if (yardFeastNow(args.fest)) return { ok: false, error: '圍爐中，大家坐著吃飯，不列隊' };
+        if (page2Event(ranch, step)) return { ok: false, error: '營地有事件進行中，等一下再列隊' };
+        const G = yardGeomNow(ranch, args.fest), react = yardReactMap(new Set(ranch.pets.map(p => p.id)));
+        const ents = [];
+        for (const p of ranch.pets) {
+            const r = react.get(p.id);
+            if (!(p.state && p.state.characterId) || (r && r.held)) continue;   // 拿在手上的不排
+            const sp = plaza.yardSpriteFor(core, ranch, p.id, step, {
+                geom: G, at: r && r.at ? r.at : null,
+                joinStep: (r && r.anchor ? r.anchor.step : plaza.yardJoinStep()) + (r ? r.holdSteps || 0 : 0),
+                origin: r && r.anchor ? r.anchor.origin : null,
+            });
+            if (sp) ents.push({ id: p.id, from: { x: sp.x, y: sp.y, facing: sp.facing } });
+        }
+        if (!ents.length) return { ok: false, error: '營地裡沒有可以列隊的' };
+        plaza.lineupAssign(ents, plaza.lineupSlots(ents.length, G, Number(args.pg) || 0));
+        yardTouch.lineupStart(ents);
+        // marchMs：前端在這段時間把輪詢調快（走位才順），之後回到平常的節奏
+        return { ok: true, action: 'yardLineup', marchMs: YT.LINEUP_CUE_MS + YT.LINEUP_MARCH_MS + YT.LINEUP_SALUTE_MS, ms: YT.LINEUP_MS };
     }
 
     // ── 營地第二頁的事件（docs/yard-page2-spec.md）──
@@ -1792,6 +1823,8 @@ const HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   #adv{margin-top:8px;max-width:480px}
   #adv summary{cursor:pointer;color:#8b949e;font-size:12px;user-select:none}
   #adv summary:hover{color:#c9d1d9}
+  #adv .form .lbl{flex:0 0 112px;white-space:nowrap}   /* 進階指令：標籤固定寬，「daemon 資訊」「dev介面」這種長的不會把後面的鈕擠歪 */
+  #adv .form .lbl .ico{display:inline-block;width:18px;margin-right:4px;text-align:center;font-style:normal}   /* 圖示也固定寬，字才切齊 */
   .form{display:flex;gap:4px;align-items:center;margin-top:6px;flex-wrap:wrap}
   .form .lbl{font-size:12px;color:#8b949e;min-width:74px}
   .form input{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;
@@ -2172,15 +2205,15 @@ ${FEST.FESTIVALS.map(f => `          <option value="${f.id}">${f.name}</option>`
     <details id="adv" data-help="adv"><summary>⚙ 進階指令</summary>
       ${UI_FORMS.filter(f => !(IS_RELEASE && (f.dev || DEV_ONLY.has(f.action))))
                 .map(f => `<div class="form${f.dev ? ' devonly' : ''}" data-help="${f.action || (f.toggle ? f.toggle.on : f.buttons[0][0])}" data-scope="${f.scope || 'home'}"${f.action ? ` data-cmd="${f.action}"` : ''}>
-        <span class="lbl">${f.label}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
+        <span class="lbl">${advLbl(f.label)}${f.dev ? ' <span class="devtag">dev</span>' : ''}</span>
         ${(f.fields || []).map(([k, ph]) => `<input data-f="${k}" placeholder="${ph}">`).join('')}
         ${f.toggle ? `<label class="tgl"><input type="checkbox" data-tgl="${f.toggle.key}" data-on="${f.toggle.on}" data-off="${f.toggle.off}"${f.toggle.invert ? ' data-inv="1"' : ''}><span class="sw"></span><span class="tx"></span></label>`
           : f.buttons ? f.buttons.map(([a, t]) => `<button data-cmd="${a}">${t}</button>`).join('')
                     : `<button${f.confirm ? ` data-confirm="${f.confirm}"` : ''}>執行</button>`}
       </div>`).join('\n      ')}
-      <div class="form" id="infoui" data-help="infoui"><span class="lbl">📊 daemon 資訊</span>
+      <div class="form" id="infoui" data-help="infoui"><span class="lbl"><i class="ico">📊</i>daemon 資訊</span>
         <button data-on="1">顯示</button><button data-on="0">隱藏</button></div>
-${IS_RELEASE ? '' : `      <div class="form" id="devui" data-help="devui"><span class="lbl">🛠 dev介面 <span class="devtag">dev</span></span>
+${IS_RELEASE ? '' : `      <div class="form" id="devui" data-help="devui"><span class="lbl"><i class="ico">🛠</i>dev介面 <span class="devtag">dev</span></span>
         <button data-on="1">on</button><button data-on="0">off</button></div>`}
     </details>
     <div id="cmdout"></div></div>
@@ -3417,7 +3450,8 @@ async function pollYard(){
   if(!y.ok){ document.getElementById('err').textContent='⚠️ '+y.error; return; }
   if(y.inPlaza){ setView('plaza'); return; }
   lastYard=y;
-  if(y.page!=null) yardPage=y.page;   // 伺服器夾過的頁碼（例如放生後只剩一頁）
+  // 伺服器夾過的頁碼（例如放生後只剩一頁）。拍照是集合成一頁的特例，它回的 0 不算 —— 收掉照片要回到原本那頁（2026-10-29）
+  if(y.page!=null&&!y.photo) yardPage=y.page;
   // 空降落地、伺服器那張已經畫上牠了 → 收掉前端自己畫的那份
   if(p2Drop&&p2Drop.release&&!y.drop) p2Drop=null;
   p2Sync(y);
@@ -4067,7 +4101,7 @@ async function sendCmd(action,args){
     // 抓起／放下不報訊息：成功與否眼睛直接看得到（牠就在游標上），
     // 每拖一次洗一行「已送出：yardGrab」只是把訊息列變成雜訊。失敗還是要講。
     const quiet=(action==='yardGrab'||action==='yardDrop'||action==='plazaMove'||action==='plazaMode'||action==='plazaChat'||action==='plazaAnswer'
-                 ||action==='plazaHappy'||action==='festCostume'
+                 ||action==='plazaHappy'||action==='festCostume'||action==='yardLineup'
                  ||action==='page2Seen'||action==='page2Fight'||action==='page2GiveUp'||action==='page2Ack'
                  // 小遊戲：方向／位置一秒送好幾次，開房、出發、看排行榜畫面上直接看得到
                  ||action==='stairsInput'||action==='dinoReport'||action==='stairsOpen'||action==='stairsStart'||action==='stairsLeave'||action==='stairsBoard'||action==='stairsJoin'||action==='volleyInput'||action==='volleyStats'||action==='volleyEnd'||action==='gomokuMove'||action==='gomokuResign'||action==='duelPick'||action==='duelResign'||action==='duelDev'||action==='frontMini'||action==='miniBest'||action==='volleyResign'||action==='commuteInput'||action==='plazaHide'||action==='stockQuery'||action==='duelCom');   // 勾選框／開心鈕／事件：畫面直接看得到
@@ -4103,6 +4137,7 @@ document.querySelectorAll('#controls button[data-cmd]').forEach(b=>b.addEventLis
     return;
   }
   if(b.dataset.cmd==='photo'){ photoTake(); return; }
+  if(b.dataset.cmd==='lineup'){ yardLineup(); return; }
   // 院子只是換這個分頁在看哪裡，不是送指令給 daemon
   if(b.dataset.cmd==='yard'){
     if(view!=='yard'){
@@ -4341,6 +4376,16 @@ function dragHandoff(y){
 }
 
 function cancelPress(){ if(pressTimer){clearTimeout(pressTimer);pressTimer=null;} press=null; }
+
+// 列隊：帶這一頁（pg）跟節日預覽送出去；走位那一段（marchMs）輪詢調快，不然 4fps 看起來像一格一格跳
+let lineupFastUntil=0;
+const LINEUP_POLL_MS=80;
+function yardLineup(){
+  if(photoSeed!=null){ flashCmdMsg('拍照中，先把照片收掉再列隊','#d29922'); return; }
+  const fsel=document.getElementById('festsel');
+  const a={pg:String(yardPage)}; if(fsel&&fsel.value) a.fest=fsel.value;
+  sendCmd('yardLineup',a).then(r=>{ if(r&&r.ok){ lineupFastUntil=Date.now()+(Number(r.marchMs)||0); poll(); } });
+}
 
 let grabbing=null;   // 已經送出 yardGrab、還沒回來的那隻
 async function startDrag(hit, at){
@@ -7324,7 +7369,7 @@ window.addEventListener('keydown', ev=>{
 document.getElementById('helpbtn').addEventListener('click', ()=>helpSet(helpMode ? 0 : 1));
 
 const POLL_MS={home:500,yard:${YT.POLL_MS},plaza:250};   // 廣場：一拍 750ms，輪詢要比一拍密才不會跳格
-(function pollLoop(){ poll().finally(()=>setTimeout(pollLoop, POLL_MS[view]||500)); })();
+(function pollLoop(){ poll().finally(()=>setTimeout(pollLoop, view==='yard'&&Date.now()<lineupFastUntil?LINEUP_POLL_MS:(POLL_MS[view]||500))); })();
 </script></body></html>`;
 
 // 拍照：前線那隻的點陣（開心幀、面向右、節日配件照穿）。讀不到美術就不探頭（照片照樣拍）

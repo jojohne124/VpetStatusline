@@ -679,7 +679,11 @@ setTimeout(async () => {
             ok(/body\.nodev \.devonly\{display:none!important\}/.test(html), 'dev 介面關掉的 CSS 不在');
             ok(/id="devui"[\s\S]*?data-on="1">on<[\s\S]*?data-on="0">off</.test(html), '進階區沒有 dev介面 on/off');
             ok(/#adv \.form:not\(#devui\)/.test(js), 'dev介面列會被當成指令列（按了送出空指令）');
-            const devRows = html.match(/<div class="form[^"]*"[^>]*>\s*<span class="lbl">[^<]*<span class="devtag">/g) || [];
+            ok(/#adv \.form \.lbl\{flex:0 0 112px;white-space:nowrap\}/.test(html), '進階指令的標籤沒有固定寬（「daemon 資訊」那幾列的鈕會沒對齊）');
+            ok(/#adv \.form \.lbl \.ico\{display:inline-block;width:18px;/.test(html)
+               && (html.match(/<span class="lbl"><i class="ico">/g) || []).length >= 12 && !/<span class="lbl">(?!<i class="ico">)[^<]*(?:重抽桌寵|daemon 資訊|dev介面)/.test(html),
+               '進階指令的圖示沒有固定寬（後面的字沒切齊）');
+            const devRows = html.match(/<div class="form[^"]*"[^>]*>\s*<span class="lbl">(?:<i class="ico">[^<]*<\/i>)?[^<]*<span class="devtag">/g) || [];
             ok(devRows.length >= 5 && devRows.every(r => /devonly|id="devui"/.test(r)), '進階區有 dev 列沒掛 devonly：' + devRows.filter(r => !/devonly|id="devui"/.test(r)).join(' | '));
             const devBtns = html.match(/<button data-cmd="[^"]*"[^>]*>[^<]*<span class="devtag">/g) || [];
             ok(devBtns.length >= 2 && devBtns.every(b => /class="devonly"/.test(b)), '主列有 dev 鈕沒掛 devonly');
@@ -907,6 +911,51 @@ setTimeout(async () => {
                 try { c2.kill(); } catch (e) {}
                 try { fs2.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
             }
+        }
+
+        console.log('— 營地列隊 —');
+        {
+            // 自己開一隻隔離的 daemon：列隊會讓營地 10 秒不走動，不能留給後面量位置的段落
+            const fs2 = require('fs'), os2 = require('os');
+            const SD = fs2.mkdtempSync(path.join(os2.tmpdir(), 'agumon-lineup-test-'));
+            fs2.writeFileSync(path.join(SD, 'color-state.json'), JSON.stringify({ characterId: 'agumon' }));
+            fs2.writeFileSync(path.join(SD, 'ranch.json'), JSON.stringify({ v: 1,
+                pets: ['gabumon', 'palmon', 'tentomon'].map((c, i) => ({ id: 'lp' + i, keptAt: i + 1, state: { characterId: c } })) }));
+            const P3 = 3095;
+            const c3 = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'daemon', 'daemon.js'), '--isolated'],
+                { env: { ...process.env, AGUMON_DAEMON_PORT: String(P3), AGUMON_STATE_DIR: SD, VPET_PLAZA_URL: 'http://127.0.0.1:1' }, stdio: 'ignore' });
+            const post3 = (action, a) => new Promise((res, rej) => {
+                const b = JSON.stringify({ action, args: a });
+                const rq = http.request({ host: '127.0.0.1', port: P3, path: '/cmd', method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) } },
+                    s => { let d = ''; s.on('data', c => d += c); s.on('end', () => { try { res(JSON.parse(d)); } catch (e) { rej(e); } }); });
+                rq.on('error', rej); rq.end(b);
+            });
+            for (let i = 0; i < 100; i++) {
+                try { await getOn(P3, '/state'); break; } catch (e) { await new Promise(r => setTimeout(r, 100)); }
+            }
+            try {
+                const r = await post3('yardLineup', { pg: '0' });
+                ok(r.ok === true && r.marchMs > 0 && r.ms === 10000, '列隊指令沒有成功：' + JSON.stringify(r).slice(0, 120));
+                await new Promise(res => setTimeout(res, r.marchMs + 300));
+                const y1 = JSON.parse(await getOn(P3, '/yard'));
+                const ys = new Set((y1.pets || []).map(p => p.y)), xs = (y1.pets || []).map(p => p.x).sort((a, b) => a - b);
+                ok((y1.pets || []).length === 3 && ys.size === 1 && xs.every((x, i) => !i || x - xs[i - 1] >= 16),
+                   '列隊後 3 隻沒有排成一排：' + JSON.stringify((y1.pets || []).map(p => [p.x, p.y])));
+                await new Promise(res => setTimeout(res, 1500));
+                const y2 = JSON.parse(await getOn(P3, '/yard'));
+                ok(JSON.stringify((y2.pets || []).map(p => [p.x, p.y])) === JSON.stringify((y1.pets || []).map(p => [p.x, p.y])),
+                   '列隊站好之後還在走動（10 秒內要站著）');
+            } finally {
+                try { c3.kill(); } catch (e) {}
+                try { fs2.rmSync(SD, { recursive: true, force: true }); } catch (e) {}
+            }
+            ok(/\['lineup', '🫡 列隊', \{ scope: 'yard' \}\]/.test(daemonSrc) && /'yardLineup', 'pet'/.test(daemonSrc),
+               '營地沒有列隊鈕，或廣場裡沒擋 yardLineup');
+            ok(/if\(y\.page!=null&&!y\.photo\) yardPage=y\.page;/.test(js), '拍照完會翻回第一頁（拍照回的 page:0 蓋掉了原本看的那頁）');
+            ok(/if\(b\.dataset\.cmd==='lineup'\)\{ yardLineup\(\); return; \}/.test(js) && /sendCmd\('yardLineup',a\)/.test(js)
+               && /view==='yard'&&Date\.now\(\)<lineupFastUntil\?LINEUP_POLL_MS:/.test(js),
+               '列隊鈕沒接到 yardLineup，或走位時沒有加快輪詢（4fps 看起來一格一格跳）');
         }
 
         console.log('— 天氣 —');

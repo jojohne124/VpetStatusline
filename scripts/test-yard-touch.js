@@ -355,5 +355,89 @@ console.log('— 放下要蓋過走路快取 —');
     }
 }
 
+console.log('— 列隊（2026-10-29）—');
+{
+    const y = mk();
+    const ents = [{ id: 'a', from: { x: 2, y: 20, facing: 'left' }, to: { x: 30, y: 10 } },
+                  { id: 'b', from: { x: 30, y: 4, facing: 'right' }, to: { x: 10, y: 10 } }];
+    y.lineupStart(ents, T0);
+    const M0 = YT.LINEUP_CUE_MS, M1 = M0 + YT.LINEUP_MARCH_MS, M2 = M1 + YT.LINEUP_SALUTE_MS;
+    const cue = at(y.react(null, T0 + 10), 'a');
+    ok(cue.at && cue.at.x === 2 && cue.at.y === 20 && cue.frame === 'HAPPY' && cue.jump > 0, '聽到口令那一下應該在原地開心蹦起來');
+    // 大家同時出發、同時到：走到一半時，每隻走過的比例要一樣
+    const mid = y.react(null, T0 + M0 + YT.LINEUP_MARCH_MS / 2);
+    const fa = (at(mid, 'a').at.x - 2) / 28, fb = (at(mid, 'b').at.x - 30) / -20;
+    ok(Math.abs(fa - 0.5) < 0.06 && Math.abs(fb - 0.5) < 0.06, `走位沒有同時出發同時到（a 走了 ${fa.toFixed(2)}、b 走了 ${fb.toFixed(2)}）`);
+    ok(at(mid, 'a').at.facing === 'right' && at(mid, 'b').at.facing === 'left' && at(mid, 'a').at.moving, '走位時要朝前進的方向');
+    const sal = y.react(null, T0 + M1 + 10);
+    ok(['a', 'b'].every(id => at(sal, id).at.x === ents.find(e => e.id === id).to.x && at(sal, id).frame === 'HAPPY' && at(sal, id).jump > 0),
+       '到位時應該站在格子上、一起蹦一下立正');
+    const hold = y.react(null, T0 + M2 + 1000);
+    ok(['a', 'b'].every(id => at(hold, id).at.facing === YT.LINEUP_FACING && !at(hold, id).at.moving && !at(hold, id).frame && !at(hold, id).jump),
+       '站好的時候要面向同一邊、不動、不演反應');
+    ok(at(y.react(null, T0 + YT.LINEUP_MS - 1), 'a').at, '還沒到 10 秒就散開了');
+    // 散開：從隊伍裡的位置接回走路（anchor），時間從列隊結束那一拍起算
+    const end = y.react(null, T0 + YT.LINEUP_MS + 5000);
+    ok(!at(end, 'a').at && at(end, 'a').anchor && at(end, 'a').anchor.origin.x === 30 && at(end, 'a').anchor.origin.y === 10
+       && at(end, 'a').anchor.step === W.stepAt(T0 + YT.LINEUP_MS),
+       '散開後要從隊伍裡的位置、列隊結束那一拍接著走（不然會瞬移回原本的路線）');
+    ok(y.lineupInfo() === null, '散開後列隊狀態沒有清掉');
+
+    // 被摸：反應幀優先，位置還是照隊形
+    const y2 = mk();
+    y2.lineupStart(ents, T0);
+    y2.pet('a', T0 + M2 + 500);
+    const m2 = at(y2.react(null, T0 + M2 + 510), 'a');
+    ok(m2.frame === 'HAPPY' && m2.at && m2.at.x === 30, '列隊中被摸要開心，但還是站在隊伍裡');
+    // 被拎走：脫隊，放下後照落點走，散開時不拉回隊伍
+    y2.grab('b', T0 + M2 + 600);
+    ok(!at(y2.react(null, T0 + M2 + 610), 'b').at, '拎在手上的那隻還被當成在隊伍裡');
+    y2.drop('b', 40, 30, 'left', T0 + M2 + 700);
+    const e2 = at(y2.react(null, T0 + YT.LINEUP_MS + 100), 'b');
+    ok(e2.anchor && e2.anchor.origin.x === 40 && e2.anchor.origin.y === 30, '列隊中被拎走放下的那隻，散開時被拉回隊伍的位置');
+}
+
+console.log('— 列隊：站位 —');
+{
+    const S = W.SPRITE, RW = P.YARD_RENDER.w;
+    for (const n of [1, 3, 4]) {
+        const sl = P.lineupSlots(n, P.YARD_GEOM, 0), d = sl.map(s => P.YARD_GEOM.toDraw(s.x, s.y)).sort((a, b) => a.x - b.x);
+        ok(sl.length === n && new Set(d.map(p => p.y)).size === 1, `${n} 隻應該排成一排（同一個高度）`);
+        ok(d.every(p => p.x >= 0 && p.x + S <= RW) && d.every((p, i) => !i || p.x - d[i - 1].x >= S), `${n} 隻的站位超出畫面或互相重疊`);
+    }
+    for (const n of [5, 7, 8]) for (const pg of [0, 1]) {
+        const G = P.YARD_GEOM_WIDE, x0 = P.yardPageX(pg);
+        const sl = P.lineupSlots(n, G, pg), d = sl.map(s => ({ ...G.toDraw(s.x, s.y), row: s.row }));
+        const rows = [0, 1].map(r => d.filter(p => p.row === r).sort((a, b) => a.x - b.x));
+        ok(sl.length === n && rows.every(r => new Set(r.map(p => p.y)).size === 1) && rows[0][0].y < rows[1][0].y
+           && rows[0].length <= rows[1].length, `${n} 隻應該排成兩排（後排少、前排多，每排同高）`);
+        ok(d.every(p => p.x - x0 >= 0 && p.x - x0 + S <= RW), `${n} 隻排到第 ${pg + 1} 頁時有站位跑出那一頁`);
+        ok(rows.every(r => r.every((p, i) => !i || p.x - r[i - 1].x >= S)), `${n} 隻的同一排互相重疊`);
+    }
+    // 誰站哪：上面的站後排、同一排左右照原本的左右 → 路線不交叉
+    const ents = [{ id: 'a', from: { x: 50, y: 30 } }, { id: 'b', from: { x: 5, y: 2 } }, { id: 'c', from: { x: 90, y: 3 } },
+                  { id: 'd', from: { x: 10, y: 28 } }, { id: 'e', from: { x: 60, y: 25 } }];
+    const sl = P.lineupSlots(5, P.YARD_GEOM_WIDE, 0);
+    P.lineupAssign(ents, sl);
+    const rowOf = (e) => sl.find(s => s.x === e.to.x && s.y === e.to.y).row, g = (id) => ents.find(e => e.id === id);
+    ok(rowOf(g('b')) === 0 && rowOf(g('c')) === 0 && g('b').to.x < g('c').to.x, '上面的兩隻應該站後排、左右不交換');
+    ok(['d', 'e', 'a'].every(id => rowOf(g(id)) === 1) && g('d').to.x < g('a').to.x && g('a').to.x < g('e').to.x,
+       '前排的左右順序要照原本的左右');
+
+    // 合成：列隊中的位置就是畫面上的位置（走路照算但不採用）
+    const os = require('os'), path = require('path');
+    let core = null;
+    try { core = require(path.join(os.homedir(), '.claude', 'agumon-statusline', 'agumon-core.js')); } catch (e) {}
+    if (core && (() => { try { return P.loadArt(core, 'agumon'); } catch (e) { return null; } })()) {
+        const ranch = { pets: [{ id: 'p1', keptAt: 0, state: { characterId: 'agumon' } }] };
+        const step = P.yardJoinStep() + 50;
+        const q = P.composeYard(core, ranch, null, step, { caches: new Map(),
+            react: new Map([['p1', { frame: null, jump: 0, holdSteps: 0, at: { x: 7, y: 9, facing: 'right', moving: false } }]]) }).placed[0];
+        ok(q.x === 7 && q.y === 9 && q.facing === 'right', `列隊中畫面沒有照隊形（在 ${q.x},${q.y}）`);
+        const sp = P.yardSpriteFor(core, ranch, 'p1', step, { at: { x: 7, y: 9, facing: 'right' } });
+        ok(sp && sp.x === 7 && sp.y === 9, '列隊中拎起來的位置跟畫面對不上（游標一接手會跳）');
+    }
+}
+
 console.log('\n結果：' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

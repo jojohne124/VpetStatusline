@@ -42,6 +42,19 @@ const JUMP_HOPS = 1;
 // 30 秒對真的在拖的人來說夠長；真的超過也只是掉回場上，不會弄丟任何東西。
 const HELD_MAX_MS = 30000;
 
+// ── 列隊（2026-10-29）：按一下，大家快步排到畫面那一頁，站好 10 秒再散開 ──
+// 節奏分四段（從按下去算）：
+//   1. 聽到口令：原地蹦一下（HAPPY），讓人看出「收到了」，不是直接滑走
+//   2. 快步走位：**大家同時出發、同時到** —— 每隻的速度依距離調，整齊感就是靠這個；
+//      頭尾放慢（ease-in-out），不然 4fps 的輪詢下看起來像瞬移
+//   3. 立正：到位後一起再蹦一下，面向統一
+//   4. 站好：待機呼吸，直到 LINEUP_MS 才散開
+const LINEUP_MS       = 10000;   // 按下去到散開（含走位）
+const LINEUP_CUE_MS   = 350;     // 1. 聽到口令
+const LINEUP_MARCH_MS = 1200;    // 2. 走位
+const LINEUP_SALUTE_MS = 400;    // 3. 立正
+const LINEUP_FACING   = 'right'; // 站好時大家朝同一邊
+
 /**
  * 「原地」不能只是把畫的位置釘住 —— 走路演算法照跑的話，落地會瞬移回它算出來的
  * 位置（1.8 秒約 2~3 dot，每摸一次閃一下）。所以把停走的拍數累加起來，
@@ -76,6 +89,46 @@ function create({ windowMs, limit, sulkMs, stepAt,
                   reactMs = REACT_MS, jumpH = JUMP_H, jumpMs = JUMP_MS,
                   jumpHops = JUMP_HOPS, heldMaxMs = HELD_MAX_MS } = {}) {
     const touches = new Map();   // ranchId -> newTouch()
+    // 列隊中：{ start, until, ents: Map<id, {from:{x,y,facing}, to:{x,y}}> }（走路格座標）。只在記憶體，同摸摸
+    let lineup = null;
+
+    /** 列隊中這一隻在 now 的位置與動作（見上面的四段節奏） */
+    function lineupAt(e, now) {
+        const t = now - lineup.start, M0 = LINEUP_CUE_MS, M1 = M0 + LINEUP_MARCH_MS;
+        const hop = (t0) => (t - t0 < jumpMs ? jumpH : 0);
+        if (t < M0) return { x: e.from.x, y: e.from.y, facing: e.from.facing, moving: false, frame: 'HAPPY', jump: hop(0) };
+        if (t < M1) {
+            const u = (t - M0) / LINEUP_MARCH_MS, k = u < 0.5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u);
+            const dx = e.to.x - e.from.x;
+            return { x: Math.round(e.from.x + dx * k), y: Math.round(e.from.y + (e.to.y - e.from.y) * k),
+                     facing: dx < 0 ? 'left' : dx > 0 ? 'right' : e.from.facing, moving: true, frame: null, jump: 0 };
+        }
+        const salute = t < M1 + LINEUP_SALUTE_MS;
+        return { x: e.to.x, y: e.to.y, facing: LINEUP_FACING, moving: false,
+                 frame: salute ? 'HAPPY' : null, jump: salute ? hop(M1) : 0 };
+    }
+
+    /** 散開：每隻從隊伍裡的位置走一條全新的鏈（跟放下同一套 anchor），時間從列隊結束那一拍起算 */
+    function lineupEnd() {
+        const step = stepAt(lineup.until);
+        for (const [id, e] of lineup.ents) {
+            let t = touches.get(id);
+            if (!t) { t = newTouch(); touches.set(id, t); }
+            if (t.held) continue;
+            t.holdFrom = null; t.holdSteps = 0;
+            t.anchor = { origin: { x: e.to.x, y: e.to.y, facing: LINEUP_FACING }, step };
+        }
+        lineup = null;
+    }
+
+    /**
+     * 開始列隊。ents = [{ id, from:{x,y,facing}, to:{x,y} }]（走路格座標；站位由呼叫端排）。
+     * 列隊中再按一次 = 從現在的位置重排一次。
+     */
+    function lineupStart(ents, now = Date.now()) {
+        lineup = { start: now, until: now + LINEUP_MS, ents: new Map(ents.map(e => [e.id, e])) };
+        return { until: lineup.until };
+    }
 
     /** 摸一下。回傳 mood：happy / refuse / sulking。 */
     function pet(id, now = Date.now()) {
@@ -105,6 +158,7 @@ function create({ windowMs, limit, sulkMs, stepAt,
     function react(alive, now = Date.now()) {
         const nowStep = stepAt(now);
         const out = new Map();
+        if (lineup && now >= lineup.until) lineupEnd();
         for (const [id, t] of touches) {
             if (alive && !alive.has(id)) { touches.delete(id); continue; }   // 已經不在營地了
             // 拿太久 = 拿的人已經不在了（關分頁 / 重新整理 / 斷線）。放回場上，
@@ -142,6 +196,15 @@ function create({ windowMs, limit, sulkMs, stepAt,
             // 連戳窗口與鬧脾氣都過去了，也沒有時間位移要保管 → 這筆沒有資訊了，回收
             else if (now > t.sulkUntil && !t.times.length) touches.delete(id);
         }
+        // 列隊中：位置由隊形決定（at），走路演算法照算但不採用。摸摸的反應幀、跳躍優先（被摸還是會開心）
+        if (lineup) for (const [id, e] of lineup.ents) {
+            if (alive && !alive.has(id)) continue;
+            const prev = out.get(id) || { frame: null, jump: 0, held: false, anchor: null, holdSteps: 0 };
+            if (prev.held) continue;
+            const L = lineupAt(e, now);
+            out.set(id, { ...prev, frame: prev.frame || L.frame, jump: prev.jump || L.jump,
+                          at: { x: L.x, y: L.y, facing: L.facing, moving: L.moving } });
+        }
         return out;
     }
 
@@ -154,6 +217,7 @@ function create({ windowMs, limit, sulkMs, stepAt,
         let t = touches.get(id);
         if (!t) { t = newTouch(); touches.set(id, t); }
         if (t.held) return false;
+        if (lineup) lineup.ents.delete(id);           // 列隊中被拎走就脫隊（放下後照落點走，散開時不拉回隊伍）
         t.held = true;
         t.heldAt = now;
         t.until = 0;                                   // 拿起來就中斷正在演的反應（含跳到一半）
@@ -188,7 +252,8 @@ function create({ windowMs, limit, sulkMs, stepAt,
         return out;
     }
 
-    return { pet, react, grab, drop, heldIds, touches };
+    return { pet, react, grab, drop, heldIds, touches, lineupStart, lineupInfo: () => lineup };
 }
 
-module.exports = { create, settleHold, newTouch, REACT_MS, JUMP_H, JUMP_MS, JUMP_HOPS, POLL_MS, HELD_MAX_MS };
+module.exports = { create, settleHold, newTouch, REACT_MS, JUMP_H, JUMP_MS, JUMP_HOPS, POLL_MS, HELD_MAX_MS,
+                   LINEUP_MS, LINEUP_CUE_MS, LINEUP_MARCH_MS, LINEUP_SALUTE_MS, LINEUP_FACING };

@@ -34,6 +34,59 @@ function Write-MiniLog([string]$msg) {
         Add-Content $script:LogPath $line -Encoding UTF8
     } catch {}
 }
+# ── 最上層守衛（2026-10-29 補丁）：玩家回報「永遠最上層失效、桌面模式寵物被 Claude／檔案總管蓋住」。
+#    兩輪高頻監看坐實：寵物的 WS_EX_TOPMOST 旗標一直在，但 Windows 內建「相片」App（WinUI 3）一開啟就把牠擠出最上層那一群，
+#    之後任何一般視窗都蓋得住；旗標跟位置是兩回事，光看旗標看不出來。
+#    做法：每 2 秒（看門狗那拍）由上往下走一次 z 順序，只有發現「沒旗標、可見、沒被虛擬桌面遮住、有標題」的一般視窗排在我們前面，
+#    才 SetWindowPos(HWND_TOPMOST, NOACTIVATE) 推回並記 log（含當時前景）。正常時什麼都不做，不跟 LINE 影片、Snipaste 釘圖這類真正的最上層視窗搶位置。
+Add-Type @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class VpetZ {
+    [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int cb);
+    // 回傳「排在 target 前面、沒 TOPMOST 旗標、可見、沒被 cloak、有標題」的第一個視窗；沒有就 IntPtr.Zero（＝target 還在最上層那一群）
+    public static IntPtr FirstNormalAbove(IntPtr target) {
+        IntPtr w = GetTopWindow(IntPtr.Zero); int n = 0;
+        while (w != IntPtr.Zero && n++ < 600) {
+            if (w == target) return IntPtr.Zero;
+            if (IsWindowVisible(w) && (GetWindowLong(w, -20) & 8) == 0) {
+                int cl = 0; DwmGetWindowAttribute(w, 14, out cl, 4);
+                if (cl == 0) { var sb = new StringBuilder(64); GetWindowText(w, sb, 64); if (sb.Length > 0) return w; }
+            }
+            w = GetWindow(w, 2);
+        }
+        return IntPtr.Zero;
+    }
+    public static string Describe(IntPtr w) {
+        if (w == IntPtr.Zero) return "(none)";
+        var sb = new StringBuilder(64); GetWindowText(w, sb, 64); uint pid = 0; GetWindowThreadProcessId(w, out pid);
+        string name = ""; try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch {}
+        return name + ":" + sb.ToString();
+    }
+}
+'@
+$script:topGuardLastLog = [DateTime]::MinValue; $script:topGuardCount = 0
+function Guard-TopMost {
+    if (-not [bool]$script:Cfg.topmost) { return }
+    $target = if ($script:petMode) { $pet } else { $form }
+    if ($null -eq $target -or -not $target.IsHandleCreated -or -not $target.Visible) { return }
+    $above = [VpetZ]::FirstNormalAbove($target.Handle)
+    if ($above -eq [IntPtr]::Zero) { return }
+    # 被一般視窗擠下去了：推回最上層那一群的最前面（不搶焦點、不動位置大小）
+    [void][VpetZ]::SetWindowPos($target.Handle, [IntPtr](-1), 0, 0, 0, 0, 0x13)
+    $script:topGuardCount++
+    if (((Get-Date) - $script:topGuardLastLog).TotalSeconds -ge 10) {   # 同一波最多 10 秒記一行
+        $script:topGuardLastLog = Get-Date
+        Write-MiniLog ("topmost 守衛：{0}被 [{1}] 排到前面（前景 [{2}]），推回最上層（累計 {3} 次）" -f $(if ($script:petMode) { '桌面小寵物' } else { '小視窗' }), [VpetZ]::Describe($above), [VpetZ]::Describe([VpetZ]::GetForegroundWindow()), $script:topGuardCount)
+    }
+}
 # 會一直重複的錯誤（寵物每 150ms 一拍、頁面訊息、設定監看）：同一種最多記 50 次，不然壞掉時一秒寫好幾行、log 一直砍半
 $script:errCount = @{}
 function Write-MiniErr([string]$kind, [string]$msg) {
@@ -1088,6 +1141,7 @@ $script:deadTicks = 0
 $script:dmTimer = New-Object System.Windows.Forms.Timer
 $script:dmTimer.Interval = 2000
 $script:dmTimer.add_Tick({
+    try { Guard-TopMost } catch { Write-MiniErr 'topmost 守衛' $_.Exception.Message }   # 2026-10-29 補丁：每 2 秒看一次有沒有被一般視窗擠下去（壞掉時 log 有上限）
     $ok = $false
     try { $tc = New-Object System.Net.Sockets.TcpClient; $ar = $tc.BeginConnect('127.0.0.1', [int]$script:Port, $null, $null)
           if ($ar.AsyncWaitHandle.WaitOne(300)) { try { $tc.EndConnect($ar); $ok = $true } catch {} }; $tc.Close() } catch {}

@@ -183,7 +183,8 @@ const stateRanch = async () => { await wait(900); return (await req('GET', '/sta
         const src = fs.readFileSync(path.join(REPO, 'src/daemon/daemon.js'), 'utf8');
         // 原則：事件演出一律放舞台下方，永遠不蓋住上面的畫面（2026-10-27 定）。不能有「置中」的退路；小視窗撐高 body 下內距、關掉縮回
         const sp = (src.match(/function storyPlace\(\)\{[^]*?\n\}/) || [''])[0];
-        ok(sp && !/\(H-ph\)\/2/.test(sp) && /p\.style\.top=Math\.round\(st\.bottom\+10\)\+'px'/.test(sp) && /st\.bottom\+window\.scrollY\+10/.test(sp),
+        ok(sp && !/\(H-ph\)\/2/.test(sp) && /p\.style\.top=Math\.round\(bot\+10\)\+'px'/.test(sp) && /bot\+window\.scrollY\+10/.test(sp)
+           && /bot=hl\?Math\.max\(st\.bottom, hl\.getBoundingClientRect\(\)\.bottom\+14\):st\.bottom;/.test(sp),
            '助手對話框不是一律放在舞台下方（會蓋住營地／廣場）');
         ok(/document\.body\.style\.paddingBottom=\(IN_MINI\|\|!fits\)\?/.test(sp) && /document\.body\.style\.paddingBottom='';/.test(src), '小視窗沒有撐高（或關掉沒縮回）');
 

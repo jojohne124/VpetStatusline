@@ -270,7 +270,7 @@ console.log('— vpet mini（桌面小視窗，tools/vpet-mini）—');
     ok(/\(\(\$x \+ \$y\) % 2\) -eq 0\) \{ \$out\.SetPixel\(\(\$bx \+ \$x\), \$y, \[System\.Drawing\.Color\]::Black\)/.test(mini) && /FromArgb\(255, 255, 77, 79\)/.test(mini),
        '小寵物的驚嘆號不是棋盤格黑底＋紅色');
     // 劇情對話框：一律放舞台下方（2026-10-27 定，不再置中蓋住營地）；小視窗撐高 body 下內距讓視窗長高
-    ok(/const fits=st\.bottom\+10\+ph<=H-8;/.test(page) && !/Math\.round\(\(H-ph\)\/2\)/.test(page) && /document\.body\.style\.paddingBottom=\(IN_MINI\|\|!fits\)\?/.test(page),
+    ok(/const fits=bot\+10\+ph<=H-8;/.test(page) && /bot=hl\?Math\.max\(st\.bottom, [^;]*\):st\.bottom;/.test(page) && !/Math\.round\(\(H-ph\)\/2\)/.test(page) && /document\.body\.style\.paddingBottom=\(IN_MINI\|\|!fits\)\?/.test(page),
        '對話框不是放在舞台下方（小視窗會蓋住營地）');
     // 系統匣：新事件跳「事件發生!!」，啟動那一拍不跳，選單可關
     ok(/function On-Event\(\$ev\)/.test(tray) && /if \(\$null -eq \$prev -or -not \$id -or \$id -eq \$prev\) \{ return \}/.test(tray)

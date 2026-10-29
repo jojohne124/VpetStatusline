@@ -1571,7 +1571,7 @@ setTimeout(async () => {
        && /miniFront: {4}\(\)=>\(MINI_FRONT_ALWAYS&&!document\.body\.classList\.contains\('nodev'\)\)\|\|plazaOffline,/.test(src)
        && /classList\.toggle\('nodev', !on\);\n  applyWhen\(\);/.test(src)
        && /const MINI_FRONT_ALWAYS=[^\n]*\nlet plazaOffline=false;\nconst WHEN=\{/.test(src.replace(/\r/g, '')) && /const MINI_FRONT_ALWAYS=\$\{IS_RELEASE \? 'false' : 'true'\};/.test(src)
-       && /else if\(r&&r\.offline&&!plazaOffline\)\{ plazaOffline=true; applyWhen\(\); \}/.test(src)
+       && /else if\(r&&r\.offline&&!plazaOffline\)\{ plazaOffline=true; applyWhen\(\); storyOpen\(\[\{text:MINI_OFFLINE_TIP\}\], null, \{hl:'minifront'\}\); \}/.test(src) && /\.story-hl\{position:relative;z-index:9150;/.test(src) && /if\(story\.hl\) story\.hl\.classList\.add\('story-hl'\);/.test(src) && /const MINI_OFFLINE_TIP='[^']+';/.test(src)
        && /error: r\.error, offline: !!r\.offline \}/.test(src)
        && /'page2Dev', 'duelDev'\]\);/.test(src), '前線的「🎮 小遊戲」沒有在連不上廣場時露出（或正式版還擋著 frontMini／miniBest）');
     ok(/if \(r\.status === 0\) return \{ ok: false, error: UNREACHABLE, offline: true \};/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'plaza-client.js'), 'utf8')),
@@ -1597,6 +1597,14 @@ setTimeout(async () => {
         ok(/h=dgResultHtml\(\{ res:dgRes, mode:'⚔ 手動戰鬥'/.test(src) && /el\.innerHTML=dgResultHtml\(\{ res, mode:/.test(src)
            && /el\.classList\.toggle\('dgw',end\.kind==='duel'\)/.test(src) && /el\.classList\.toggle\('dgw',comState\.kind==='duel'\)/.test(src)
            && /el\.classList\.remove\('cmw','dgw'\)/.test(src), '手動戰鬥的結算卡沒接上（或別的小遊戲面板留著它的樣式）');
+        ok(/const dir=\(s\)=>/.test(src) && (src.match(/d:dir\(s\)/g) || []).length === 2 && /b\.y-im\.cy-uy\*k\*20/.test(src),
+           '集氣子彈打斜的時候，殘影還是水平往後拖（應該沿著彈道）');
+        // 力度條延遲（2026-10-28）：按下去就定（不等 click 放開）、取畫面上最後一幀的值
+        ok(/cv\.addEventListener\('pointerdown',e=>\{[^]{0,400}?mbSend\(mbBarVal\(s\.barSeen\)\);/.test(src)
+           && /if\(ok\)\{ mbSend\(mbBarVal\(s\.barSeen\)\); return true; \}/.test(src) && /sel\.barSeen=performance\.now\(\);/.test(src),
+           '手動戰鬥力度條要等放開滑鼠才定（或沒用畫面上看到的那一幀），會覺得有延遲');
+        const MBVS = (src.match(/const MB_VS=\[([^]*?)\];/) || ['', ''])[1].split(',').filter(x => /X/.test(x));
+        ok(/mbVsDots\(g,W\/2,MB\.GY\+MB\.GH\*1\.5,/.test(src) && !/fillText\('VS'/.test(src) && MBVS.length === 11, '手動戰鬥開場的 VS 不是點陣字');
         ok(/#stairspanel\.dgw\{overflow-x:hidden;/.test(src), '手動戰鬥結算卡出現時 WIN! 放大那一下撐出橫向捲軸，整張往下跳');
         ok(/if\(tl&&mbAnim\.fin&&L0\.hp\[s\]<=0&&tl\.T>=tl\.hitT\) fr=tl\.T<tl\.hitT\+800\?2:3;/.test(src), '被最後一擊打倒的中間會變回待機（應該受傷 → 一路難過）');
     }
@@ -1643,7 +1651,7 @@ setTimeout(async () => {
     ok(/const dpr=\(!target&&view==='home'\)\?\(window\.devicePixelRatio\|\|1\):1;/.test(src) && /cv\.width=Math\.max\(1,Math\.round\(cssW\*dpr\)\)/.test(src)
        && /const k=cv\._dpr\|\|1;/.test(src) && /ctx\.setTransform\(dpr,0,0,dpr,0,0\);/.test(src), '前線畫布沒有照 devicePixelRatio 畫（縮放低於 100% 字會糊）');
     {   // 手動戰鬥的力度條：每回合速度、起點隨機（不然節奏背起來就一直 ×2）—— 從頁面抽出來實際跑
-        const f1 = src.match(/function mbBarVal\(\)\{[^\n]*\}/), f2 = src.match(/function mbChooseAim\(a\)\{[^]*?mbSel\.barPh=Math\.random\(\); \}/);
+        const f1 = src.match(/function mbBarVal\(t\)\{[^\n]*\}/), f2 = src.match(/function mbChooseAim\(a\)\{[^]*?mbSel\.barPh=Math\.random\(\); \}/);
         let starts = [], speeds = new Set();
         try {
             const MB = { BAR_MS: 1400, BAR_MIN_MS: 900, BAR_MAX_MS: 1600 };
